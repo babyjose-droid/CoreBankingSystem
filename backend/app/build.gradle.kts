@@ -24,9 +24,8 @@ dependencies {
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
-    testImplementation("org.springframework.boot:spring-boot-testcontainers")
-    testImplementation("org.testcontainers:postgresql")
-    testImplementation("org.testcontainers:junit-jupiter")
+    // Core Testcontainers only: its coordinates and GenericContainer API are stable across TC 1.x and 2.x.
+    testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.postgresql:postgresql")
     testImplementation(libs.archunit)
 }

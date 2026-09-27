@@ -1,6 +1,8 @@
 spring:
   application:
     name: corebanking
+  flyway:
+    enabled: false   # TenantMigrator migrates control plane and each tenant explicitly
   threads:
     virtual:
       enabled: true

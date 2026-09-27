@@ -16,7 +16,7 @@ subprojects {
         toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }
     }
     tasks.withType<JavaCompile>().configureEach {
-        options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror", "-parameters"))
+        options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-Werror", "-parameters"))
         options.encoding = "UTF-8"
     }
     dependencies {

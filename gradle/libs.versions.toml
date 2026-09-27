@@ -4,7 +4,6 @@ java = "21"
 spring-boot = "4.1.0"
 spring-dependency-management = "1.1.7"
 spring-modulith = "2.1.1"
-testcontainers = "1.21.3"
 archunit = "1.4.1"
 
 [libraries]
