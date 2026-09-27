@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: corebanking
+  threads:
+    virtual:
+      enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${COREBANKING_OIDC_ISSUER:http://localhost:8081/realms/corebanking}
+
+corebanking:
+  control:
+    datasource:
+      jdbc-url: ${COREBANKING_CONTROL_URL:jdbc:postgresql://localhost:5432/control}
+      username: ${COREBANKING_CONTROL_USER:control}
+      password: ${COREBANKING_CONTROL_PASSWORD:}
+      maximum-pool-size: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  pattern:
+    correlation: "[%X{tenant:-}] [%X{traceId:-}] "
