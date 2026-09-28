@@ -33,7 +33,7 @@ services:
       retries: 20
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7
     # Dev mode: embedded H2, HTTP, relaxed caching. Imports every realm JSON in /opt/keycloak/data/import
     # on first start (existing realms are skipped; `docker compose rm -sf keycloak` to re-import).
     command: ["start-dev", "--import-realm", "--http-port=8081"]
