@@ -30,12 +30,12 @@ class ProblemHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     ProblemDetail invalid(IllegalArgumentException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ProblemDetail validation(MethodArgumentNotValidException e) {
-        ProblemDetail p = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, "validation failed");
+        ProblemDetail p = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, "validation failed");
         p.setProperty("errors", e.getBindingResult().getFieldErrors().stream()
                 .map(f -> f.getField() + ": " + f.getDefaultMessage()).toList());
         return p;
