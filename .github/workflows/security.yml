@@ -17,7 +17,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Code scanning and dependency review on a PRIVATE repository need GitHub Code Security (paid) plus the
+  # Dependency graph setting. Until the repository variable CODE_SECURITY is set to 'true', these jobs are
+  # skipped rather than failing; Dependabot alerts and gitleaks (ci.yml) still run.
   codeql:
+    if: ${{ !github.event.repository.private || vars.CODE_SECURITY == 'true' }}
     name: codeql (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
@@ -71,7 +75,7 @@ jobs:
           category: /language:${{ matrix.language }}
 
   dependency-review:
-    if: github.event_name == 'pull_request'
+    if: ${{ github.event_name == 'pull_request' && (!github.event.repository.private || vars.CODE_SECURITY == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
