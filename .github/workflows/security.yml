@@ -1,5 +1,5 @@
 name: security
-# Code scanning (CodeQL), dependency review on PRs and a Trivy filesystem scan. Results go to the
+# Code scanning (CodeQL) and dependency review on PRs. Results go to the
 # repository's Security tab (SARIF). Weekly run catches newly published CVEs in unchanged code.
 on:
   pull_request:
@@ -83,27 +83,7 @@ jobs:
           # Copyleft licences need legal review before entering a product sold to banks.
           deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, GPL-3.0-only, GPL-3.0-or-later
 
-  trivy:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Trivy filesystem scan (vulnerabilities + secrets)
-        # trivy-action publishes only exact tags; Dependabot keeps this current.
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          format: sarif
-          output: trivy-results.sarif
-          exit-code: '0'
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('trivy-results.sarif') != ''
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-fs
+  # Trivy was removed on 28-Sep-2026: in March 2026 attackers hijacked aquasecurity/trivy-action tags and
+  # published a malicious Trivy release to steal CI secrets. Vulnerable dependencies are covered by
+  # Dependabot alerts, dependency-review (PRs) and CodeQL. Re-add a scanner only pinned to a verified
+  # commit SHA.

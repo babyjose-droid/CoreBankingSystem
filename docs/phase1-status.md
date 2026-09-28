@@ -32,7 +32,7 @@ Updated 28-Sep-2026. The source of each story is the product backlog v1.0 (29 Ph
 | US-108 | EOD orchestrator | Done | Step graph, partitions on virtual threads, checkpointed idempotent restart (ADR-014). |
 | US-109 | Per-account isolation and exception report | Done | The exception report is built. Alerts are logged with their recipients; email delivery is OI-06. |
 | US-110 | Scheduler | Done | Manual or cron (IST), set up through maker-checker, one run at a time. The console has schedule and run screens. |
-| US-132 | OWASP ASVS L2 and scanning in CI | Partial | CodeQL, dependency review, Trivy, gitleaks and checkov are in CI. The formal ASVS L2 review is still to do. |
+| US-132 | OWASP ASVS L2 and scanning in CI | Partial | CodeQL, dependency review, Dependabot, gitleaks and checkov are in CI (Trivy removed after its March 2026 supply-chain compromise). Third-party actions still need pinning to commit SHAs, and the formal ASVS L2 review is still to do. |
 | US-133 | Encryption and masking of personal data | Partial | Customer personal data is encrypted with AES-GCM, searched through keyed hashes and masked in the API and UI; personal data in approval payloads is sealed. A review of logs and exports is still to do. |
 
 **Totals:** 19 Done, 10 Partial, 0 not started.
