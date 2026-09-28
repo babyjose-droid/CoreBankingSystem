@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "corebanking.fullname" . }}
+  labels:
+    {{- include "corebanking.labels" . | nindent 4 }}
+data:
+  # Non-secret configuration only. Credentials come from the Secret named in values.existingSecret.
+  {{- range $key, $value := .Values.config }}
+  {{- if not (regexMatch "(?i)(PASSWORD|SECRET|TOKEN|PRIVATE_KEY)" $key) }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- else }}
+  {{- fail (printf "config.%s looks like a credential; put it in the existing Secret instead" $key) }}
+  {{- end }}
+  {{- end }}

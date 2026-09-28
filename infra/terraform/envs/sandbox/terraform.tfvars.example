@@ -1,0 +1,5 @@
+allowed_account_ids      = ["<sandbox-account-id>"]
+documents_bucket_name    = "corebanking-sandbox-documents-<suffix>"
+kms_admin_principal_arns = ["arn:aws:iam::<sandbox-account-id>:role/<platform-admin-role>"]
+eks_admin_principal_arns = ["arn:aws:iam::<sandbox-account-id>:role/<platform-admin-role>"]
+eks_api_allowed_cidrs    = ["<vpn-cidr>"]

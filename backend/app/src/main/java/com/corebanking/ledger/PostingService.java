@@ -1,8 +1,10 @@
 package com.corebanking.ledger;
 
+import java.math.BigDecimal;
 import java.sql.Date;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -44,5 +46,28 @@ public class PostingService {
                   (lot_id, business_date, branch_code, gl_code, account_no, side, amount, currency, narration)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, rows);
+    }
+
+    /** Reads a posted lot back from the ledger, e.g. to reverse it. */
+    public TransactionLot load(UUID lotId) {
+        record Head(String type, LocalDate businessDate, LocalDate valueDate, String reference, UUID reverses) {}
+        List<Head> heads = jdbc.query(
+                "SELECT lot_type, business_date, value_date, reference, reverses FROM ledger.transaction_lot WHERE id = ?",
+                (rs, i) -> new Head(rs.getString(1), rs.getObject(2, LocalDate.class), rs.getObject(3, LocalDate.class),
+                        rs.getString(4), rs.getObject(5, UUID.class)), lotId);
+        if (heads.isEmpty()) throw new LedgerException("lot " + lotId + " not found");
+        Head h = heads.get(0);
+        List<PostingLine> lines = jdbc.query(
+                "SELECT branch_code, gl_code, account_no, side, amount, currency, narration "
+                        + "FROM ledger.account_entry WHERE lot_id = ? AND business_date = ? ORDER BY id",
+                (rs, i) -> new PostingLine(rs.getString(1), rs.getString(2), rs.getString(3),
+                        PostingLine.Side.valueOf(rs.getString(4).trim()), fourDecimals(rs.getBigDecimal(5)),
+                        rs.getString(6).trim(), rs.getString(7)),
+                lotId, Date.valueOf(h.businessDate()));
+        return TransactionLot.restore(lotId, h.type(), h.businessDate(), h.valueDate(), h.reference(), h.reverses(), lines);
+    }
+
+    private static BigDecimal fourDecimals(BigDecimal v) {
+        return v.setScale(Math.min(Math.max(v.stripTrailingZeros().scale(), 0), 4), java.math.RoundingMode.UNNECESSARY);
     }
 }

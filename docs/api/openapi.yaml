@@ -1,0 +1,977 @@
+openapi: 3.1.0
+info:
+  title: CoreBanking API
+  version: 1.0.0-phase1
+  description: |
+    Staff and integration API for CoreBanking. Every request is tenant-scoped: the tenant comes from the
+    verified access token (`tenant` claim), never from the URL or body.
+
+    Conventions
+    - Money is a decimal **string** (e.g. "100000.00"). Never a JSON number.
+    - Dates are ISO `YYYY-MM-DD` business dates; timestamps are RFC 3339 UTC.
+    - Changes to master data and money go through maker-checker: the call returns **202** with an
+      approval request; the change is applied when a different user approves it.
+    - Errors use RFC 9457 `application/problem+json`.
+    - `Idempotency-Key` header is honoured on all POSTs that create things.
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:8080
+    description: Local dev
+security:
+  - bearer: []
+tags:
+  - name: Session
+  - name: Platform
+  - name: Approvals
+  - name: Customers
+  - name: Ledger
+  - name: EOD
+  - name: Audit
+  - name: Control plane
+paths:
+  /api/v1/me:
+    get:
+      tags: [Session]
+      operationId: getMe
+      summary: Current user, tenant, business date, permissions and enabled modules
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/business-day:
+    get:
+      tags: [Platform]
+      operationId: getBusinessDay
+      summary: Get business day
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BusinessDay' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/branches:
+    get:
+      tags: [Platform]
+      operationId: listBranches
+      summary: List branches
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Branch' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeBranch
+      summary: Propose a new branch or a change to an existing one (maker-checker)
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Branch' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/holidays:
+    get:
+      tags: [Platform]
+      operationId: listHolidays
+      summary: List holidays
+      parameters:
+        - { name: year, in: query, required: true, schema: { type: integer } }
+        - { name: branch, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Holiday' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeHolidays
+      summary: Propose one or more holidays (maker-checker)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/Holiday' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/tax-rates:
+    get:
+      tags: [Platform]
+      operationId: listTaxRates
+      summary: List tax rates
+      parameters:
+        - { name: asOf, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TaxRate' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeTaxRate
+      summary: Propose tax rate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaxRate' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/enumerations/{type}:
+    get:
+      tags: [Platform]
+      operationId: getEnumeration
+      summary: Get enumeration
+      parameters:
+        - { name: type, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EnumValue' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      summary: List approvals
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/ApprovalStatus' } }
+        - { name: entityType, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Approval' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/approvals/{id}:
+    get:
+      tags: [Approvals]
+      operationId: getApproval
+      summary: Get approval
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: Approval with current vs proposed state for the checker's diff view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/approvals/{id}/approve:
+    post:
+      tags: [Approvals]
+      operationId: approve
+      summary: Approve
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Decision' }
+      responses:
+        '200':
+          description: Approved and applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/approvals/{id}/reject:
+    post:
+      tags: [Approvals]
+      operationId: reject
+      summary: Reject
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Decision' }
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/approvals/bulk-approve:
+    post:
+      tags: [Approvals]
+      operationId: bulkApprove
+      summary: Bulk approve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, items: { type: string, format: uuid }, maxItems: 100 }
+                note: { type: string }
+      responses:
+        '200':
+          description: Per-item result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    ok: { type: boolean }
+                    error: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/customers:
+    get:
+      tags: [Customers]
+      operationId: searchCustomers
+      summary: Search customers
+      parameters:
+        - { name: q, in: query, description: 'Customer number, exact PAN or exact mobile', schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        '200':
+          description: Masked customer summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CustomerSummary' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create a customer (maker-checker). Returns the existing customer when PAN already exists (idempotent create).
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerInput' }
+      responses:
+        '200':
+          description: Customer with this PAN already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerSummary' }
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/dedupe-check:
+    post:
+      tags: [Customers]
+      operationId: dedupeCheck
+      summary: Dedupe check
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerInput' }
+      responses:
+        '200':
+          description: Possible duplicates with the matching rule
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DedupeMatch' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}:
+    get:
+      tags: [Customers]
+      operationId: getCustomer
+      summary: Get customer
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: Masked customer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerSummary' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/gl/heads:
+    get:
+      tags: [Ledger]
+      operationId: listGlHeads
+      summary: List gl heads
+      responses:
+        '200':
+          description: Chart of accounts (flat; build the tree from parentCode)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GlHead' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Ledger]
+      operationId: proposeGlHead
+      summary: Propose gl head
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GlHead' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/vouchers:
+    get:
+      tags: [Ledger]
+      operationId: listVouchers
+      summary: List vouchers
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Voucher' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Ledger]
+      operationId: proposeVoucher
+      summary: Propose a manual voucher (contra, receipt, payment, journal; any number of lines)
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoucherInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/vouchers/{id}/reverse:
+    post:
+      tags: [Ledger]
+      operationId: proposeVoucherReversal
+      summary: Propose voucher reversal
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Decision' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/trial-balance:
+    get:
+      tags: [Ledger]
+      operationId: trialBalance
+      summary: Trial balance
+      parameters:
+        - { name: asOf, in: query, required: true, schema: { type: string, format: date } }
+        - { name: branch, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TrialBalanceRow' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/entries:
+    get:
+      tags: [Ledger]
+      operationId: glEntries
+      summary: Drill-down from a GL head to its entries
+      parameters:
+        - { name: glCode, in: query, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+        - { name: branch, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LedgerEntry' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/profit-and-loss:
+    get:
+      tags: [Ledger]
+      operationId: profitAndLoss
+      summary: Profit and loss
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StatementRow' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/balance-sheet:
+    get:
+      tags: [Ledger]
+      operationId: balanceSheet
+      summary: Balance sheet
+      parameters:
+        - { name: asOf, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StatementRow' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/eod/runs:
+    get:
+      tags: [EOD]
+      operationId: listEodRuns
+      summary: List eod runs
+      responses:
+        '200':
+          description: Most recent first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EodRun' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [EOD]
+      operationId: startEod
+      summary: Start end-of-day for the current business date (single instance per tenant)
+      responses:
+        '202':
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EodRun' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/eod/runs/{runId}:
+    get:
+      tags: [EOD]
+      operationId: getEodRun
+      summary: Get eod run
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200':
+          description: Run with steps and exceptions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EodRun' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/eod/runs/{runId}/restart:
+    post:
+      tags: [EOD]
+      operationId: restartEod
+      summary: Restart eod
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '202':
+          description: Restarted from the first incomplete step
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EodRun' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/eod/schedule:
+    get:
+      tags: [EOD]
+      operationId: getEodSchedule
+      summary: Get eod schedule
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EodSchedule' }
+        default: { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [EOD]
+      operationId: proposeEodSchedule
+      summary: Propose eod schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EodSchedule' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/audit/events:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: List audit events
+      parameters:
+        - { name: entityType, in: query, schema: { type: string } }
+        - { name: entityId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 1000 } }
+      responses:
+        '200':
+          description: Most recent first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditEvent' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/audit/verify:
+    get:
+      tags: [Audit]
+      operationId: verifyAuditChain
+      summary: Verify audit chain
+      responses:
+        '200':
+          description: Chain verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [intact]
+                properties:
+                  intact: { type: boolean }
+                  firstBrokenId: { type: [integer, 'null'], format: int64 }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /platform/v1/tenants:
+    get:
+      tags: [Control plane]
+      operationId: listTenants
+      summary: List tenants
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Control plane]
+      operationId: provisionTenant
+      summary: Provision a tenant (database, migrations, starter kit, first admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TenantInput' }
+      responses:
+        '201':
+          description: Provisioned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/tenants/{code}/modules:
+    put:
+      tags: [Control plane]
+      operationId: setTenantModules
+      summary: Set tenant modules
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/migrations:
+    post:
+      tags: [Control plane]
+      operationId: migrateAllTenants
+      summary: Migrate all tenants
+      parameters:
+        - { name: dryRun, in: query, schema: { type: boolean, default: true } }
+      responses:
+        '200':
+          description: Per-tenant result; one failure does not stop the others
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MigrationResult' }
+        default: { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, maxLength: 100 }
+  responses:
+    Accepted:
+      description: Change recorded as an approval request; applied when a checker approves it
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Approval' }
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Money:
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]{1,4})?$'
+      examples: ['100000.00']
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+    Me:
+      type: object
+      required: [userId, displayName, tenant, businessDate, permissions, modules]
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        tenant: { type: string }
+        tenantName: { type: string }
+        homeBranch: { type: string }
+        businessDate: { type: string, format: date }
+        permissions:
+          type: array
+          items: { type: string, examples: ['customer:create', 'approval:approve'] }
+        modules:
+          type: array
+          items: { type: string, examples: ['LENDING', 'GL'] }
+    BusinessDay:
+      type: object
+      required: [businessDate, status]
+      properties:
+        businessDate: { type: string, format: date }
+        status: { type: string, enum: [OPEN, EOD_RUNNING, EOD_FAILED, CLOSED] }
+    Branch:
+      type: object
+      required: [code, name, stateCode]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9]{2,10}$' }
+        name: { type: string }
+        ifsc: { type: [string, 'null'] }
+        stateCode: { type: string, description: 'GST state code, e.g. 32' }
+        parentCode: { type: [string, 'null'] }
+        headOffice: { type: boolean }
+        status: { type: string, enum: [ACTIVE, CLOSED] }
+    Holiday:
+      type: object
+      required: [day, reason]
+      properties:
+        branchCode: { type: [string, 'null'], description: null = all branches }
+        day: { type: string, format: date }
+        reason: { type: string }
+    TaxRate:
+      type: object
+      required: [code, taxType, ratePercent, effectiveFrom]
+      properties:
+        code: { type: string, examples: ['GST18'] }
+        taxType: { type: string, enum: [GST, TDS] }
+        ratePercent: { type: string, examples: ['18.00'] }
+        effectiveFrom: { type: string, format: date }
+        effectiveTo: { type: [string, 'null'], format: date }
+    EnumValue:
+      type: object
+      required: [code, label]
+      properties:
+        code: { type: string }
+        label: { type: string }
+        active: { type: boolean }
+    ApprovalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, WITHDRAWN]
+    Approval:
+      type: object
+      required: [id, entityType, action, status, maker, madeAt]
+      properties:
+        id: { type: string, format: uuid }
+        entityType: { type: string, examples: [CUSTOMER, BRANCH, GL_HEAD, VOUCHER, TAX_RATE, HOLIDAY, EOD_SCHEDULE] }
+        entityId: { type: [string, 'null'] }
+        action: { type: string, examples: [CREATE, UPDATE, REVERSE] }
+        status: { $ref: '#/components/schemas/ApprovalStatus' }
+        maker: { type: string }
+        madeAt: { type: string, format: date-time }
+        checker: { type: [string, 'null'] }
+        checkedAt: { type: [string, 'null'], format: date-time }
+        note: { type: [string, 'null'] }
+        amount: { oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ] }
+        ageHours: { type: number, description: SLA ageing }
+        current: { type: [object, 'null'], description: State before the change (null for CREATE) }
+        proposed: { type: object, description: Proposed state }
+    Decision:
+      type: object
+      properties:
+        note: { type: string, maxLength: 500 }
+    CustomerInput:
+      type: object
+      required: [customerType, firstName, homeBranch, dateOfBirth, mobile]
+      properties:
+        customerType: { type: string, enum: [INDIVIDUAL, NON_INDIVIDUAL] }
+        firstName: { type: string }
+        middleName: { type: string }
+        lastName: { type: string }
+        dateOfBirth: { type: string, format: date }
+        gender: { type: string, enum: [FEMALE, MALE, OTHER] }
+        pan: { type: string, pattern: '^[A-Z]{5}[0-9]{4}[A-Z]$' }
+        mobile: { type: string, pattern: '^[6-9][0-9]{9}$' }
+        email: { type: string, format: email }
+        homeBranch: { type: string }
+        address:
+          type: object
+          properties:
+            line1: { type: string }
+            line2: { type: string }
+            city: { type: string }
+            stateCode: { type: string }
+            pincode: { type: string, pattern: '^[1-9][0-9]{5}$' }
+        overrideDedupe: { type: boolean, description: Proceed despite possible duplicates (requires approval with reason) }
+        overrideReason: { type: string }
+    CustomerSummary:
+      type: object
+      required: [id, customerNo, displayName, status]
+      properties:
+        id: { type: string, format: uuid }
+        customerNo: { type: string }
+        displayName: { type: string }
+        customerType: { type: string }
+        dateOfBirth: { type: string, format: date }
+        panMasked: { type: [string, 'null'], examples: ['XXXXX1234X'] }
+        mobileMasked: { type: [string, 'null'], examples: ['XXXXXX0001'] }
+        homeBranch: { type: string }
+        kycStatus: { type: string }
+        status: { type: string }
+    DedupeMatch:
+      type: object
+      required: [customerNo, displayName, rule]
+      properties:
+        customerNo: { type: string }
+        displayName: { type: string }
+        rule: { type: string, enum: [PAN, MOBILE, NAME_DOB] }
+        strength: { type: string, enum: [EXACT, STRONG, POSSIBLE] }
+    GlHead:
+      type: object
+      required: [code, name, category, posting]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        category: { type: string, enum: [ASSET, LIABILITY, EQUITY, INCOME, EXPENSE] }
+        parentCode: { type: [string, 'null'] }
+        posting: { type: boolean, description: Only posting (leaf) heads accept entries }
+        status: { type: string, enum: [ACTIVE, FROZEN, CLOSED] }
+    VoucherLine:
+      type: object
+      required: [branch, glCode, side, amount]
+      properties:
+        branch: { type: string }
+        glCode: { type: string }
+        account: { type: string, description: Defaults to glCode }
+        side: { type: string, enum: [DR, CR] }
+        amount: { $ref: '#/components/schemas/Money' }
+        narration: { type: string }
+    VoucherInput:
+      type: object
+      required: [voucherType, valueDate, description, lines]
+      properties:
+        voucherType: { type: string, enum: [CONTRA, RECEIPT, PAYMENT, JOURNAL] }
+        valueDate: { type: string, format: date }
+        reference: { type: string }
+        description: { type: string }
+        lines:
+          type: array
+          minItems: 2
+          items: { $ref: '#/components/schemas/VoucherLine' }
+    Voucher:
+      allOf:
+        - $ref: '#/components/schemas/VoucherInput'
+        - type: object
+          required: [id, voucherNo, status, amount]
+          properties:
+            id: { type: string, format: uuid }
+            voucherNo: { type: string }
+            status: { type: string, enum: [POSTED, REVERSED] }
+            amount: { $ref: '#/components/schemas/Money' }
+            lotId: { type: string, format: uuid }
+            reversalLotId: { type: [string, 'null'], format: uuid }
+            businessDate: { type: string, format: date }
+    TrialBalanceRow:
+      type: object
+      required: [glCode, glName, category, debit, credit, net]
+      properties:
+        glCode: { type: string }
+        glName: { type: string }
+        category: { type: string }
+        debit: { $ref: '#/components/schemas/Money' }
+        credit: { $ref: '#/components/schemas/Money' }
+        net: { $ref: '#/components/schemas/Money' }
+    LedgerEntry:
+      type: object
+      properties:
+        lotId: { type: string, format: uuid }
+        businessDate: { type: string, format: date }
+        branch: { type: string }
+        glCode: { type: string }
+        account: { type: string }
+        side: { type: string, enum: [DR, CR] }
+        amount: { $ref: '#/components/schemas/Money' }
+        narration: { type: string }
+        lotType: { type: string }
+    StatementRow:
+      type: object
+      required: [section, glCode, glName, amount]
+      properties:
+        section: { type: string, examples: [INCOME, EXPENSE, ASSET, LIABILITY, EQUITY, NET_PROFIT] }
+        glCode: { type: string }
+        glName: { type: string }
+        amount: { $ref: '#/components/schemas/Money' }
+    EodStep:
+      type: object
+      properties:
+        stepNo: { type: integer }
+        name: { type: string }
+        status: { type: string, enum: [PENDING, RUNNING, COMPLETED, COMPLETED_WITH_EXCEPTIONS, FAILED, SKIPPED] }
+        processed: { type: integer }
+        failed: { type: integer }
+        startedAt: { type: [string, 'null'], format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+    EodException:
+      type: object
+      properties:
+        step: { type: string }
+        accountNo: { type: string }
+        error: { type: string }
+        resolved: { type: boolean }
+    EodRun:
+      type: object
+      required: [id, businessDate, status]
+      properties:
+        id: { type: integer, format: int64 }
+        businessDate: { type: string, format: date }
+        status: { type: string, enum: [RUNNING, COMPLETED, COMPLETED_WITH_EXCEPTIONS, FAILED] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        nextBusinessDate: { type: [string, 'null'], format: date }
+        steps: { type: array, items: { $ref: '#/components/schemas/EodStep' } }
+        exceptions: { type: array, items: { $ref: '#/components/schemas/EodException' } }
+    EodSchedule:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [MANUAL, SCHEDULED] }
+        cron: { type: [string, 'null'], examples: ['0 30 23 * * *'] }
+        alertEmails: { type: array, items: { type: string, format: email } }
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        actor: { type: string }
+        action: { type: string }
+        entityType: { type: string }
+        entityId: { type: [string, 'null'] }
+        detail: { type: [object, 'null'] }
+    TenantInput:
+      type: object
+      required: [code, legalName, entityType, deploymentTier, edition]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9-]{2,30}$' }
+        legalName: { type: string }
+        entityType: { type: string, enum: [NBFC, BANK, SFB, COOP_BANK, HFC, MFI] }
+        deploymentTier: { type: string, enum: [POOLED, DEDICATED, STANDALONE] }
+        edition: { type: string, enum: [STARTER, GROWTH, ENTERPRISE] }
+        starterKit: { type: string, enum: [NBFC, BANK], default: NBFC }
+        headOffice:
+          type: object
+          required: [code, name, stateCode]
+          properties:
+            code: { type: string }
+            name: { type: string }
+            stateCode: { type: string }
+        firstBusinessDate: { type: string, format: date }
+    Tenant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        legalName: { type: string }
+        entityType: { type: string }
+        deploymentTier: { type: string }
+        edition: { type: string }
+        status: { type: string }
+        modules: { type: array, items: { type: string } }
+    MigrationResult:
+      type: object
+      properties:
+        tenant: { type: string }
+        currentVersion: { type: [string, 'null'] }
+        pending: { type: array, items: { type: string } }
+        status: { type: string, enum: [UP_TO_DATE, PENDING, MIGRATED, FAILED] }
+        error: { type: [string, 'null'] }

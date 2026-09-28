@@ -1,0 +1,9 @@
+# Copy to backend.hcl (git-ignored values are fine to commit; no secrets here) and run:
+#   terraform init -backend-config=backend.hcl
+# The state bucket and lock table are bootstrapped once per AWS account, in ap-south-1.
+bucket         = "<state-bucket-name>"
+key            = "corebanking/prod/terraform.tfstate"
+region         = "ap-south-1"
+encrypt        = true
+kms_key_id     = "<state-kms-key-arn>"
+dynamodb_table = "<terraform-lock-table>"

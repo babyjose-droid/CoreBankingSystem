@@ -1,0 +1,66 @@
+# Weekly dependency updates. Minor/patch updates are grouped per ecosystem to keep PR volume low;
+# majors arrive individually. Every PR must pass ci, infra and security workflows before merge.
+version: 2
+
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata
+    groups:
+      gradle-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, java]
+
+  - package-ecosystem: npm
+    directory: /frontend/console
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, frontend]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata
+    groups:
+      actions:
+        patterns: ['*']
+    labels: [dependencies, ci]
+
+  - package-ecosystem: docker
+    directory: /backend/app
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata
+    labels: [dependencies, docker]
+
+  - package-ecosystem: docker-compose
+    directory: /deploy/local
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata
+    labels: [dependencies, docker]
+
+  - package-ecosystem: terraform
+    directories:
+      - /infra/terraform/envs/*
+      - /infra/terraform/modules/*
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata
+    groups:
+      terraform-providers:
+        update-types: [minor, patch]
+    labels: [dependencies, infra]

@@ -6,19 +6,28 @@ spring:
   threads:
     virtual:
       enabled: true
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: ${COREBANKING_OIDC_ISSUER:http://localhost:8081/realms/corebanking}
+  jackson:
+    default-property-inclusion: always
 
 corebanking:
+  oidc:
+    # Tokens are accepted from any realm under this prefix; realm name must equal the token's tenant claim.
+    issuer-prefix: ${COREBANKING_OIDC_ISSUER_PREFIX:http://localhost:8081/realms/}
+    # Where to fetch signing keys when the public issuer host is not reachable from the app (Docker, K8s).
+    jwks-base: ${COREBANKING_OIDC_JWKS_BASE:}
+    audience: ${COREBANKING_OIDC_AUDIENCE:api}
+  bootstrap:
+    demo-tenant: ${COREBANKING_BOOTSTRAP_DEMO_TENANT:false}   # LOCAL ONLY
   control:
+    create-databases: ${COREBANKING_CREATE_DATABASES:false}   # true only for dev/standalone
     datasource:
       jdbc-url: ${COREBANKING_CONTROL_URL:jdbc:postgresql://localhost:5432/control}
       username: ${COREBANKING_CONTROL_USER:control}
       password: ${COREBANKING_CONTROL_PASSWORD:}
       maximum-pool-size: 5
+  eod:
+    partitions: 4
+    scheduler-enabled: true
 
 management:
   endpoints:
@@ -29,6 +38,9 @@ management:
     health:
       probes:
         enabled: true
+  health:
+    db:
+      enabled: false   # the routed tenant data source has no connection outside a request
 
 logging:
   pattern:

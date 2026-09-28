@@ -1,0 +1,9 @@
+allowed_account_ids              = ["<prod-account-id>"]
+documents_bucket_name            = "corebanking-dr-documents-<suffix>"
+aurora_global_cluster_identifier = "<prod output aurora_global_cluster_id>"
+kms_admin_principal_arns         = ["arn:aws:iam::<prod-account-id>:role/<platform-admin-role>"]
+eks_admin_principal_arns         = ["arn:aws:iam::<prod-account-id>:role/<platform-admin-role>"]
+
+tenant_key_replicas = {
+  "acme-finance" = "<prod output tenants[acme-finance].kms_key_arn>"
+}

@@ -1,7 +1,7 @@
 package com.corebanking.ledger;
 
-/** Any violation of ledger invariants. Always a programming or configuration error: never swallow. */
-public class LedgerException extends RuntimeException {
+/** A request that would break a ledger invariant (unbalanced lot, bad amount …). Reported to the caller as 422. */
+public class LedgerException extends IllegalArgumentException {
     private static final long serialVersionUID = 1L;
 
     public LedgerException(String message) {

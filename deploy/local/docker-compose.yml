@@ -1,0 +1,130 @@
+# CoreBanking local development stack. LOCAL DEVELOPMENT ONLY — every password below is a
+# throwaway default; never reuse these values in any shared, UAT or production environment.
+#
+#   cd deploy/local
+#   docker compose up -d --build              # postgres + keycloak + backend
+#   docker compose --profile console up -d    # ...plus the React staff console
+#
+# Ports are bound to 127.0.0.1 so nothing is exposed to the LAN. See README.md.
+name: corebanking
+
+x-db-passwords: &db-passwords
+  CONTROL_DB_PASSWORD: ${CONTROL_DB_PASSWORD:-control-local-only}
+  TENANT_DEMO_NBFC_DB_PASSWORD: ${TENANT_DEMO_NBFC_DB_PASSWORD:-demo-nbfc-local-only}
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      <<: *db-passwords
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-local-only}
+      POSTGRES_DB: postgres
+      TZ: Asia/Kolkata
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    # Dev mode: embedded H2, HTTP, relaxed caching. Imports every realm JSON in /opt/keycloak/data/import
+    # on first start (existing realms are skipped; `docker compose rm -sf keycloak` to re-import).
+    command: ["start-dev", "--import-realm", "--http-port=8081"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin-local-only}
+      # Tokens always carry iss=http://localhost:8081/realms/<realm> (what the browser sees);
+      # back-channel calls from the backend container use http://keycloak:8081.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      TZ: Asia/Kolkata
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # The image has no curl; probe the management port with bash /dev/tcp.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q UP <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: backend/app/Dockerfile
+    image: corebanking/backend:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      # Control plane (TenancyConfig.controlDataSource)
+      COREBANKING_CONTROL_URL: jdbc:postgresql://postgres:5432/control
+      COREBANKING_CONTROL_USER: control
+      COREBANKING_CONTROL_PASSWORD: ${CONTROL_DB_PASSWORD:-control-local-only}
+      # Identity: one realm per tenant under this issuer prefix (the realm must equal the token's tenant claim).
+      # Tokens say iss=http://localhost:8081/...; signing keys are fetched over the compose network instead.
+      COREBANKING_OIDC_ISSUER_PREFIX: http://localhost:8081/realms/
+      COREBANKING_OIDC_JWKS_BASE: http://keycloak:8081/realms/
+      # LOCAL ONLY: provision demo-nbfc on first start (starter kit, HO + MUM branches, business date 30-Jun-2026).
+      COREBANKING_BOOTSTRAP_DEMO_TENANT: "true"
+      # LOCAL ONLY personal-data keys (base64, 32 bytes). Cloud tiers inject KMS-unwrapped keys instead.
+      # Generated into deploy/local/.env by ./init-env.sh (git-ignored); never commit real keys.
+      COREBANKING_TENANT_DEMO_NBFC_PII_KEY: ${DEMO_PII_KEY:?run ./init-env.sh first}
+      COREBANKING_TENANT_DEMO_NBFC_PII_INDEX_KEY: ${DEMO_PII_INDEX_KEY:?run ./init-env.sh first}
+      # Tenant credentials (TenancyConfig.envCredentials): COREBANKING_TENANT_<CODE upper, '-'→'_'>_URL/_USER/_PASSWORD
+      COREBANKING_TENANT_DEMO_NBFC_URL: jdbc:postgresql://postgres:5432/tenant_demo_nbfc
+      COREBANKING_TENANT_DEMO_NBFC_USER: tenant_demo_nbfc
+      COREBANKING_TENANT_DEMO_NBFC_PASSWORD: ${TENANT_DEMO_NBFC_DB_PASSWORD:-demo-nbfc-local-only}
+      TZ: Asia/Kolkata
+    ports:
+      - "127.0.0.1:8080:8080"
+      # Staff console dev server (profile "console") shares this service's network namespace.
+      - "127.0.0.1:5173:5173"
+    # Same constraints as the Kubernetes pod: read-only root filesystem, writable /tmp only.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  console:
+    profiles: ["console"]
+    image: node:22
+    working_dir: /workspace/frontend/console
+    command: ["sh", "-c", "npm ci && npm run dev -- --host"]
+    # Share the backend's network namespace so the Vite dev proxy (/api -> http://localhost:8080,
+    # see frontend/console/vite.config.ts) reaches the backend without CORS. Port 5173 is published
+    # on the backend service. Restart the console after restarting the backend.
+    network_mode: "service:backend"
+    environment:
+      VITE_MOCK: "0"
+      VITE_API_BASE_URL: ""
+      VITE_OIDC_AUTHORITY: http://localhost:8081/realms/demo-nbfc
+      VITE_OIDC_CLIENT_ID: console
+    volumes:
+      - ../../frontend/console:/workspace/frontend/console
+      # Keep Linux node_modules out of the host checkout.
+      - console_node_modules:/workspace/frontend/console/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  console_node_modules:

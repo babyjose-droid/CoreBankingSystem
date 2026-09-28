@@ -1,0 +1,189 @@
+name: infra
+# Static validation of infrastructure and delivery tooling. Nothing here touches an AWS account:
+# terraform runs with -backend=false and no credentials; images are built but never pushed.
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      - 'deploy/**'
+      - 'backend/app/Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/infra.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'deploy/**'
+      - 'backend/app/Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/infra.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+      - name: terraform init + validate (every env root; modules are validated through them)
+        run: |
+          set -euo pipefail
+          for env in envs/*/; do
+            echo "::group::validate ${env}"
+            terraform -chdir="${env}" init -backend=false -input=false -no-color
+            terraform -chdir="${env}" validate -no-color
+            echo "::endgroup::"
+          done
+      - uses: terraform-linters/setup-tflint@v4
+      - name: tflint (advisory)
+        continue-on-error: true
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/infra/terraform/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/infra/terraform/.tflint.hcl" --format compact
+
+  checkov:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: checkov (Terraform, Dockerfile, workflows)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform,dockerfile,github_actions
+          # Advisory while the baseline settles; findings go to code scanning. Tighten to hard-fail on
+          # HIGH/CRITICAL before the first production tenant.
+          soft_fail: true
+          output_format: cli,sarif
+          output_file_path: console,checkov-results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('checkov-results.sarif') != ''
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+  helm:
+    runs-on: ubuntu-latest
+    env:
+      CHART: infra/helm/corebanking
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint (default and standalone values)
+        run: |
+          helm lint "$CHART"
+          helm lint "$CHART" -f "$CHART/values-standalone.yaml"
+      - name: helm template
+        run: |
+          mkdir -p rendered
+          helm template corebanking "$CHART" --namespace corebanking > rendered/default.yaml
+          helm template corebanking "$CHART" --namespace corebanking -f "$CHART/values-standalone.yaml" > rendered/standalone.yaml
+          helm template corebanking "$CHART" --namespace corebanking \
+            --set ingress.enabled=true --set podDisruptionBudget.maxUnavailable=1 \
+            --set serviceAccount.irsaRoleArn=arn:aws:iam::000000000000:role/ci-placeholder \
+            --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000 > rendered/variants.yaml
+      - name: chart guard rails (missing Secret name / credential in config must fail)
+        run: |
+          if helm template x "$CHART" --set existingSecret= >/dev/null 2>&1; then
+            echo "expected failure when existingSecret is empty"; exit 1
+          fi
+          if helm template x "$CHART" --set config.DB_PASSWORD=x >/dev/null 2>&1; then
+            echo "expected failure for a credential-like config key"; exit 1
+          fi
+      - name: kubeconform (schema validation of rendered manifests)
+        run: |
+          curl -sSfL -o kubeconform.tgz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tgz kubeconform
+          ./kubeconform -strict -summary -ignore-missing-schemas rendered/*.yaml
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/app/Dockerfile
+          push: false
+          tags: corebanking/backend:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  local-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: YAML and JSON parse check
+        run: |
+          pip install --quiet pyyaml
+          python - <<'EOF'
+          import glob, json, sys, yaml
+          bad = 0
+          for f in glob.glob("deploy/**/*.y*ml", recursive=True) + glob.glob(".github/**/*.y*ml", recursive=True) \
+                  + glob.glob("infra/helm/**/values*.yaml", recursive=True) + ["infra/helm/corebanking/Chart.yaml"]:
+              try:
+                  list(yaml.safe_load_all(open(f)))
+              except Exception as e:
+                  bad += 1; print(f"YAML error {f}: {e}")
+          for f in glob.glob("deploy/**/*.json", recursive=True):
+              try:
+                  json.load(open(f))
+              except Exception as e:
+                  bad += 1; print(f"JSON error {f}: {e}")
+          sys.exit(1 if bad else 0)
+          EOF
+      - name: Keycloak realm template sanity
+        run: |
+          python - <<'EOF'
+          import json
+          r = json.load(open("deploy/local/keycloak/demo-nbfc-realm.json"))
+          assert r["realm"] == "demo-nbfc"
+          assert r["bruteForceProtected"] and r["failureFactor"] == 5
+          assert r["otpPolicyType"] == "totp" and r["otpPolicyDigits"] == 6 and r["otpPolicyPeriod"] == 30
+          assert r["accessTokenLifespan"] == 300 and r["ssoSessionIdleTimeout"] == 1800
+          assert any(a["alias"] == "CONFIGURE_TOTP" and a["defaultAction"] for a in r["requiredActions"])
+          clients = {c["clientId"]: c for c in r["clients"]}
+          assert set(clients) == {"console", "api", "corebanking-service"}
+          assert clients["console"]["publicClient"] and clients["console"]["attributes"]["pkce.code.challenge.method"] == "S256"
+          perms = {x["name"] for x in r["roles"]["client"]["api"]}
+          assert len(perms) == 19, perms
+          for role in r["roles"]["realm"]:
+              assert set(role["composites"]["client"]["api"]) <= perms, role["name"]
+          print("realm template OK")
+          EOF
+      - name: new-tenant-realm.py smoke test
+        run: |
+          python infra/keycloak/new-tenant-realm.py --self-test
+          python infra/keycloak/new-tenant-realm.py --tenant ci-tenant --console-url https://ci-tenant.console.example.in \
+            --display-name "CI Tenant" --out /tmp/ci-tenant-realm.json
+          python -c "import json; r=json.load(open('/tmp/ci-tenant-realm.json')); assert r['realm']=='ci-tenant'; print('rendered OK')"
+          if python infra/keycloak/new-tenant-realm.py --tenant Bad_Code --console-url https://x.example.in; then
+            echo "invalid tenant code accepted"; exit 1
+          fi
+      - name: docker compose config
+        working-directory: deploy/local
+        run: ./init-env.sh && docker compose config --quiet && docker compose --profile console config --services
+      - name: shellcheck init script
+        run: shellcheck deploy/local/postgres/init/*.sh

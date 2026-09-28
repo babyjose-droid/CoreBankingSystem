@@ -1,0 +1,109 @@
+name: security
+# Code scanning (CodeQL), dependency review on PRs and a Trivy filesystem scan. Results go to the
+# repository's Security tab (SARIF). Weekly run catches newly published CVEs in unchanged code.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 1 * * 1'   # Mondays 06:47 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect sources
+        id: sources
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          present=true
+          if [ "$LANGUAGE" = "javascript-typescript" ]; then
+            first=$(find frontend -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \) \
+              -not -path '*/node_modules/*' -print -quit)
+            [ -n "$first" ] || present=false
+          fi
+          echo "present=$present" >> "$GITHUB_OUTPUT"
+          echo "$LANGUAGE sources present: $present"
+      - uses: actions/setup-java@v4
+        if: matrix.language == 'java-kotlin'
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        if: matrix.language == 'java-kotlin'
+        with:
+          gradle-version: '8.14.3'
+      - uses: github/codeql-action/init@v3
+        if: steps.sources.outputs.present == 'true'
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+      - name: Compile Java (traced by CodeQL)
+        if: matrix.language == 'java-kotlin'
+        run: gradle :backend:app:compileJava --no-daemon --no-build-cache
+      - uses: github/codeql-action/analyze@v3
+        if: steps.sources.outputs.present == 'true'
+        with:
+          category: /language:${{ matrix.language }}
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # Copyleft licences need legal review before entering a product sold to banks.
+          deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, GPL-3.0-only, GPL-3.0-or-later
+
+  trivy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (vulnerabilities + secrets)
+        # trivy-action publishes only exact tags; Dependabot keeps this current.
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '0'
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs

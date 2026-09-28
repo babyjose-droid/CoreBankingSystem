@@ -2,6 +2,7 @@ package com.corebanking;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * CoreBanking — modular monolith (ADR-002). Each top-level package is a Spring Modulith module;
@@ -10,6 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * the control plane and every tenant database explicitly.
  */
 @SpringBootApplication
+@EnableScheduling
 public class CoreApplication {
     public static void main(String[] args) {
         SpringApplication.run(CoreApplication.class, args);

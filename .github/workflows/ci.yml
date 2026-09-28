@@ -19,8 +19,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
-      - name: Golden calculation tests (block merge on any failure)
-        run: gradle :backend:calc:test :backend:ledger-core:test --no-daemon
+      - name: Golden calculation, ledger and kernel tests (block merge on any failure)
+        run: gradle :backend:calc:test :backend:ledger-core:test :backend:kernel:test --no-daemon
       - name: App build, modularity check, DB invariant tests (Testcontainers)
         run: gradle :backend:app:build --no-daemon
       - uses: actions/upload-artifact@v4
@@ -28,6 +28,35 @@ jobs:
         with:
           name: test-reports
           path: '**/build/reports/tests/**'
+
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/console/package-lock.json
+      - run: npm ci
+      - name: API types are up to date with docs/api/openapi.yaml
+        run: npm run gen:api && git diff --exit-code src/api/schema.d.ts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  api-spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Lint OpenAPI contract
+        run: npx --yes @redocly/cli@2 lint docs/api/openapi.yaml
 
   sql-invariants:
     runs-on: ubuntu-latest
@@ -45,10 +74,16 @@ jobs:
         run: |
           P="psql -h localhost -U ar -v ON_ERROR_STOP=1 -q"
           $P -d postgres -c "create database control"
-          $P -d control -f backend/app/src/main/resources/db/migration/control/V1__control_plane.sql
-          for f in backend/app/src/main/resources/db/migration/tenant/V*.sql; do $P -d tenant_ci -f "$f"; done
-          $P -d tenant_ci -f backend/app/src/test/resources/db/ledger_invariants_test.sql | tee out.txt
-          grep -q "ALL DB INVARIANT TESTS PASSED" out.txt
+          tools/db/apply-migrations.sh control -h localhost -U ar -d control
+          i=0
+          for t in backend/app/src/test/resources/db/*_test.sql; do
+            i=$((i+1)); db="tenant_ci_$i"
+            echo "== $t on fresh database $db"
+            $P -d postgres -c "create database $db"
+            tools/db/apply-migrations.sh tenant -h localhost -U ar -d "$db"
+            $P -d "$db" -f "$t" | tee out.txt
+            grep -q "TESTS PASSED" out.txt
+          done
 
   secrets-scan:
     runs-on: ubuntu-latest

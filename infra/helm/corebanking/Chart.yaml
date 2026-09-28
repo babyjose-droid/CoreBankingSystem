@@ -1,0 +1,15 @@
+apiVersion: v2
+name: corebanking
+description: CoreBanking core banking and lending backend (SaaS on EKS or standalone install on a bank's own cluster)
+type: application
+# Chart version: bump on any chart change. appVersion: default image tag.
+version: 0.1.0
+appVersion: "0.1.0"
+# Requires Kubernetes >= 1.30 (preStop sleep action). Not declared as kubeVersion so offline lint/template work.
+keywords:
+  - core-banking
+  - lending
+  - nbfc
+home: https://github.com/corebanking/corebanking
+maintainers:
+  - name: CoreBanking platform team

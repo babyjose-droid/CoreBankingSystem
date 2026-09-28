@@ -1,0 +1,7 @@
+extends:
+  - recommended
+rules:
+  operation-4xx-response: off      # every operation has a `default` problem+json response
+  tag-description: off
+  info-license-strict: off
+  no-server-example.com: off

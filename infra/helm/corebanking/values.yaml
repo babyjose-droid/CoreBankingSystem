@@ -1,0 +1,188 @@
+# Default values for the CoreBanking backend chart (SaaS tiers on EKS, ap-south-1 / ap-south-2).
+# See values-standalone.yaml for a bank installing on its own cluster.
+#
+# NEVER put credentials in values files. Database passwords, client secrets and API keys live in a
+# Kubernetes Secret created out of band (External Secrets Operator from AWS Secrets Manager in SaaS,
+# the bank's vault in standalone) and referenced by name in `existingSecret`.
+
+# -- Number of pods when autoscaling is disabled. Keep >= 2 so a node or AZ loss does not stop service.
+replicaCount: 2
+
+image:
+  # -- Container registry/repository (ECR in ap-south-1 for SaaS).
+  repository: corebanking/backend
+  # -- Image tag. Defaults to the chart appVersion.
+  tag: ""
+  # -- Optional immutable digest (sha256:...). When set it takes precedence over the tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- REQUIRED. Name of an existing Secret in the release namespace whose keys are exposed as env vars.
+# Expected keys (see TenancyConfig):
+#   COREBANKING_CONTROL_PASSWORD
+#   COREBANKING_TENANT_<CODE>_URL / _USER / _PASSWORD  (standalone / env-credential tenants;
+#     CODE is the tenant code upper-cased with '-' replaced by '_', e.g. COREBANKING_TENANT_DEMO_NBFC_URL)
+existingSecret: corebanking-secrets
+
+# -- Non-secret environment variables, rendered into a ConfigMap and loaded with envFrom.
+config:
+  COREBANKING_CONTROL_URL: "jdbc:postgresql://control-db.internal:5432/control?sslmode=verify-full"
+  COREBANKING_CONTROL_USER: "control"
+  # One realm per tenant (ADR-007). The issuer must equal the `iss` claim of tokens.
+  # One Keycloak realm per tenant under this prefix; realm name must equal the token tenant claim.
+  COREBANKING_OIDC_ISSUER_PREFIX: "https://id.example.in/realms/"
+  COREBANKING_OIDC_AUDIENCE: "api"
+  TZ: "Asia/Kolkata"
+  # Extra JVM flags; the image already sets -XX:MaxRAMPercentage=75.
+  # JAVA_TOOL_OPTIONS: "-XX:+UseZGC"
+
+# -- Additional env entries (full EnvVar objects), e.g. valueFrom fieldRef.
+extraEnv: []
+
+serviceAccount:
+  create: true
+  # -- Name to use; generated from the fullname when empty.
+  name: ""
+  annotations: {}
+  # -- IAM role ARN for IRSA (EKS). Grants the pod AWS access (Secrets Manager, KMS, S3, SQS) without keys.
+  # Leave empty when using EKS Pod Identity or outside AWS.
+  irsaRoleArn: ""
+  # -- The backend does not call the Kubernetes API. IRSA / Pod Identity inject their own projected
+  # token, so the default service-account token is not mounted.
+  automountServiceAccountToken: false
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  capabilities:
+    drop:
+      - ALL
+
+# -- Size limit of the writable /tmp emptyDir (root filesystem is read-only).
+tmpSizeLimit: 512Mi
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: api.example.in
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS is expected wherever ingress is enabled (RBI: encryption in transit).
+  tls:
+    - secretName: corebanking-api-tls
+      hosts:
+        - api.example.in
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 2Gi
+
+containerPort: 8080
+
+probes:
+  startup:
+    # Control-plane and per-tenant Flyway migrations run at startup; allow up to 10 minutes.
+    path: /actuator/health/liveness
+    periodSeconds: 10
+    failureThreshold: 60
+    timeoutSeconds: 3
+  liveness:
+    path: /actuator/health/liveness
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 3
+  readiness:
+    path: /actuator/health/readiness
+    periodSeconds: 5
+    failureThreshold: 3
+    timeoutSeconds: 3
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+terminationGracePeriodSeconds: 60
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  # -- Set to a percentage to also scale on memory; empty disables.
+  targetMemoryUtilizationPercentage: ""
+
+podDisruptionBudget:
+  enabled: true
+  # -- Use either minAvailable or maxUnavailable.
+  minAvailable: 1
+  maxUnavailable: ""
+
+# -- Spread pods over availability zones (ap-south-1a/b/c) and nodes.
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+networkPolicy:
+  enabled: true
+  # -- Namespace of the ingress controller allowed to reach the pods.
+  ingressControllerNamespace: ingress-nginx
+  # -- Extra ingress peers (NetworkPolicyPeer objects), e.g. the Prometheus namespace for /actuator/prometheus.
+  extraIngressFrom: []
+  dns:
+    namespace: kube-system
+  database:
+    # -- CIDRs of the database subnets (Aurora / PostgreSQL). Port 5432.
+    # Defaults match the Terraform network module defaults; use the `database_subnet_cidrs` output per env.
+    cidrs:
+      - 10.0.112.0/24
+      - 10.0.113.0/24
+      - 10.0.114.0/24
+    port: 5432
+  keycloak:
+    # -- Namespace of an in-cluster Keycloak; empty when Keycloak is reached over HTTPS (443) instead.
+    namespace: ""
+    podLabels: {}
+    port: 8080
+  https:
+    # -- HTTPS egress (AWS APIs via VPC endpoints, external Keycloak/IdP). Narrow in production if possible.
+    cidrs:
+      - 0.0.0.0/0
+    except: []
+  # -- Extra egress rules (NetworkPolicyEgressRule objects).
+  extraEgress: []

@@ -1,0 +1,92 @@
+# Example values for a STANDALONE install: a bank or NBFC running CoreBanking on its own Kubernetes
+# cluster (on-premises data centre or its own cloud account in India). Single tenant; the control plane
+# runs in single-tenant mode (ADR-001). Use with:
+#
+#   kubectl -n corebanking create secret generic corebanking-secrets \
+#     --from-literal=COREBANKING_CONTROL_PASSWORD=... \
+#     --from-literal=COREBANKING_TENANT_ACME_BANK_URL='jdbc:postgresql://pg.bank.internal:5432/tenant_acme_bank?sslmode=verify-full' \
+#     --from-literal=COREBANKING_TENANT_ACME_BANK_USER=tenant_acme_bank \
+#     --from-literal=COREBANKING_TENANT_ACME_BANK_PASSWORD=...
+#   (or, preferably, sync it from the bank's vault with External Secrets / Vault Agent)
+#
+#   helm upgrade --install corebanking infra/helm/corebanking -n corebanking \
+#     -f infra/helm/corebanking/values-standalone.yaml
+#
+# RBI/DPDP: keep the cluster, database and backups in India; TLS everywhere; audit logs retained per
+# the bank's policy. No credentials in this file.
+
+image:
+  # The bank mirrors the release image into its own registry.
+  repository: registry.bank.internal/corebanking/backend
+  tag: "0.1.0"
+
+existingSecret: corebanking-secrets
+
+config:
+  COREBANKING_CONTROL_URL: "jdbc:postgresql://pg.bank.internal:5432/control?sslmode=verify-full"
+  COREBANKING_CONTROL_USER: "control"
+  # One Keycloak realm per tenant under this prefix; realm name must equal the token tenant claim.
+  COREBANKING_OIDC_ISSUER_PREFIX: "https://sso.bank.internal/realms/"
+  COREBANKING_OIDC_AUDIENCE: "api"
+  TZ: "Asia/Kolkata"
+
+serviceAccount:
+  create: true
+  irsaRoleArn: ""   # not on AWS
+
+replicaCount: 2
+
+autoscaling:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: corebanking.bank.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: corebanking-tls
+      hosts:
+        - corebanking.bank.internal
+
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    memory: 3Gi
+
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+  extraIngressFrom:
+    # Allow Prometheus to scrape /actuator/prometheus.
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  database:
+    cidrs:
+      - 10.50.10.0/24
+    port: 5432
+  keycloak:
+    # Keycloak runs in the same cluster in this example.
+    namespace: keycloak
+    podLabels:
+      app.kubernetes.io/name: keycloak
+    port: 8080
+  https:
+    # No internet egress in the bank's network; only the internal HTTPS range (IdP federation, SIEM).
+    cidrs:
+      - 10.50.0.0/16
+    except: []
+
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway

@@ -1,0 +1,84 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+# Default-deny for the backend pods with explicit allow-lists (segmentation expected by RBI IT/cyber
+# security directions). On EKS this requires the VPC CNI network policy agent (enabled by the eks module).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corebanking.fullname" . }}
+  labels:
+    {{- include "corebanking.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corebanking.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace | quote }}
+        {{- with $np.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.dns.namespace | quote }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # PostgreSQL (control plane + tenant databases)
+    {{- with $np.database.cidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ $np.database.port }}
+          protocol: TCP
+    {{- end }}
+    {{- if $np.keycloak.namespace }}
+    # In-cluster Keycloak (JWKS / token endpoint)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.keycloak.namespace | quote }}
+          {{- with $np.keycloak.podLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - port: {{ $np.keycloak.port }}
+          protocol: TCP
+    {{- end }}
+    # HTTPS: AWS APIs through VPC endpoints (Secrets Manager, KMS, S3, SQS, STS), external Keycloak / IdP
+    {{- with $np.https.cidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+            {{- with $np.https.except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

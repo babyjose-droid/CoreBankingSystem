@@ -1,0 +1,23 @@
+# Keep the build context small and free of secrets/local state.
+.git
+.github
+.idea
+*.iml
+.env
+.env.*
+*.log
+**/node_modules
+frontend/**/node_modules
+build
+**/build
+.gradle
+**/.gradle
+out
+**/out
+infra
+deploy
+docs
+tools
+*.tfstate
+*.tfstate.*
+**/.terraform

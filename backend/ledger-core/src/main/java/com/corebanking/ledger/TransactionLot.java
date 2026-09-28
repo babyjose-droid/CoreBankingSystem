@@ -58,6 +58,28 @@ public final class TransactionLot {
                 reason, original.id, mirrored);
     }
 
+    /**
+     * Rebuilds a lot that was already posted (read back from the ledger), e.g. to reverse it. The lines must
+     * already include their inter-branch legs, so the lot must balance per branch and currency as stored.
+     */
+    public static TransactionLot restore(UUID id, String type, LocalDate businessDate, LocalDate valueDate,
+                                         String reference, UUID reverses, List<PostingLine> lines) {
+        if (lines.size() < 2) throw new LedgerException("a lot needs at least two lines");
+        Map<String, BigDecimal> net = new TreeMap<>();
+        for (PostingLine l : lines) net.merge(l.branch() + "|" + l.currency(), l.signed(), BigDecimal::add);
+        net.forEach((k, v) -> {
+            if (v.signum() != 0) throw new LedgerException("stored lot " + id + " does not balance for " + k);
+        });
+        return new TransactionLot(Objects.requireNonNull(id), type, businessDate, valueDate, reference, reverses,
+                new ArrayList<>(lines));
+    }
+
+    public BigDecimal totalDebits() {
+        BigDecimal t = BigDecimal.ZERO;
+        for (PostingLine l : lines) if (l.side() == PostingLine.Side.DR) t = t.add(l.amount());
+        return t;
+    }
+
     public static Builder builder(String type, LocalDate businessDate) {
         return new Builder(type, businessDate);
     }

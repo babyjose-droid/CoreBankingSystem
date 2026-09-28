@@ -69,6 +69,20 @@ class LedgerCoreTest {
         net.values().forEach(v -> assertEquals(0, v.signum()));
     }
 
+    @Test void restore_rehydrates_a_posted_lot_and_reverses_it() {
+        var lot = TransactionLot.builder("CASA_TRANSFER", BD)
+                .debit("KOCHI", "CASA_SB", "A", bd("5000"), "out")
+                .credit("MUMBAI", "CASA_SB", "B", bd("5000"), "in")
+                .build();
+        var restored = TransactionLot.restore(lot.id(), lot.type(), lot.businessDate(), lot.valueDate(), null, null, lot.lines());
+        assertEquals(4, restored.lines().size());
+        assertEquals(0, bd("10000").compareTo(restored.totalDebits()));
+        var rev = TransactionLot.reversal(restored, BD.plusDays(1), "error");
+        assertEquals(lot.id(), rev.reverses());
+        assertThrows(LedgerException.class, () -> TransactionLot.restore(lot.id(), "X", BD, BD, null, null,
+                lot.lines().subList(0, 3)));
+    }
+
     @Test void number_series_luhn_and_ownership() {
         var loans = new NumberSeries("1001", 9);
         String n = loans.format(1);

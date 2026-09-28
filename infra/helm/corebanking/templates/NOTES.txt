@@ -1,0 +1,16 @@
+CoreBanking backend {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Credentials are read from the existing Secret "{{ .Values.existingSecret }}" (not managed by this chart).
+Check it exists before the pods start:
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.existingSecret }}
+
+Health:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "corebanking.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -s localhost:8080/actuator/health/readiness
+{{- if .Values.ingress.enabled }}
+
+Ingress hosts:
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- end }}
