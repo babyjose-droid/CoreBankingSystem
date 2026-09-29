@@ -31,7 +31,11 @@ public class TenantProvisioner {
 
     public record HeadOffice(String code, String name, String stateCode) {}
     public record Request(String code, String legalName, String entityType, String deploymentTier, String edition,
-                          String starterKit, HeadOffice headOffice, LocalDate firstBusinessDate) {}
+                          String starterKit, HeadOffice headOffice, LocalDate firstBusinessDate, List<String> adminUsers,
+                          String kmsKeyArn, String dbSecretArn) {}
+
+    /** Keycloak client of the tenant's LOS / integration (see infra/keycloak/new-tenant-realm.py). */
+    static final String SERVICE_ACCOUNT = "service-account-corebanking-service";
     public record MigrationResult(String tenant, String currentVersion, List<String> pending, String status, String error) {}
 
     private final JdbcTemplate control;
@@ -52,16 +56,24 @@ public class TenantProvisioner {
 
     public Map<String, Object> provision(Request r, String operator) {
         if (r.code() == null || !r.code().matches("[a-z][a-z0-9-]{2,30}")) throw ApiException.invalid("invalid tenant code");
+        if (r.code().equals("platform")) throw ApiException.invalid("'platform' is the operators' realm, not a tenant code");
         if (r.headOffice() == null) throw ApiException.invalid("headOffice is required");
+        if (r.adminUsers() != null) {
+            for (String u : r.adminUsers()) {
+                if (u == null || !u.matches("[A-Za-z0-9._@-]{2,80}")) throw ApiException.invalid("invalid admin username " + u);
+            }
+        }
         if (!control.queryForList("SELECT 1 FROM control.tenant WHERE code = ?", r.code()).isEmpty()) {
             throw ApiException.conflict("tenant " + r.code() + " already exists");
         }
         UUID id = UUID.randomUUID();
         String kit = r.starterKit() == null ? ("BANK".equals(r.entityType()) ? "BANK" : "NBFC") : r.starterKit();
         control.update("""
-                INSERT INTO control.tenant (id, code, legal_name, entity_type, deployment_tier, edition_code, starter_kit, oidc_realm)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, id, r.code(), r.legalName(), r.entityType(), r.deploymentTier(), r.edition(), kit, r.code());
+                INSERT INTO control.tenant (id, code, legal_name, entity_type, deployment_tier, edition_code, starter_kit, oidc_realm,
+                                            kms_key_arn, db_secret_arn)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, id, r.code(), r.legalName(), r.entityType(), r.deploymentTier(), r.edition(), kit, r.code(),
+                r.kmsKeyArn(), r.dbSecretArn());
         control.update("""
                 INSERT INTO control.tenant_module (tenant_id, module_code)
                 SELECT ?, module_code FROM control.edition_module WHERE edition_code = ?
@@ -96,6 +108,17 @@ public class TenantProvisioner {
         t.update("INSERT INTO platform.weekly_off (branch_code, day_of_week, week_of_month) VALUES (NULL, 7, NULL)");
         if ("BANK".equals(kit)) {
             t.update("INSERT INTO platform.weekly_off (branch_code, day_of_week, week_of_month) VALUES (NULL, 6, 2), (NULL, 6, 4)");
+        }
+        // First staff profiles (US-020): the tenant admins named at onboarding and the integration client see every
+        // branch; everyone else is set up by the tenant through maker-checker (POST /api/v1/staff).
+        List<String> admins = new java.util.ArrayList<>();
+        if (r.adminUsers() != null) admins.addAll(r.adminUsers());
+        admins.add(SERVICE_ACCOUNT);
+        for (String u : admins) {
+            t.update("""
+                    INSERT INTO platform.staff_user (user_id, username, display_name, home_branch, all_branches)
+                    VALUES (?, ?, ?, ?, true) ON CONFLICT (user_id) DO NOTHING
+                    """, u.toLowerCase(), u.toLowerCase(), u, r.headOffice().code());
         }
         t.queryForObject("SELECT ledger.load_starter_kit(?)", Integer.class, kit);
         t.execute("SELECT ledger.load_lending_heads()");

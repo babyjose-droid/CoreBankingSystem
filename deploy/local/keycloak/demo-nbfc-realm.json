@@ -195,7 +195,10 @@
               "loan:disburse",
               "loan:repay",
               "loan:waive",
-              "loan:reverse"
+              "loan:reverse",
+              "staff:view",
+              "master:view",
+              "master:propose"
             ]
           }
         }
@@ -218,7 +221,9 @@
               "approval:approve",
               "gl:reports",
               "product:view",
-              "loan:view"
+              "loan:view",
+              "staff:view",
+              "master:view"
             ]
           }
         }
@@ -259,7 +264,9 @@
               "audit:view",
               "gl:reports",
               "product:view",
-              "loan:view"
+              "loan:view",
+              "staff:view",
+              "master:view"
             ]
           }
         }
@@ -299,7 +306,11 @@
               "loan:repay",
               "loan:waive",
               "loan:reverse",
-              "loan:admin"
+              "loan:admin",
+              "staff:view",
+              "staff:propose",
+              "master:view",
+              "master:propose"
             ]
           }
         }
@@ -478,6 +489,30 @@
         {
           "name": "loan:stp",
           "description": "Straight-through processing for LOS integration (API clients only)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "staff:view",
+          "description": "View staff profiles and branch scope",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "staff:propose",
+          "description": "Propose staff profile and branch-scope changes",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "master:view",
+          "description": "View system properties",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "master:propose",
+          "description": "Propose territory, enumeration and system-property changes",
           "composite": false,
           "clientRole": true
         }
@@ -667,7 +702,20 @@
           "eod:view",
           "eod:run",
           "eod:schedule",
-          "audit:view"
+          "audit:view",
+          "product:view",
+          "product:propose",
+          "loan:view",
+          "loan:create",
+          "loan:disburse",
+          "loan:repay",
+          "loan:waive",
+          "loan:reverse",
+          "loan:admin",
+          "staff:view",
+          "staff:propose",
+          "master:view",
+          "master:propose"
         ]
       },
       {
@@ -691,7 +739,21 @@
           "eod:view",
           "eod:run",
           "eod:schedule",
-          "audit:view"
+          "audit:view",
+          "product:view",
+          "product:propose",
+          "loan:view",
+          "loan:create",
+          "loan:disburse",
+          "loan:repay",
+          "loan:waive",
+          "loan:reverse",
+          "loan:admin",
+          "loan:stp",
+          "staff:view",
+          "staff:propose",
+          "master:view",
+          "master:propose"
         ]
       }
     ]
@@ -813,7 +875,18 @@
       "serviceAccountClientId": "corebanking-service",
       "realmRoles": [
         "OPERATIONS"
-      ]
+      ],
+      "clientRoles": {
+        "api": [
+          "loan:stp",
+          "loan:view",
+          "loan:create",
+          "loan:repay",
+          "customer:view",
+          "customer:create",
+          "product:view"
+        ]
+      }
     }
   ]
 }

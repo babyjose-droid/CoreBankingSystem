@@ -3,6 +3,7 @@ package com.corebanking.lending.web;
 import com.corebanking.lending.internal.LoanService;
 import com.corebanking.lending.internal.ProductService;
 import com.corebanking.platform.ApprovalView;
+import com.corebanking.platform.BranchScope;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -35,10 +36,18 @@ class LendingController {
 
     private final ProductService products;
     private final LoanService loans;
+    private final BranchScope scope;
 
-    LendingController(ProductService products, LoanService loans) {
+    LendingController(ProductService products, LoanService loans, BranchScope scope) {
         this.products = products;
         this.loans = loans;
+        this.scope = scope;
+    }
+
+    /** A loan outside the caller's branch scope is reported as not found (US-020). */
+    private UUID visible(UUID id) {
+        scope.requireRecord(loans.branchOf(id), "loan " + id);
+        return id;
     }
 
     // ---- products ----------------------------------------------------------------------------
@@ -85,38 +94,38 @@ class LendingController {
     @GetMapping("/loans/{id}")
     @PreAuthorize("hasAuthority('loan:view')")
     Map<String, Object> get(@PathVariable UUID id) {
-        return loans.get(id);
+        return loans.get(visible(id));
     }
 
     @GetMapping("/loans/{id}/schedule")
     @PreAuthorize("hasAuthority('loan:view')")
     Map<String, Object> schedule(@PathVariable UUID id) {
-        return loans.schedule(id);
+        return loans.schedule(visible(id));
     }
 
     @GetMapping("/loans/{id}/transactions")
     @PreAuthorize("hasAuthority('loan:view')")
     List<Map<String, Object>> transactions(@PathVariable UUID id) {
-        return loans.transactions(id);
+        return loans.transactions(visible(id));
     }
 
     @GetMapping("/loans/{id}/kfs")
     @PreAuthorize("hasAuthority('loan:view')")
     Map<String, Object> kfs(@PathVariable UUID id) {
-        return loans.kfsOf(id);
+        return loans.kfsOf(visible(id));
     }
 
     @PostMapping("/loans/{id}/kfs-acceptance")
     @PreAuthorize("hasAuthority('loan:create') or hasAuthority('loan:stp')")
     Map<String, Object> acceptKfs(@PathVariable UUID id, @RequestBody KfsAcceptance k) {
-        return loans.acceptKfs(id, k.channel(), k.evidenceRef());
+        return loans.acceptKfs(visible(id), k.channel(), k.evidenceRef());
     }
 
     /** 202 with an approval for staff; 200 with the disbursed loan for LOS clients (loan:stp). */
     @PostMapping("/loans/{id}/disbursement")
     @PreAuthorize("hasAuthority('loan:disburse') or hasAuthority('loan:stp')")
     ResponseEntity<Map<String, Object>> disburse(@PathVariable UUID id, @RequestBody(required = false) Map<String, Object> instruction) {
-        Map<String, Object> r = loans.requestDisbursement(id, instruction);
+        Map<String, Object> r = loans.requestDisbursement(visible(id), instruction);
         return ResponseEntity.status(r.containsKey("entityType") ? HttpStatus.ACCEPTED : HttpStatus.OK).body(r);
     }
 
@@ -124,68 +133,68 @@ class LendingController {
     @PostMapping("/loans/{id}/repayments")
     @PreAuthorize("hasAuthority('loan:repay') or hasAuthority('loan:stp')")
     Map<String, Object> repay(@PathVariable UUID id, @RequestBody Receipt r) {
-        return loans.repay(id, r.amount(), r.valueDate(), r.mode(), r.reference());
+        return loans.repay(visible(id), r.amount(), r.valueDate(), r.mode(), r.reference());
     }
 
     @PostMapping("/loans/{id}/prepayments")
     @PreAuthorize("hasAuthority('loan:repay')")
     Map<String, Object> prepay(@PathVariable UUID id, @RequestBody Prepayment p) {
-        return loans.prepay(id, p.amount(), p.mode());
+        return loans.prepay(visible(id), p.amount(), p.mode());
     }
 
     @GetMapping("/loans/{id}/preclosure-quote")
     @PreAuthorize("hasAuthority('loan:view')")
     Map<String, Object> preclosureQuote(@PathVariable UUID id) {
-        return loans.preclosureQuote(id);
+        return loans.preclosureQuote(visible(id));
     }
 
     @PostMapping("/loans/{id}/preclosure")
     @PreAuthorize("hasAuthority('loan:repay')")
     Map<String, Object> preclose(@PathVariable UUID id, @RequestBody Amount a) {
-        return loans.preclose(id, a.amount());
+        return loans.preclose(visible(id), a.amount());
     }
 
     @GetMapping("/loans/{id}/cancellation-quote")
     @PreAuthorize("hasAuthority('loan:view')")
     Map<String, Object> cancellationQuote(@PathVariable UUID id) {
-        return loans.cancellationQuote(id);
+        return loans.cancellationQuote(visible(id));
     }
 
     @PostMapping("/loans/{id}/cancellation")
     @PreAuthorize("hasAuthority('loan:repay')")
     Map<String, Object> cancel(@PathVariable UUID id, @RequestBody Amount a) {
-        return loans.cancel(id, a.amount());
+        return loans.cancel(visible(id), a.amount());
     }
 
     @PostMapping("/loans/{id}/charges")
     @PreAuthorize("hasAuthority('loan:repay')")
     Map<String, Object> charge(@PathVariable UUID id, @RequestBody ChargeRequest c) {
-        return loans.chargeFee(id, c.feeCode(), c.base());
+        return loans.chargeFee(visible(id), c.feeCode(), c.base());
     }
 
     @PostMapping("/loans/{id}/charges/{chargeId}/waiver")
     @PreAuthorize("hasAuthority('loan:waive')")
     @ResponseStatus(HttpStatus.ACCEPTED)
     Map<String, Object> waive(@PathVariable UUID id, @PathVariable String chargeId, @RequestBody Waiver w) {
-        return loans.proposeWaiver(id, chargeId, w.amount(), w.reason());
+        return loans.proposeWaiver(visible(id), chargeId, w.amount(), w.reason());
     }
 
     @PostMapping("/loans/{id}/transactions/{txnId}/reverse")
     @PreAuthorize("hasAuthority('loan:reverse')")
     @ResponseStatus(HttpStatus.ACCEPTED)
     Map<String, Object> reverse(@PathVariable UUID id, @PathVariable UUID txnId, @RequestBody Reason r) {
-        return loans.proposeReversal(id, txnId, r.reason());
+        return loans.proposeReversal(visible(id), txnId, r.reason());
     }
 
     @PostMapping("/loans/{id}/freeze")
     @PreAuthorize("hasAuthority('loan:admin')")
     Map<String, Object> freeze(@PathVariable UUID id, @RequestBody Reason r) {
-        return loans.setFrozen(id, true, r.reason());
+        return loans.setFrozen(visible(id), true, r.reason());
     }
 
     @PostMapping("/loans/{id}/unfreeze")
     @PreAuthorize("hasAuthority('loan:admin')")
     Map<String, Object> unfreeze(@PathVariable UUID id, @RequestBody Reason r) {
-        return loans.setFrozen(id, false, r.reason());
+        return loans.setFrozen(visible(id), false, r.reason());
     }
 }

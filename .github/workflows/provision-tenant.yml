@@ -1,0 +1,99 @@
+name: provision-tenant
+# US-001: merging infra/tenants/<env>/<code>.json provisions the tenant end to end.
+# Runs on a self-hosted runner inside the environment's VPC (Aurora and the cluster API are private).
+# The GitHub environment "tenant-<env>" carries the secrets and requires a reviewer before prod runs.
+on:
+  push:
+    branches: [main]
+    paths: ['infra/tenants/*/*.json']
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: 'Spec file, e.g. infra/tenants/sandbox/acme-finance.json'
+        required: true
+      from_step:
+        description: 'Start from step (re-run after a failure)'
+        default: validate
+        type: choice
+        options: [validate, terraform, database, realm, credentials, control-plane, verify]
+
+permissions:
+  contents: read
+  id-token: write   # AWS OIDC
+
+concurrency:
+  group: provision-tenant   # one provisioning at a time (Terraform state, Helm release)
+  cancel-in-progress: false
+
+jobs:
+  specs:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+      - name: Validate spec files and list the ones to provision
+        id: find
+        env:
+          INPUT_SPEC: ${{ inputs.spec }}
+        run: |
+          python3 tools/tenant/provision_tenant.py --self-test > /dev/null
+          if [ -n "$INPUT_SPEC" ]; then files="$INPUT_SPEC"
+          else files=$(git diff --name-only --diff-filter=AM HEAD^ HEAD -- 'infra/tenants/*/*.json'); fi
+          python3 - "$files" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, "tools/tenant")
+          import provision_tenant as p
+          items = []
+          for f in sys.argv[1].split():
+              spec = p.load_spec(Path(f).resolve())          # fails the job on an invalid spec
+              items.append({"spec": f, "env": spec.environment, "code": spec.code})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("matrix=" + json.dumps({"include": items}) + "\n")
+          print(items)
+          PY
+
+  provision:
+    needs: specs
+    if: ${{ fromJson(needs.specs.outputs.matrix).include[0] != null }}
+    strategy:
+      matrix: ${{ fromJson(needs.specs.outputs.matrix) }}
+      max-parallel: 1
+    runs-on: [self-hosted, 'corebanking-${{ matrix.env }}']
+    environment: tenant-${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.PROVISIONER_ROLE_ARN }}
+          aws-region: ap-south-1
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_wrapper: false
+      - name: Terraform backend config
+        env:
+          BACKEND_HCL: ${{ vars.TERRAFORM_BACKEND_HCL }}
+          TENANT_ENV: ${{ matrix.env }}
+        run: printf '%s\n' "$BACKEND_HCL" > "infra/terraform/envs/$TENANT_ENV/backend.hcl"
+      - name: Operator token for the control-plane API
+        id: token
+        env:
+          ISSUER: ${{ vars.OPERATOR_TOKEN_URL }}
+          CLIENT_ID: ${{ secrets.OPERATOR_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.OPERATOR_CLIENT_SECRET }}
+        run: |
+          token=$(curl -sSf -d grant_type=client_credentials --data-urlencode "client_id=$CLIENT_ID" \
+                  --data-urlencode "client_secret=$CLIENT_SECRET" "$ISSUER" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Provision ${{ matrix.code }}
+        env:
+          KEYCLOAK_ADMIN_CLIENT_ID: ${{ secrets.KEYCLOAK_ADMIN_CLIENT_ID }}
+          KEYCLOAK_ADMIN_CLIENT_SECRET: ${{ secrets.KEYCLOAK_ADMIN_CLIENT_SECRET }}
+          COREBANKING_OPERATOR_TOKEN: ${{ steps.token.outputs.token }}
+          FROM_STEP: ${{ inputs.from_step || 'validate' }}
+          SPEC: ${{ matrix.spec }}
+        run: python3 tools/tenant/provision_tenant.py "$SPEC" --from-step "$FROM_STEP"

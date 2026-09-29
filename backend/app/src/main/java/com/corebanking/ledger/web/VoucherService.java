@@ -1,5 +1,6 @@
 package com.corebanking.ledger.web;
 
+import com.corebanking.kernel.Csv;
 import com.corebanking.ledger.LedgerSettings;
 import com.corebanking.ledger.NumberSeries;
 import com.corebanking.ledger.NumberSeriesService;
@@ -10,6 +11,7 @@ import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
 import com.corebanking.platform.ApprovalService;
+import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.BusinessDays;
 import com.corebanking.platform.Json;
 import java.math.BigDecimal;
@@ -34,12 +36,14 @@ class VoucherService {
     private final ApprovalService approvals;
     private final BusinessDays days;
     private final Json json;
+    private final BranchScope scope;
 
-    VoucherService(JdbcTemplate jdbc, ApprovalService approvals, BusinessDays days, Json json) {
+    VoucherService(JdbcTemplate jdbc, ApprovalService approvals, BusinessDays days, Json json, BranchScope scope) {
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.days = days;
         this.json = json;
+        this.scope = scope;
     }
 
     @Transactional
@@ -52,13 +56,77 @@ class VoucherService {
         LocalDate valueDate = in.valueDate() == null ? bd : in.valueDate();
         if (valueDate.isAfter(bd)) throw ApiException.invalid("value date cannot be after the business date " + bd);
         if (in.lines() == null || in.lines().size() < 2) throw ApiException.invalid("a voucher needs at least two lines");
-        for (Line l : in.lines()) validateLine(l);
+        for (Line l : in.lines()) {
+            validateLine(l);
+            scope.require(l.branch());
+        }
         TransactionLot preview = build(in, bd, valueDate, "IBR-CHECK");   // throws if unbalanced
         BigDecimal amount = preview.lines().stream()
                 .filter(l -> l.side() == PostingLine.Side.DR && !l.glCode().equals("IBR-CHECK"))
                 .map(PostingLine::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
         Map<String, Object> payload = json.toMap(new Input(in.voucherType(), valueDate, in.reference(), in.description(), in.lines()));
         return approvals.propose("VOUCHER", "CREATE", null, payload, null, amount, in.lines().get(0).branch(), idempotencyKey);
+    }
+
+    /** Columns of the voucher upload file (US-103); rows with the same voucherRef form one voucher. */
+    static final List<String> UPLOAD_COLUMNS = List.of("voucherRef", "voucherType", "valueDate", "description",
+            "branch", "glCode", "side", "amount");
+
+    /**
+     * Voucher upload (US-103): every voucher in the file is validated like a single voucher and proposed for
+     * approval. All or nothing: one bad voucher rejects the file and no approval is created.
+     * Optional columns: account, narration, reference.
+     */
+    @Transactional
+    public List<ApprovalRequest> proposeUpload(String csv, String idempotencyKey) {
+        if (csv != null && csv.length() > 5_000_000) throw ApiException.invalid("the file is larger than 5 MB");
+        Csv.Table table;
+        try {
+            table = Csv.parse(csv, UPLOAD_COLUMNS, 2_000);
+        } catch (Csv.CsvException e) {
+            throw ApiException.invalid(e.getMessage());
+        }
+        Map<String, List<Csv.Row>> groups = new LinkedHashMap<>();
+        for (Csv.Row r : table.rows()) {
+            String ref = r.get("voucherRef");
+            if (ref == null) throw ApiException.invalid("line " + r.line() + ": voucherRef is required");
+            groups.computeIfAbsent(ref, k -> new ArrayList<>()).add(r);
+        }
+        if (groups.size() > 200) throw ApiException.invalid("at most 200 vouchers per file");
+        List<ApprovalRequest> out = new ArrayList<>();
+        for (Map.Entry<String, List<Csv.Row>> g : groups.entrySet()) {
+            Csv.Row first = g.getValue().get(0);
+            String where = "voucher " + g.getKey() + " (line " + first.line() + ")";
+            LocalDate valueDate;
+            try {
+                valueDate = first.get("valueDate") == null ? null : LocalDate.parse(first.get("valueDate"));
+            } catch (java.time.format.DateTimeParseException e) {
+                throw ApiException.invalid(where + ": valueDate must be YYYY-MM-DD");
+            }
+            List<Line> lines = new ArrayList<>();
+            for (Csv.Row r : g.getValue()) {
+                for (String header : List.of("voucherType", "valueDate", "description", "reference")) {
+                    String v = r.get(header);
+                    if (v != null && !v.equals(first.get(header))) {
+                        throw ApiException.invalid("line " + r.line() + ": " + header + " differs from the first line of " + g.getKey());
+                    }
+                }
+                String side = r.get("side") == null ? null : r.get("side").toUpperCase();
+                lines.add(new Line(r.get("branch"), r.get("glCode"), r.get("account"), side, r.get("amount"), r.get("narration")));
+            }
+            String reference = first.get("reference") == null ? g.getKey() : first.get("reference");
+            Input in = new Input(first.get("voucherType") == null ? null : first.get("voucherType").toUpperCase(), valueDate,
+                    reference, first.get("description"), lines);
+            try {
+                out.add(propose(in, idempotencyKey == null ? null : idempotencyKey + ":" + g.getKey()));
+            } catch (ApiException e) {
+                if (e.status() != org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT) throw e;
+                throw ApiException.invalid(where + ": " + e.getMessage());
+            } catch (IllegalArgumentException e) {
+                throw ApiException.invalid(where + ": " + e.getMessage());
+            }
+        }
+        return out;
     }
 
     @Transactional
@@ -68,6 +136,11 @@ class VoucherService {
         List<Map<String, Object>> v = jdbc.queryForList(
                 "SELECT voucher_no, status, amount, description FROM ledger.voucher WHERE id = ?", voucherId);
         if (v.isEmpty()) throw ApiException.notFound("voucher " + voucherId);
+        List<String> branches = jdbc.queryForList("""
+                SELECT DISTINCT e.branch_code FROM ledger.account_entry e JOIN ledger.voucher v ON v.lot_id = e.lot_id
+                 WHERE v.id = ? ORDER BY 1
+                """, String.class, voucherId);
+        for (String b : branches) scope.requireRecord(b, "voucher " + voucherId);
         if (!"POSTED".equals(v.get(0).get("status"))) throw ApiException.conflict("voucher is already reversed");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("voucherId", voucherId.toString());
@@ -75,7 +148,7 @@ class VoucherService {
         payload.put("description", v.get(0).get("description"));
         payload.put("reason", reason);
         return approvals.propose("VOUCHER", "REVERSE", voucherId.toString(), payload, null,
-                (BigDecimal) v.get(0).get("amount"), null, null);
+                (BigDecimal) v.get(0).get("amount"), branches.isEmpty() ? null : branches.get(0), null);
     }
 
     private void validateLine(Line l) {

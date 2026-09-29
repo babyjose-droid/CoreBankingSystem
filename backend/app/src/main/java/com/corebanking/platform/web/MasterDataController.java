@@ -2,6 +2,7 @@ package com.corebanking.platform.web;
 
 import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalService;
+import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.Json;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -39,11 +40,13 @@ class MasterDataController {
     private final JdbcTemplate jdbc;
     private final ApprovalService approvals;
     private final Json json;
+    private final BranchScope scope;
 
-    MasterDataController(JdbcTemplate jdbc, ApprovalService approvals, Json json) {
+    MasterDataController(JdbcTemplate jdbc, ApprovalService approvals, Json json, BranchScope scope) {
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.json = json;
+        this.scope = scope;
     }
 
     // ---- branches ----------------------------------------------------------------------------
@@ -84,6 +87,9 @@ class MasterDataController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     Map<String, Object> proposeHolidays(@Valid @RequestBody List<@Valid Holiday> holidays) {
         if (holidays.isEmpty() || holidays.size() > 366) throw ApiException.invalid("send 1 to 366 holidays");
+        for (Holiday h : holidays) {
+            if (h.branchCode() == null) scope.requireAll(); else scope.require(h.branchCode());
+        }
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("holidays", holidays.stream().map(json::toMap).toList());
         return ApprovalController.view(approvals.propose("HOLIDAY", "CREATE", null, payload, null, null, null, null));

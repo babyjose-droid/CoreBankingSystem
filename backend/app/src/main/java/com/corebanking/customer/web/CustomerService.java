@@ -10,6 +10,7 @@ import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
 import com.corebanking.platform.ApprovalService;
+import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.Json;
 import com.corebanking.platform.CurrentUser;
 import java.sql.ResultSet;
@@ -46,12 +47,14 @@ class CustomerService {
     private final ApprovalService approvals;
     private final PiiKeys keys;
     private final Json json;
+    private final BranchScope scope;
 
-    CustomerService(JdbcTemplate jdbc, ApprovalService approvals, PiiKeys keys, Json json) {
+    CustomerService(JdbcTemplate jdbc, ApprovalService approvals, PiiKeys keys, Json json, BranchScope scope) {
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.keys = keys;
         this.json = json;
+        this.scope = scope;
     }
 
     static void validate(Input in) {
@@ -75,17 +78,28 @@ class CustomerService {
     List<Match> duplicates(Input in) {
         validate(in);
         Hashes h = hashes(keys.forTenant(CurrentUser.requireTenant()), in);
-        return jdbc.query("SELECT * FROM customer.find_duplicates(?, ?, ?)",
-                (rs, i) -> new Match(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)),
-                h.pan(), h.mobile(), h.nameDob());
+        // Dedupe looks across every branch (a duplicate elsewhere still matters), but only matches inside the
+        // caller's branch scope carry the customer's number and name; others show just the rule and strength.
+        return jdbc.query("""
+                SELECT d.customer_id, d.customer_no, d.display_name, d.rule, d.strength,
+                       c.home_branch IN (SELECT branch_code FROM platform.visible_branches(?)) AS visible
+                  FROM customer.find_duplicates(?, ?, ?) d JOIN customer.customer c ON c.id = d.customer_id
+                """, (rs, i) -> rs.getBoolean(6)
+                        ? new Match(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5))
+                        : new Match(null, null, null, rs.getString(4), rs.getString(5)),
+                scope.user(), h.pan(), h.mobile(), h.nameDob());
     }
 
     @Transactional
     Created create(Input in, String idempotencyKey) {
         List<Match> matches = duplicates(in);
         for (Match m : matches) {
-            if (m.rule().equals("PAN")) return new Created(summary(m.customerId()), null);
+            if (m.rule().equals("PAN")) {
+                if (m.customerId() == null) throw ApiException.conflict("a customer with this PAN already exists in a branch outside your scope");
+                return new Created(summary(m.customerId()), null);
+            }
         }
+        scope.require(in.homeBranch());
         if (!matches.isEmpty()) {
             if (!Boolean.TRUE.equals(in.overrideDedupe())) {
                 throw new ApiException(HttpStatus.CONFLICT, "possible duplicate customers found",
@@ -122,7 +136,8 @@ class CustomerService {
         }
         List<Map<String, Object>> overrides = new ArrayList<>();
         for (Match m : matches) {
-            overrides.add(Map.of("customerNo", m.customerNo(), "rule", m.rule(), "strength", m.strength()));
+            overrides.add(Map.of("customerNo", m.customerNo() == null ? "outside your branch scope" : m.customerNo(),
+                    "rule", m.rule(), "strength", m.strength()));
         }
         payload.put("dedupeOverrides", overrides);
         payload.put("overrideReason", in.overrideReason());
@@ -134,23 +149,24 @@ class CustomerService {
         int limit = Math.min(Math.max(size, 1), 100);
         int offset = Math.max(page, 0) * limit;
         if (q == null || q.isBlank()) {
-            return jdbc.query(SELECT + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::row, limit, offset);
+            return jdbc.query(SCOPED + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::row, scope.user(), limit, offset);
         }
         String t = q.trim();
         PiiCipher cipher = keys.forTenant(CurrentUser.requireTenant());
-        if (t.matches("[0-9]{14}")) return jdbc.query(SELECT + " WHERE customer_no = ?", this::row, t);
+        String u = scope.user();
+        if (t.matches("[0-9]{14}")) return jdbc.query(SCOPED + " AND customer_no = ?", this::row, u, t);
         if (t.toUpperCase().matches("[A-Z]{5}[0-9]{4}[A-Z]")) {
-            return jdbc.query(SELECT + " WHERE pan_hash = ?", this::row, cipher.blindIndex("PAN", Dedupe.normalisePan(t)));
+            return jdbc.query(SCOPED + " AND pan_hash = ?", this::row, u, cipher.blindIndex("PAN", Dedupe.normalisePan(t)));
         }
         if (t.replaceAll("\\D", "").length() >= 10 && t.matches("[+0-9 -]+")) {
-            return jdbc.query(SELECT + " WHERE mobile_hash = ?", this::row, cipher.blindIndex("MOBILE", Dedupe.normaliseMobile(t)));
+            return jdbc.query(SCOPED + " AND mobile_hash = ?", this::row, u, cipher.blindIndex("MOBILE", Dedupe.normaliseMobile(t)));
         }
-        return jdbc.query(SELECT + " WHERE display_name ILIKE ? ORDER BY display_name LIMIT ? OFFSET ?", this::row,
+        return jdbc.query(SCOPED + " AND display_name ILIKE ? ORDER BY display_name LIMIT ? OFFSET ?", this::row, u,
                 t.replace("%", "").replace("_", "") + "%", limit, offset);
     }
 
     Map<String, Object> summary(UUID id) {
-        List<Map<String, Object>> l = jdbc.query(SELECT + " WHERE id = ?", this::row, id);
+        List<Map<String, Object>> l = jdbc.query(SCOPED + " AND id = ?", this::row, scope.user(), id);
         if (l.isEmpty()) throw ApiException.notFound("customer " + id);
         return l.get(0);
     }
@@ -158,6 +174,8 @@ class CustomerService {
     private static final String SELECT = """
             SELECT id, customer_no, display_name, customer_type, date_of_birth, pan_last4, mobile_last4, home_branch,
                    kyc_status, status FROM customer.customer""";
+    /** Customers of the caller's branch scope (US-020); binds the username first. */
+    private static final String SCOPED = SELECT + " WHERE home_branch" + BranchScope.SQL_VISIBLE;
 
     private Map<String, Object> row(ResultSet rs, int i) throws SQLException {
         Map<String, Object> m = new LinkedHashMap<>();

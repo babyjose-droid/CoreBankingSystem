@@ -26,4 +26,5 @@ public class ApiException extends RuntimeException {
     public static ApiException notFound(String what) { return new ApiException(HttpStatus.NOT_FOUND, what + " not found"); }
     public static ApiException conflict(String detail) { return new ApiException(HttpStatus.CONFLICT, detail); }
     public static ApiException invalid(String detail) { return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, detail); }
+    public static ApiException forbidden(String detail) { return new ApiException(HttpStatus.FORBIDDEN, detail); }
 }

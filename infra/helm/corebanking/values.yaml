@@ -28,6 +28,18 @@ fullnameOverride: ""
 #     CODE is the tenant code upper-cased with '-' replaced by '_', e.g. COREBANKING_TENANT_DEMO_NBFC_URL)
 existingSecret: corebanking-secrets
 
+# -- Tenant DB credentials from AWS Secrets Manager via External Secrets Operator (SaaS tiers).
+# tools/tenant/provision_tenant.py adds each new tenant code to `tenants`; do not edit by hand in prod.
+tenantDbSecrets:
+  enabled: false
+  # -- Environment segment of the secret name: corebanking/<environment>/tenants/<code>/db.
+  environment: ""
+  secretStore:
+    name: ""
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  tenants: []
+
 # -- Non-secret environment variables, rendered into a ConfigMap and loaded with envFrom.
 config:
   COREBANKING_CONTROL_URL: "jdbc:postgresql://control-db.internal:5432/control?sslmode=verify-full"
@@ -86,7 +98,9 @@ service:
 ingress:
   enabled: false
   className: nginx
-  annotations: {}
+  annotations:
+    # Same body limit as the backend (corebanking.http.max-body-bytes, 6 MB): uploads are read in memory.
+    nginx.ingress.kubernetes.io/proxy-body-size: "6m"
   hosts:
     - host: api.example.in
       paths:

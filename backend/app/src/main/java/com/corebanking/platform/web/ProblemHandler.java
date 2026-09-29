@@ -30,7 +30,16 @@ class ProblemHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     ProblemDetail invalid(IllegalArgumentException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, safeMessage(e.getMessage()));
+    }
+
+    /** Validation messages are written for users; JDK/framework messages that name internal classes are not shown. */
+    static String safeMessage(String message) {
+        if (message == null || message.isBlank() || message.contains("No enum constant")
+                || message.contains("com.corebanking.") || message.contains("java.") || message.contains("jakarta.")) {
+            return "a value in the request is not valid";
+        }
+        return message;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -43,6 +52,9 @@ class ProblemHandler {
 
     @ExceptionHandler(AccessDeniedException.class)
     ProblemDetail denied(AccessDeniedException e) {
+        // ASVS V16.3: authorisation failures are security events.
+        log.warn("access denied: user={} tenant={}", com.corebanking.platform.CurrentUser.username(),
+                com.corebanking.platform.tenancy.TenantContext.currentOrNull());
         return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, "you do not have permission for this action");
     }
 

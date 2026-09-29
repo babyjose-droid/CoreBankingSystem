@@ -163,6 +163,187 @@ paths:
                 items: { $ref: '#/components/schemas/EnumValue' }
         default: { $ref: '#/components/responses/Problem' }
 
+    post:
+      tags: [Platform]
+      operationId: proposeEnumeration
+      summary: Add or change values of one enumeration type (maker-checker; values are deactivated, never deleted)
+      parameters:
+        - { name: type, in: path, required: true, schema: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,40}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              maxItems: 500
+              items: { $ref: '#/components/schemas/EnumValueInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/enumerations:
+    get:
+      tags: [Platform]
+      operationId: listEnumerationTypes
+      summary: Enumeration types with value counts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EnumerationType' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/system-properties:
+    get:
+      tags: [Platform]
+      operationId: listSystemProperties
+      summary: System properties (master:view)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SystemProperty' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/system-properties/{key}:
+    put:
+      tags: [Platform]
+      operationId: proposeSystemProperty
+      summary: Propose a system-property value (maker-checker); keys ending in -gl must name an active posting GL head
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string, pattern: '^[a-z][a-z0-9_.-]+$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PropertyChange' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/branch-sets:
+    get:
+      tags: [Platform]
+      operationId: listBranchSets
+      summary: Branch sets (groups of branches used for reporting and staff scope)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BranchSet' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeBranchSet
+      summary: Create or replace a branch set (maker-checker)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BranchSet' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/staff:
+    get:
+      tags: [Platform]
+      operationId: listStaff
+      summary: Staff profiles with home branch and branch scope (staff:view)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Staff' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeStaff
+      summary: Create or replace a staff profile and its branch scope (maker-checker). A maker can grant only branches they see.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Staff' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/holidays/upload:
+    post:
+      tags: [Platform]
+      operationId: uploadHolidays
+      summary: 'Holiday file (CSV columns: day, reason, optional branchCode; up to 366 rows) as one approval'
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string, maxLength: 5000000 }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '413': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/states:
+    get:
+      tags: [Platform]
+      operationId: listStates
+      summary: States and union territories with GST state codes
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/State' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/pincodes/{pincode}:
+    get:
+      tags: [Platform]
+      operationId: lookupPincode
+      summary: Cities, district and state served by a pincode
+      parameters:
+        - { name: pincode, in: path, required: true, schema: { type: string, pattern: '^[1-9][0-9]{5}$' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PincodePlace' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/territory/upload:
+    post:
+      tags: [Platform]
+      operationId: uploadTerritory
+      summary: 'Territory file (CSV columns: state, district, city, pincode; up to 20,000 rows) as one approval; loaded all or nothing'
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string, maxLength: 5000000 }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '413': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /api/v1/approvals:
     get:
       tags: [Approvals]
@@ -383,6 +564,28 @@ paths:
             schema: { $ref: '#/components/schemas/VoucherInput' }
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/gl/vouchers/upload:
+    post:
+      tags: [Ledger]
+      operationId: uploadVouchers
+      summary: >-
+        Voucher file (CSV columns: voucherRef, voucherType, valueDate, description, branch, glCode, side, amount;
+        optional account, narration, reference). Rows with the same voucherRef form one voucher; one approval per
+        voucher; all or nothing.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string, maxLength: 5000000 }
+      responses:
+        '202':
+          description: One approval per voucher
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoucherUploadResult' }
+        '413': { $ref: '#/components/responses/Problem' }
         default: { $ref: '#/components/responses/Problem' }
   /api/v1/gl/vouchers/{id}/reverse:
     post:
@@ -1095,6 +1298,11 @@ components:
         tenant: { type: string }
         tenantName: { type: string }
         homeBranch: { type: string }
+        allBranches: { type: boolean, description: 'True when the user sees every branch (branch scope, US-020)' }
+        branches:
+          type: array
+          description: Branches whose data the user can see
+          items: { type: string }
         businessDate: { type: string, format: date }
         permissions:
           type: array
@@ -1142,6 +1350,85 @@ components:
         code: { type: string }
         label: { type: string }
         active: { type: boolean }
+    EnumValueInput:
+      type: object
+      required: [code, label]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_]{1,40}$' }
+        label: { type: string }
+        sortOrder: { type: integer, default: 0 }
+        active: { type: boolean, default: true }
+    EnumerationType:
+      type: object
+      properties:
+        type: { type: string }
+        valueCount: { type: integer }
+        activeCount: { type: integer }
+    SystemProperty:
+      type: object
+      properties:
+        key: { type: string }
+        value: { type: string }
+        description: { type: [string, 'null'] }
+        updatedBy: { type: string }
+        updatedAt: { type: string }
+    PropertyChange:
+      type: object
+      required: [value]
+      properties:
+        value: { type: string }
+        description: { type: string }
+    BranchSet:
+      type: object
+      required: [code, name, branches]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_]{2,20}$' }
+        name: { type: string }
+        branches:
+          type: array
+          minItems: 1
+          items: { type: string }
+    Staff:
+      type: object
+      required: [username, displayName, homeBranch]
+      properties:
+        userId: { type: string, readOnly: true, description: Derived by the server }
+        username: { type: string, pattern: '^[A-Za-z0-9._@-]{2,80}$', description: Keycloak username }
+        displayName: { type: string }
+        homeBranch: { type: string }
+        allBranches: { type: boolean, default: false }
+        branches:
+          type: array
+          description: Branches granted in addition to the home branch
+          items: { type: string }
+        branchSets:
+          type: array
+          description: Branch sets granted (all their member branches)
+          items: { type: string }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, EXITED], default: ACTIVE }
+    State:
+      type: object
+      properties:
+        code: { type: string, examples: ['KL'] }
+        name: { type: string }
+        gstStateCode: { type: string, examples: ['32'] }
+        unionTerritory: { type: boolean }
+    PincodePlace:
+      type: object
+      properties:
+        pincode: { type: string }
+        city: { type: string }
+        district: { type: string }
+        stateCode: { type: string }
+        stateName: { type: string }
+        gstStateCode: { type: string }
+    VoucherUploadResult:
+      type: object
+      properties:
+        vouchers: { type: integer }
+        approvals:
+          type: array
+          items: { $ref: '#/components/schemas/Approval' }
     ApprovalStatus:
       type: string
       enum: [PENDING, APPROVED, REJECTED, WITHDRAWN]
@@ -1352,6 +1639,12 @@ components:
             name: { type: string }
             stateCode: { type: string }
         firstBusinessDate: { type: string, format: date }
+        adminUsers:
+          type: array
+          description: Keycloak usernames of the first tenant admins; they get all-branch staff profiles
+          items: { type: string, pattern: '^[A-Za-z0-9._@-]{2,80}$' }
+        kmsKeyArn: { type: string, description: Tenant CMK (Terraform modules/tenant output) }
+        dbSecretArn: { type: string, description: Secrets Manager ARN of the tenant DB credentials (never the credentials) }
     Tenant:
       type: object
       properties:

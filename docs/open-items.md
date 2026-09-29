@@ -9,3 +9,9 @@
 | OI-05 | Decisions D-05 … D-12 in the product backlog workbook. | Product owner | Phase 1 week 2 |
 | OI-06 | EOD failure alerts are logged with the recipient list. Email or SMS delivery needs a notification provider (for example SES), to be decided. | Product owner | Phase 2 |
 | OI-07 | Personal-data keys come from environment variables in dev and standalone installs. Cloud tiers need a start-up hook that unwraps the per-tenant KMS data key into them. | Claude | Sandbox deploy |
+| SEC-02 | Audit trail protection: run migrations as a separate owner role, give the runtime role INSERT/SELECT only on `audit.event`, key the hash chain (HMAC with a KMS key, include the id) and anchor the head hash outside the database. | Claude + platform ops | Sandbox deploy |
+| SEC-03 | Customer display name and date of birth are stored in clear (also in approval payloads). Store a masked display value and keep the full values encrypted; seal them in approval payloads. | Claude | Phase 2 (with US-028 rest) |
+| SEC-04 | Personal-data key rotation: `PiiCipher` accepts only key id 1; add multi-key decrypt, re-encryption job and row-bound AAD. | Claude | Before first production tenant |
+| SEC-05 | Rate limits (dedupe check, login-adjacent APIs) and free-text length limits. | Claude | Phase 2 |
+| SEC-08 | Console hosting headers (CSP, HSTS, frame-ancestors), forward-headers for HSTS from the backend, internal TLS decision. | Platform ops | Sandbox deploy |
+| D-13 | Password policy: backlog US-026 asks for complexity rules and 90-day expiry; ASVS 5.0 L2 advises length + breached-password check without composition or forced expiry. Choose one (regulator expectations may favour the backlog). | Product owner | Before first production tenant |

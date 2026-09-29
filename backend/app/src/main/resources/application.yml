@@ -33,7 +33,10 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        # prometheus is NOT on the public port: metrics name every tenant. To scrape, set MANAGEMENT_SERVER_PORT
+        # (e.g. 9090, not routed by the ingress, allowed only from the monitoring namespace) and
+        # MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,prometheus.
+        include: health,info
   endpoint:
     health:
       probes:

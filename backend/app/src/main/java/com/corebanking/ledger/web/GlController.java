@@ -3,6 +3,7 @@ package com.corebanking.ledger.web;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
 import com.corebanking.platform.ApprovalService;
+import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.ApprovalView;
 import com.corebanking.platform.Json;
 import java.math.BigDecimal;
@@ -38,12 +39,20 @@ class GlController {
     private final ApprovalService approvals;
     private final VoucherService vouchers;
     private final Json json;
+    private final BranchScope scope;
 
-    GlController(JdbcTemplate jdbc, ApprovalService approvals, VoucherService vouchers, Json json) {
+    GlController(JdbcTemplate jdbc, ApprovalService approvals, VoucherService vouchers, Json json, BranchScope scope) {
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.vouchers = vouchers;
         this.json = json;
+        this.scope = scope;
+    }
+
+    /** A named branch must be in scope; no branch means the consolidated view, which needs all-branch access. */
+    private void branchOrAll(String branch) {
+        if (branch == null || branch.isBlank()) scope.requireAll();
+        else scope.require(branch);
     }
 
     // ---- chart of accounts -------------------------------------------------------------------
@@ -79,10 +88,12 @@ class GlController {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT id, voucher_no, voucher_type, value_date, business_date, reference, description, amount,
                        status, lot_id, reversal_lot_id, maker, checker
-                  FROM ledger.voucher
+                  FROM ledger.voucher v
                  WHERE (?::date IS NULL OR business_date >= ?) AND (?::date IS NULL OR business_date <= ?)
+                   AND EXISTS (SELECT 1 FROM ledger.account_entry e WHERE e.lot_id = v.lot_id
+                                  AND e.branch_code IN (SELECT branch_code FROM platform.visible_branches(?)))
                  ORDER BY business_date DESC, voucher_no DESC LIMIT 500
-                """, from, from, to, to);
+                """, from, from, to, to, scope.user());
         return rows.stream().map(this::voucherView).toList();
     }
 
@@ -114,6 +125,19 @@ class GlController {
         return view(vouchers.propose(in, key));
     }
 
+    /** CSV voucher upload (US-103). 202 with one approval per voucher; all or nothing. */
+    @PostMapping(path = "/vouchers/upload", consumes = {"text/csv", "text/plain"})
+    @PreAuthorize("hasAuthority('voucher:create')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> uploadVouchers(@RequestBody String csv,
+                                       @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        List<Map<String, Object>> approvals = vouchers.proposeUpload(csv, key).stream().map(GlController::view).toList();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("vouchers", approvals.size());
+        m.put("approvals", approvals);
+        return m;
+    }
+
     @PostMapping("/vouchers/{id}/reverse")
     @PreAuthorize("hasAuthority('voucher:reverse')")
     @ResponseStatus(HttpStatus.ACCEPTED)
@@ -125,6 +149,7 @@ class GlController {
     @GetMapping("/trial-balance")
     @PreAuthorize("hasAuthority('gl:view')")
     List<Map<String, Object>> trialBalance(@RequestParam LocalDate asOf, @RequestParam(required = false) String branch) {
+        branchOrAll(branch);
         return jdbc.queryForList("""
                 SELECT gl_code AS "glCode", gl_name AS "glName", category, debit::text AS debit, credit::text AS credit,
                        net::text AS net
@@ -136,6 +161,7 @@ class GlController {
     @PreAuthorize("hasAuthority('gl:view')")
     List<Map<String, Object>> entries(@RequestParam String glCode, @RequestParam LocalDate from, @RequestParam LocalDate to,
                                       @RequestParam(required = false) String branch) {
+        branchOrAll(branch);
         return jdbc.queryForList("""
                 SELECT lot_id AS "lotId", business_date::text AS "businessDate", branch_code AS branch, gl_code AS "glCode",
                        account_no AS account, side, amount::text AS amount, narration, lot_type AS "lotType"
@@ -146,6 +172,7 @@ class GlController {
     @GetMapping("/profit-and-loss")
     @PreAuthorize("hasAuthority('gl:view')")
     List<Map<String, Object>> profitAndLoss(@RequestParam LocalDate from, @RequestParam LocalDate to) {
+        scope.requireAll();
         return jdbc.queryForList("""
                 SELECT section, gl_code AS "glCode", gl_name AS "glName", amount::text AS amount
                   FROM ledger.profit_and_loss(?, ?)
@@ -155,6 +182,7 @@ class GlController {
     @GetMapping("/balance-sheet")
     @PreAuthorize("hasAuthority('gl:view')")
     List<Map<String, Object>> balanceSheet(@RequestParam LocalDate asOf) {
+        scope.requireAll();
         return jdbc.queryForList("""
                 SELECT section, gl_code AS "glCode", gl_name AS "glName", amount::text AS amount
                   FROM ledger.balance_sheet(?)

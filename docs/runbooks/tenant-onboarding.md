@@ -3,6 +3,30 @@
 Audience: platform operations. Every step that changes production goes through a reviewed PR
 (Terraform) or a ticketed operator action recorded in `control.operator_action` (reason required).
 
+## Automated path (default)
+
+Since the Phase 1 exit, steps 1–8 below run as one pipeline (US-001):
+
+1. Complete the pre-checks (section 0).
+2. Open a PR adding `infra/tenants/<env>/<code>.json` (template: `tools/tenant/tenant-spec.example.json`;
+   rules in `infra/tenants/README.md`). Reviewers check the spec like any Terraform change.
+3. Merge. The `provision-tenant` workflow validates the spec, waits for the `tenant-<env>` environment
+   approval, and runs `tools/tenant/provision_tenant.py` on the environment's self-hosted runner.
+4. Deliver the temporary admin password from Secrets Manager `corebanking/<env>/tenants/<code>/initial-admins`
+   out of band, then delete that secret. The admin must change it and enrol TOTP at first login.
+5. Record `ONBOARD_DONE` in `control.operator_action` with the ticket reference.
+
+If a step fails, fix the cause and re-run the workflow (Run workflow → spec path → from step); every step is
+idempotent. The manual steps below remain the reference for what each step does and for STANDALONE installs.
+
+GitHub setup per environment: self-hosted runner labelled `corebanking-<env>` inside the VPC (with terraform,
+aws, psql 15+, helm, kubectl); environment `tenant-<env>` with required reviewers, variables
+`PROVISIONER_ROLE_ARN`, `TERRAFORM_BACKEND_HCL`, `OPERATOR_TOKEN_URL` and secrets `KEYCLOAK_ADMIN_CLIENT_ID`,
+`KEYCLOAK_ADMIN_CLIENT_SECRET`, `OPERATOR_CLIENT_ID`, `OPERATOR_CLIENT_SECRET`; Helm values of the environment
+with `tenantDbSecrets.enabled=true`, `environment` and the External Secrets store name.
+
+## Manual reference
+
 Example tenant: code `acme-finance`, NBFC, POOLED tier, GROWTH edition, prod (ap-south-1) with DR
 (ap-south-2).
 

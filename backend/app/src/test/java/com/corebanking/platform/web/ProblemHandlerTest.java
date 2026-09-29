@@ -16,4 +16,12 @@ class ProblemHandlerTest {
         assertEquals("branch MUM has 1 live loan accounts; transfer them before closing", ProblemHandler.userMessage(e));
         assertEquals(409, new ProblemHandler().data(e).getStatus());
     }
+
+    @Test
+    void internal_exception_text_is_not_echoed() {
+        assertEquals("a value in the request is not valid",
+                ProblemHandler.safeMessage("No enum constant com.corebanking.lending.engine.PrepaymentMode.X"));
+        assertEquals("a value in the request is not valid", ProblemHandler.safeMessage(null));
+        assertEquals("side must be DR or CR", ProblemHandler.safeMessage("side must be DR or CR"));
+    }
 }

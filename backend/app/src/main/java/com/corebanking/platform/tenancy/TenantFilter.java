@@ -18,23 +18,26 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *   <li>The tenant must be ACTIVE in the control plane.</li>
  *   <li>API paths that belong to a licensable module return 403 when the module is not enabled.</li>
  * </ol>
- * Control-plane paths ({@code /platform/**}) and health checks run without a tenant.
+ * Control-plane paths ({@code /platform/**}) run without a tenant and accept only platform-realm tokens;
+ * health checks are not filtered.
  * Created by SecurityConfig inside the security chain (not a servlet-level bean).
  */
 public class TenantFilter extends OncePerRequestFilter {
 
     private final String issuerPrefix;
+    private final String platformRealm;
     private final TenantDirectory directory;
 
-    public TenantFilter(String issuerPrefix, TenantDirectory directory) {
+    public TenantFilter(String issuerPrefix, String platformRealm, TenantDirectory directory) {
         this.issuerPrefix = issuerPrefix;
+        this.platformRealm = platformRealm;
         this.directory = directory;
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !path.startsWith("/api/");
+        return !path.startsWith("/api/") && !path.startsWith("/platform/");
     }
 
     @Override
@@ -46,7 +49,16 @@ public class TenantFilter extends OncePerRequestFilter {
         }
         String tenant = jwt.getToken().getClaimAsString("tenant");
         String issuer = jwt.getToken().getIssuer() == null ? "" : jwt.getToken().getIssuer().toString();
-        if (tenant == null || !issuer.equals(issuerPrefix + tenant)) {
+        if (request.getRequestURI().startsWith("/platform/")) {
+            // Control plane: only tokens of the operators' realm, whatever permissions a tenant realm grants.
+            if (!issuer.equals(issuerPrefix + platformRealm)) {
+                problem(response, 403, "control-plane calls need a token from the platform realm");
+                return;
+            }
+            chain.doFilter(request, response);
+            return;
+        }
+        if (tenant == null || tenant.equals(platformRealm) || !issuer.equals(issuerPrefix + tenant)) {
             problem(response, 403, "token tenant does not match its issuing realm");
             return;
         }

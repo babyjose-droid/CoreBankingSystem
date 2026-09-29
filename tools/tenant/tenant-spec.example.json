@@ -1,0 +1,24 @@
+{
+  "code": "acme-finance",
+  "environment": "prod",
+  "legalName": "Acme Finance Limited",
+  "entityType": "NBFC",
+  "deploymentTier": "POOLED",
+  "edition": "GROWTH",
+  "starterKit": null,
+  "headOffice": { "code": "HO", "name": "Head Office Kochi", "stateCode": "32" },
+  "firstBusinessDate": "2026-10-01",
+  "admins": [
+    { "username": "acme.admin", "email": "it-admin@acme.example.in", "firstName": "IT", "lastName": "Administrator" }
+  ],
+  "consoleUrl": "https://acme-finance.console.example.in",
+  "keycloak": { "url": "https://id.example.in" },
+  "api": { "url": "https://api.example.in" },
+  "aws": {
+    "region": "ap-south-1",
+    "masterSecretId": "corebanking/corebanking-prod/master",
+    "rdsCaBundle": "/etc/ssl/rds/ap-south-1-bundle.pem",
+    "secretReplicaKmsKeyArn": null
+  },
+  "kubernetes": { "namespace": "corebanking", "release": "corebanking" }
+}

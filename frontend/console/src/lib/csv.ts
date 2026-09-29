@@ -4,7 +4,8 @@ export function csvEscape(value: CsvCell): string {
   if (value === null || value === undefined) return '';
   const s = String(value);
   // Neutralise spreadsheet formula injection, then quote if needed.
-  const safe = /^[=+\-@]/.test(s) && !/^-?\d/.test(s) ? `'${s}` : s;
+  // Only a value that is entirely a plain number may start with '-' (e.g. -125.50); tab and CR also start formulas.
+  const safe = /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) ? `'${s}` : s;
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 

@@ -55,6 +55,12 @@ spec:
                 name: {{ include "corebanking.fullname" . }}
             - secretRef:
                 name: {{ $secret }}
+            {{- if .Values.tenantDbSecrets.enabled }}
+            - secretRef:
+                name: {{ include "corebanking.fullname" . }}-tenant-db
+                # Optional so the first pods start before External Secrets has synced it.
+                optional: true
+            {{- end }}
           {{- with .Values.extraEnv }}
           env:
             {{- toYaml . | nindent 12 }}

@@ -20,6 +20,7 @@ import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
 import com.corebanking.platform.ApprovalService;
+import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.BusinessDays;
 import com.corebanking.platform.CurrentUser;
 import com.corebanking.platform.Json;
@@ -56,9 +57,12 @@ public class LoanService {
     private final ApprovalService approvals;
     private final AuditLog audit;
     private final Json json;
+    private final BranchScope scope;
 
     public LoanService(JdbcTemplate jdbc, ProductService products, LoanStore store, PostingService posting,
-                       NumberSeriesService numbers, BusinessDays days, ApprovalService approvals, AuditLog audit, Json json) {
+                       NumberSeriesService numbers, BusinessDays days, ApprovalService approvals, AuditLog audit, Json json,
+                       BranchScope scope) {
+        this.scope = scope;
         this.jdbc = jdbc;
         this.products = products;
         this.store = store;
@@ -112,6 +116,7 @@ public class LoanService {
         if (cust.isEmpty()) throw ApiException.invalid("customer not found");
         if (!"ACTIVE".equals(cust.get(0).get("status"))) throw ApiException.invalid("customer is " + cust.get(0).get("status"));
         String branch = a.branch() == null ? (String) cust.get(0).get("home_branch") : a.branch();
+        scope.require(branch);
         String supplier = jdbc.queryForObject("SELECT state_code FROM platform.branch WHERE code = ? AND status = 'ACTIVE'", String.class, branch);
         String recipient = cust.get(0).get("state_code") == null ? supplier : (String) cust.get(0).get("state_code");
         LocalDate disbursal = a.disbursalDate() == null ? days.current().businessDate() : a.disbursalDate();
@@ -237,7 +242,7 @@ public class LoanService {
     /** Staff: maker-checker. API clients with loan:stp (LOS straight-through): immediate. */
     @Transactional
     public Map<String, Object> requestDisbursement(UUID loanId, Map<String, Object> instruction) {
-        Map<String, Object> loan = jdbc.queryForMap("SELECT loan_no, status, kfs_accepted_at, sanctioned_amount FROM lending.loan_account WHERE id = ?", loanId);
+        Map<String, Object> loan = jdbc.queryForMap("SELECT loan_no, status, kfs_accepted_at, sanctioned_amount, branch_code FROM lending.loan_account WHERE id = ?", loanId);
         if (!"SANCTIONED".equals(loan.get("status"))) throw ApiException.conflict("loan is " + loan.get("status"));
         if (loan.get("kfs_accepted_at") == null) throw ApiException.conflict("the borrower must accept the KFS before disbursement");
         Map<String, Object> payload = new LinkedHashMap<>(instruction == null ? Map.of() : instruction);
@@ -247,7 +252,7 @@ public class LoanService {
             return disburse(loanId, CurrentUser.username());
         }
         return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_DISBURSEMENT", "DISBURSE", (String) loan.get("loan_no"),
-                payload, null, (BigDecimal) loan.get("sanctioned_amount"), null, null));
+                payload, null, (BigDecimal) loan.get("sanctioned_amount"), (String) loan.get("branch_code"), null));
     }
 
     Map<String, Object> disburse(UUID loanId, String user) {
@@ -374,7 +379,7 @@ public class LoanService {
         payload.put("chargeId", chargeId);
         payload.put("amount", plain(amount));
         payload.put("reason", reason);
-        return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_WAIVER", "WAIVE", loanNo, payload, null, amount, null, null));
+        return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_WAIVER", "WAIVE", loanNo, payload, null, amount, branchOf(loanId), null));
     }
 
     @Transactional
@@ -399,7 +404,7 @@ public class LoanService {
         payload.put("reason", reason);
         payload.put("laterTransactionsAlsoReversed", later);
         return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_REVERSAL", "REVERSE", loanNo, payload, null,
-                (BigDecimal) t.get("amount"), null, null));
+                (BigDecimal) t.get("amount"), branchOf(loanId), null));
     }
 
     // ------------------------------------------------------------------------------------------------ views
@@ -421,6 +426,13 @@ public class LoanService {
         return rows.get(0);
     }
 
+    /** The loan's branch, for the branch-scope check (US-020). */
+    public String branchOf(UUID id) {
+        List<String> b = jdbc.queryForList("SELECT branch_code FROM lending.loan_account WHERE id = ?", String.class, id);
+        if (b.isEmpty()) throw ApiException.notFound("loan " + id);
+        return b.get(0);
+    }
+
     public List<Map<String, Object>> search(String q, String status, int page, int size) {
         int limit = Math.min(Math.max(size, 1), 100);
         String like = q == null || q.isBlank() ? null : q.trim().replace("%", "") + "%";
@@ -430,10 +442,11 @@ public class LoanService {
                        l.principal_outstanding::text AS "principalOutstanding", l.overdue_amount::text AS "overdueAmount",
                        l.dpd, l.asset_class AS "assetClass", l.next_due_date::text AS "nextDueDate", l.branch_code AS branch
                   FROM lending.loan_account l JOIN customer.customer c ON c.id = l.customer_id
-                 WHERE (?::text IS NULL OR l.status = ?)
+                 WHERE l.branch_code IN (SELECT branch_code FROM platform.visible_branches(?))
+                   AND (?::text IS NULL OR l.status = ?)
                    AND (?::text IS NULL OR l.loan_no LIKE ? OR c.customer_no LIKE ? OR c.display_name ILIKE ? OR l.external_ref = ?)
                  ORDER BY l.open_date DESC, l.loan_no DESC LIMIT ? OFFSET ?
-                """, status, status, like, like, like, like, q, limit, Math.max(page, 0) * limit);
+                """, scope.user(), status, status, like, like, like, like, q, limit, Math.max(page, 0) * limit);
     }
 
     /** Demands raised so far, charges, and the future schedule. */

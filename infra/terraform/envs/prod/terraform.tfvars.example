@@ -4,10 +4,6 @@ kms_admin_principal_arns = ["arn:aws:iam::<prod-account-id>:role/<platform-admin
 eks_admin_principal_arns = ["arn:aws:iam::<prod-account-id>:role/<platform-admin-role>"]
 eks_api_allowed_cidrs    = ["<vpn-cidr>", "<ci-runner-cidr>"]
 
-tenants = {
-  "acme-finance" = {
-    attach_policy_to_app_role = true
-    # After the dr env has replicated the tenant key, set this to replicate the DB secret to ap-south-2:
-    # secret_replica_kms_key_arn = "<dr tenant_key_replica_arns[acme-finance]>"
-  }
-}
+# `tenants` is NOT set here: tools/tenant/provision_tenant.py generates tenants.auto.tfvars.json from the
+# reviewed spec files in infra/tenants/prod/*.json (US-001). For the DR secret replica set
+# aws.secretReplicaKmsKeyArn in the tenant's spec file.

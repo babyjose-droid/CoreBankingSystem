@@ -34,8 +34,10 @@ import org.springframework.security.web.SecurityFilterChain;
 /**
  * Stateless JWT security.
  * <ul>
- *   <li>One Keycloak realm per tenant (ADR-007): tokens are accepted from any realm under the trusted issuer
- *       prefix; {@link TenantFilter} then requires the realm to equal the token's {@code tenant} claim.</li>
+ *   <li>One Keycloak realm per tenant (ADR-007): tokens are accepted from the realms of ACTIVE tenants and the
+ *       operators' {@code platform} realm under the trusted issuer prefix; {@link TenantFilter} then requires the
+ *       realm to equal the token's {@code tenant} claim on {@code /api/**}, and the platform realm on
+ *       {@code /platform/**}, so a tenant realm admin can never mint a control-plane operator.</li>
  *   <li>Authorities come from the {@code permissions} claim (client roles of the {@code api} client), e.g.
  *       {@code customer:create}; controllers check them with {@code @PreAuthorize} (US-020).</li>
  *   <li>Signing keys can be fetched from an internal URL (e.g. {@code http://keycloak:8081}) while the issuer
@@ -50,7 +52,8 @@ class SecurityConfig {
     SecurityFilterChain api(HttpSecurity http, TenantDirectory directory,
                             @Value("${corebanking.oidc.issuer-prefix}") String issuerPrefix,
                             @Value("${corebanking.oidc.jwks-base:}") String jwksBase,
-                            @Value("${corebanking.oidc.audience:api}") String audience) throws Exception {
+                            @Value("${corebanking.oidc.audience:api}") String audience,
+                            @Value("${corebanking.oidc.platform-realm:platform}") String platformRealm) throws Exception {
         String prefix = issuerPrefix.endsWith("/") ? issuerPrefix : issuerPrefix + "/";
         String keysBase = jwksBase == null || jwksBase.isBlank() ? prefix : (jwksBase.endsWith("/") ? jwksBase : jwksBase + "/");
         Map<String, AuthenticationManager> managers = new ConcurrentHashMap<>();
@@ -58,6 +61,9 @@ class SecurityConfig {
             if (issuer == null || !issuer.startsWith(prefix)) return null;
             String realm = issuer.substring(prefix.length());
             if (!realm.matches("[a-z][a-z0-9-]{2,30}")) return null;
+            // Only the operators' realm and ACTIVE tenants: an unknown issuer never creates a decoder or a JWKS
+            // fetch, so forged tokens cannot grow this map (ASVS V9).
+            if (!realm.equals(platformRealm) && !directory.isActive(realm)) return null;
             return managers.computeIfAbsent(issuer, iss -> {
                 NimbusJwtDecoder decoder = NimbusJwtDecoder
                         .withJwkSetUri(keysBase + realm + "/protocol/openid-connect/certs").build();
@@ -78,7 +84,7 @@ class SecurityConfig {
                     .requestMatchers("/platform/v1/**").hasAuthority("platform:operator")
                     .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.authenticationManagerResolver(new JwtIssuerAuthenticationManagerResolver(byIssuer)))
-            .addFilterAfter(new TenantFilter(prefix, directory), BearerTokenAuthenticationFilter.class);
+            .addFilterAfter(new TenantFilter(prefix, platformRealm, directory), BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 

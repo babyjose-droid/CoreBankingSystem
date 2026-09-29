@@ -35,6 +35,8 @@ class MeController {
         m.put("tenant", u.tenant());
         m.put("tenantName", directory.legalName(u.tenant()));
         m.put("homeBranch", branch.isEmpty() ? null : branch.get(0));
+        m.put("allBranches", jdbc.queryForObject("SELECT platform.sees_all_branches(?)", Boolean.class, u.login()));
+        m.put("branches", jdbc.queryForList("SELECT branch_code FROM platform.visible_branches(?) ORDER BY 1", String.class, u.login()));
         m.put("businessDate", days.current() == null ? null : days.current().businessDate());
         m.put("permissions", u.permissions().stream().sorted().toList());
         m.put("modules", directory.modules(u.tenant()).stream().sorted().toList());

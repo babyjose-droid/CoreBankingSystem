@@ -102,7 +102,163 @@ export interface paths {
         /** Get enumeration */
         get: operations["getEnumeration"];
         put?: never;
+        /** Add or change values of one enumeration type (maker-checker; values are deactivated, never deleted) */
+        post: operations["proposeEnumeration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/enumerations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Enumeration types with value counts */
+        get: operations["listEnumerationTypes"];
+        put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-properties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** System properties (master:view) */
+        get: operations["listSystemProperties"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-properties/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Propose a system-property value (maker-checker); keys ending in -gl must name an active posting GL head */
+        put: operations["proposeSystemProperty"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/branch-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Branch sets (groups of branches used for reporting and staff scope) */
+        get: operations["listBranchSets"];
+        put?: never;
+        /** Create or replace a branch set (maker-checker) */
+        post: operations["proposeBranchSet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/staff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Staff profiles with home branch and branch scope (staff:view) */
+        get: operations["listStaff"];
+        put?: never;
+        /** Create or replace a staff profile and its branch scope (maker-checker). A maker can grant only branches they see. */
+        post: operations["proposeStaff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/holidays/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Holiday file (CSV columns: day, reason, optional branchCode; up to 366 rows) as one approval */
+        post: operations["uploadHolidays"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/states": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** States and union territories with GST state codes */
+        get: operations["listStates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pincodes/{pincode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cities, district and state served by a pincode */
+        get: operations["lookupPincode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/territory/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Territory file (CSV columns: state, district, city, pincode; up to 20,000 rows) as one approval; loaded all or nothing */
+        post: operations["uploadTerritory"];
         delete?: never;
         options?: never;
         head?: never;
@@ -276,6 +432,23 @@ export interface paths {
         put?: never;
         /** Propose a manual voucher (contra, receipt, payment, journal; any number of lines) */
         post: operations["proposeVoucher"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gl/vouchers/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voucher file (CSV columns: voucherRef, voucherType, valueDate, description, branch, glCode, side, amount; optional account, narration, reference). Rows with the same voucherRef form one voucher; one approval per voucher; all or nothing. */
+        post: operations["uploadVouchers"];
         delete?: never;
         options?: never;
         head?: never;
@@ -901,6 +1074,10 @@ export interface components {
             tenant: string;
             tenantName?: string;
             homeBranch?: string;
+            /** @description True when the user sees every branch (branch scope, US-020) */
+            allBranches?: boolean;
+            /** @description Branches whose data the user can see */
+            branches?: string[];
             /** Format: date */
             businessDate: string;
             permissions: string[];
@@ -946,6 +1123,74 @@ export interface components {
             code: string;
             label: string;
             active?: boolean;
+        };
+        EnumValueInput: {
+            code: string;
+            label: string;
+            /** @default 0 */
+            sortOrder: number;
+            /** @default true */
+            active: boolean;
+        };
+        EnumerationType: {
+            type?: string;
+            valueCount?: number;
+            activeCount?: number;
+        };
+        SystemProperty: {
+            key?: string;
+            value?: string;
+            description?: string | null;
+            updatedBy?: string;
+            updatedAt?: string;
+        };
+        PropertyChange: {
+            value: string;
+            description?: string;
+        };
+        BranchSet: {
+            code: string;
+            name: string;
+            branches: string[];
+        };
+        Staff: {
+            /** @description Derived by the server */
+            readonly userId?: string;
+            /** @description Keycloak username */
+            username: string;
+            displayName: string;
+            homeBranch: string;
+            /** @default false */
+            allBranches: boolean;
+            /** @description Branches granted in addition to the home branch */
+            branches?: string[];
+            /** @description Branch sets granted (all their member branches) */
+            branchSets?: string[];
+            /**
+             * @default ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "SUSPENDED" | "EXITED";
+        };
+        State: {
+            /** @example KL */
+            code?: string;
+            name?: string;
+            /** @example 32 */
+            gstStateCode?: string;
+            unionTerritory?: boolean;
+        };
+        PincodePlace: {
+            pincode?: string;
+            city?: string;
+            district?: string;
+            stateCode?: string;
+            stateName?: string;
+            gstStateCode?: string;
+        };
+        VoucherUploadResult: {
+            vouchers?: number;
+            approvals?: components["schemas"]["Approval"][];
         };
         /** @enum {string} */
         ApprovalStatus: "PENDING" | "APPROVED" | "REJECTED" | "WITHDRAWN";
@@ -1191,6 +1436,12 @@ export interface components {
             };
             /** Format: date */
             firstBusinessDate?: string;
+            /** @description Keycloak usernames of the first tenant admins; they get all-branch staff profiles */
+            adminUsers?: string[];
+            /** @description Tenant CMK (Terraform modules/tenant output) */
+            kmsKeyArn?: string;
+            /** @description Secrets Manager ARN of the tenant DB credentials (never the credentials) */
+            dbSecretArn?: string;
         };
         Tenant: {
             /** Format: uuid */
@@ -1663,6 +1914,242 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    proposeEnumeration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnumValueInput"][];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listEnumerationTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnumerationType"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listSystemProperties: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemProperty"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeSystemProperty: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PropertyChange"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listBranchSets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BranchSet"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeBranchSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BranchSet"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listStaff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Staff"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeStaff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Staff"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadHolidays: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/csv": string;
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            413: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listStates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["State"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    lookupPincode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pincode: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PincodePlace"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadTerritory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/csv": string;
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            413: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
     listApprovals: {
         parameters: {
             query?: {
@@ -1978,6 +2465,34 @@ export interface operations {
         };
         responses: {
             202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadVouchers: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/csv": string;
+            };
+        };
+        responses: {
+            /** @description One approval per voucher */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoucherUploadResult"];
+                };
+            };
+            413: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
