@@ -14,7 +14,7 @@ export interface ClientOptions {
 }
 
 /** POSTs that do not create a resource and therefore do not carry an Idempotency-Key. */
-const NON_CREATING_POST = [/\/approvals\//, /\/dedupe-check$/];
+const NON_CREATING_POST = [/\/approvals\//, /\/dedupe-check$/, /\/loans\/preview$/];
 
 export function needsIdempotencyKey(method: string, url: string): boolean {
   if (method.toUpperCase() !== 'POST') return false;

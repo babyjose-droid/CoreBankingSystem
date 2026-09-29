@@ -17,6 +17,13 @@ export const NAV: NavGroup[] = [
   { label: null, items: [{ to: '/approvals', label: 'Approvals', perm: P.approvalView, badge: 'approvals' }] },
   { label: null, items: [{ to: '/customers', label: 'Customers', perm: P.customerView }] },
   {
+    label: 'Lending',
+    items: [
+      { to: '/loans', label: 'Loans', perm: P.loanView },
+      { to: '/loan-products', label: 'Products', perm: P.productView },
+    ],
+  },
+  {
     label: 'Ledger',
     items: [
       { to: '/ledger/accounts', label: 'Chart of accounts', perm: P.glView },
@@ -39,6 +46,11 @@ export const NAV: NavGroup[] = [
       { to: '/masters/branches', label: 'Branches', perm: P.branchView },
       { to: '/masters/holidays', label: 'Holidays', perm: P.holidayView },
       { to: '/masters/tax-rates', label: 'Tax rates', perm: P.taxRateView },
+      { to: '/masters/staff', label: 'Staff', perm: P.staffView },
+      { to: '/masters/branch-sets', label: 'Branch sets', perm: P.branchView },
+      { to: '/masters/territory', label: 'Territory', perm: P.masterView },
+      { to: '/masters/system-properties', label: 'System properties', perm: P.masterView },
+      { to: '/masters/enumerations', label: 'Enumerations', perm: P.masterView },
     ],
   },
   { label: null, items: [{ to: '/audit', label: 'Audit', perm: P.auditView }] },

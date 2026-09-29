@@ -18,6 +18,12 @@ import { EodRunsPage } from './pages/eod/EodRunsPage';
 import { EodSchedulePage } from './pages/eod/EodSchedulePage';
 import { NotFoundPage } from './pages/ForbiddenPage';
 import { HomePage } from './pages/HomePage';
+import { LoanDetailPage } from './pages/lending/LoanDetailPage';
+import { LoanProductDetailPage } from './pages/lending/LoanProductDetailPage';
+import { LoanProductFormPage } from './pages/lending/LoanProductFormPage';
+import { LoanProductsPage } from './pages/lending/LoanProductsPage';
+import { LoansPage } from './pages/lending/LoansPage';
+import { NewLoanPage } from './pages/lending/NewLoanPage';
 import { AccountsPage } from './pages/ledger/AccountsPage';
 import { BalanceSheetPage } from './pages/ledger/BalanceSheetPage';
 import { ProfitLossPage } from './pages/ledger/ProfitLossPage';
@@ -26,6 +32,11 @@ import { VoucherFormPage } from './pages/ledger/VoucherFormPage';
 import { VouchersPage } from './pages/ledger/VouchersPage';
 import { LoginPage } from './pages/LoginPage';
 import { BranchesPage } from './pages/masters/BranchesPage';
+import { BranchSetsPage } from './pages/masters/BranchSetsPage';
+import { EnumerationsPage, EnumerationValuesPage } from './pages/masters/EnumerationsPage';
+import { StaffPage } from './pages/masters/StaffPage';
+import { SystemPropertiesPage } from './pages/masters/SystemPropertiesPage';
+import { TerritoryPage } from './pages/masters/TerritoryPage';
 import { HolidaysPage } from './pages/masters/HolidaysPage';
 import { TaxRatesPage } from './pages/masters/TaxRatesPage';
 import { ToastProvider } from './ui';
@@ -96,6 +107,13 @@ export function AppRoutes() {
         <Route path="customers" element={guard(P.customerView, <CustomersPage />)} />
         <Route path="customers/new" element={guard(P.customerCreate, <NewCustomerPage />)} />
         <Route path="customers/:id" element={guard(P.customerView, <CustomerDetailPage />)} />
+        <Route path="loans" element={guard(P.loanView, <LoansPage />)} />
+        <Route path="loans/new" element={guard(P.loanCreate, <NewLoanPage />)} />
+        <Route path="loans/:id" element={guard(P.loanView, <LoanDetailPage />)} />
+        <Route path="loan-products" element={guard(P.productView, <LoanProductsPage />)} />
+        <Route path="loan-products/new" element={guard(P.productPropose, <LoanProductFormPage />)} />
+        <Route path="loan-products/:code" element={guard(P.productView, <LoanProductDetailPage />)} />
+        <Route path="loan-products/:code/edit" element={guard(P.productPropose, <LoanProductFormPage />)} />
         <Route path="ledger/accounts" element={guard(P.glView, <AccountsPage />)} />
         <Route path="ledger/vouchers" element={guard(P.glView, <VouchersPage />)} />
         <Route path="ledger/vouchers/new" element={guard(P.voucherCreate, <VoucherFormPage />)} />
@@ -108,6 +126,12 @@ export function AppRoutes() {
         <Route path="masters/branches" element={guard(P.branchView, <BranchesPage />)} />
         <Route path="masters/holidays" element={guard(P.holidayView, <HolidaysPage />)} />
         <Route path="masters/tax-rates" element={guard(P.taxRateView, <TaxRatesPage />)} />
+        <Route path="masters/branch-sets" element={guard(P.branchView, <BranchSetsPage />)} />
+        <Route path="masters/staff" element={guard(P.staffView, <StaffPage />)} />
+        <Route path="masters/territory" element={guard(P.masterView, <TerritoryPage />)} />
+        <Route path="masters/system-properties" element={guard(P.masterView, <SystemPropertiesPage />)} />
+        <Route path="masters/enumerations" element={guard(P.masterView, <EnumerationsPage />)} />
+        <Route path="masters/enumerations/:type" element={guard(P.masterView, <EnumerationValuesPage />)} />
         <Route path="audit" element={guard(P.auditView, <AuditPage />)} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

@@ -25,3 +25,46 @@ export function downloadCsv(filename: string, headers: string[], rows: CsvCell[]
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
+
+/**
+ * Parses CSV text (RFC 4180: quoted fields, doubled quotes, CRLF or LF). A leading BOM is ignored and blank lines are
+ * skipped. Returns rows of raw cell strings (not trimmed).
+ */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const endRow = () => {
+    row.push(cell);
+    if (row.length > 1 || row[0].trim() !== '') rows.push(row);
+    row = [];
+    cell = '';
+  };
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else quoted = false;
+      } else cell += ch;
+    } else if (ch === '"' && cell === '') quoted = true;
+    else if (ch === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i++;
+      endRow();
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length > 0) endRow();
+  return rows;
+}
+
+/** Number of data rows (excluding the header) in CSV text. */
+export function csvDataRowCount(text: string): number {
+  return Math.max(0, parseCsv(text).length - 1);
+}

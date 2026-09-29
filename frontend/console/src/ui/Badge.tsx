@@ -33,6 +33,12 @@ const STATUS_TONE: Record<string, Tone> = {
   EXACT: 'danger',
   STRONG: 'warn',
   POSSIBLE: 'info',
+  SANCTIONED: 'info',
+  CANCELLED: 'neutral',
+  WRITTEN_OFF: 'danger',
+  DRAFT: 'neutral',
+  SUSPENDED: 'warn',
+  EXITED: 'neutral',
 };
 
 export function humanize(code: string): string {

@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { useBusinessDay, useEodRuns, useMe } from '../api/hooks';
 import { P, hasPermission } from '../auth/permissions';
 import { formatDateTime } from '../lib/dates';
+import { branchScopeText } from '../layout/branchScope';
 import { usePendingForMe } from '../layout/usePendingForMe';
 import { Badge, Card, DateText, EmptyState, PageHeader, Spinner, StatusBadge, humanize } from '../ui';
 
@@ -20,6 +21,8 @@ export function HomePage() {
   const actions = [
     can(P.approvalApprove) && { to: '/approvals', label: `Review approvals (${pending.actionable.length})` },
     can(P.customerCreate) && { to: '/customers/new', label: 'New customer' },
+    can(P.loanCreate) && { to: '/loans/new', label: 'New loan' },
+    can(P.loanView) && { to: '/loans', label: 'Loans' },
     can(P.voucherCreate) && { to: '/ledger/vouchers/new', label: 'New voucher' },
     can(P.eodRun) && { to: '/eod/runs', label: 'Run end-of-day' },
     can(P.glView) && { to: '/ledger/trial-balance', label: 'Trial balance' },
@@ -28,7 +31,7 @@ export function HomePage() {
 
   return (
     <div className="stack">
-      <PageHeader title={`Welcome, ${me.displayName.split(' ')[0]}`} subtitle={`${me.tenantName ?? me.tenant} · home branch ${me.homeBranch ?? '—'}`} />
+      <PageHeader title={`Welcome, ${me.displayName.split(' ')[0]}`} subtitle={`${me.tenantName ?? me.tenant} · home branch ${me.homeBranch ?? '—'} · ${branchScopeText(me).replace('Branch scope: ', 'sees ')}`} />
       <div className="grid-cards">
         <Card title="Business date">
           <div className="big-date">

@@ -1,7 +1,9 @@
 import type {
   Approval,
+  AssetClass,
   AuditEvent,
   Branch,
+  BranchSet,
   BusinessDay,
   CustomerInput,
   EodRun,
@@ -9,10 +11,17 @@ import type {
   GlHead,
   Holiday,
   LedgerEntry,
+  LoanKfs,
+  LoanProduct,
+  LoanStatus,
+  PincodePlace,
+  Staff,
+  State,
   TaxRate,
   Voucher,
   VoucherInput,
 } from '../api/types';
+import type { Row } from './lendingCalc';
 
 export interface StoredCustomer {
   id: string;
@@ -34,7 +43,128 @@ export type ApprovalPayload =
   | { kind: 'CUSTOMER'; input: CustomerInput }
   | { kind: 'VOUCHER'; input: VoucherInput }
   | { kind: 'VOUCHER_REVERSAL'; voucherId: string; reason: string }
-  | { kind: 'EOD_SCHEDULE'; schedule: EodSchedule };
+  | { kind: 'EOD_SCHEDULE'; schedule: EodSchedule }
+  | { kind: 'LOAN_PRODUCT'; product: LoanProduct }
+  | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null }
+  | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
+  | { kind: 'LOAN_REVERSAL'; loanId: string; txnId: string; reason: string }
+  | { kind: 'STAFF'; staff: StoredStaff }
+  | { kind: 'BRANCH_SET'; set: BranchSet }
+  | { kind: 'SYSTEM_PROPERTY'; key: string; value: string; description: string | null }
+  | { kind: 'ENUMERATION'; type: string; values: StoredEnumValue[] }
+  | { kind: 'TERRITORY'; places: PincodePlace[] };
+
+export type StoredStaff = Required<Omit<Staff, 'userId'>> & { userId: string };
+
+export interface StoredEnumValue {
+  code: string;
+  label: string;
+  sortOrder: number;
+  active: boolean;
+}
+
+export interface StoredProperty {
+  key: string;
+  value: string;
+  description: string | null;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+/** One entry in a loan's transaction log. Financial entries are replayed in `seq` order to derive the loan's state. */
+export interface StoredLoanEvent {
+  id: string;
+  seq: number;
+  type: string;
+  valueDate: string;
+  businessDate: string;
+  /** Paise. */
+  amount: number | null;
+  summary: string;
+  reversedBy: string | null;
+  reverses: string | null;
+  createdBy: string;
+  createdAt: string;
+  data: {
+    mode?: string;
+    reference?: string;
+    chargeId?: string;
+    code?: string;
+    name?: string;
+    reason?: string;
+  };
+}
+
+export interface DemandState {
+  no: number;
+  dueDate: string;
+  principalDue: number;
+  interestDue: number;
+  principalPaid: number;
+  interestPaid: number;
+}
+
+export interface ChargeState {
+  id: string;
+  code: string;
+  name: string;
+  kind: 'FEE' | 'PENAL';
+  date: string;
+  amount: number;
+  paid: number;
+  waived: number;
+}
+
+/** All amounts in paise. */
+export interface LoanState {
+  asOf: string;
+  status: LoanStatus;
+  /** Full current schedule: raised rows first (`raised` of them), then future rows. */
+  rows: Row[];
+  raised: number;
+  demands: DemandState[];
+  charges: ChargeState[];
+  advance: number;
+  principalPaid: number;
+  /** Date up to which interest has been demanded (last raised due date, or disbursal). */
+  lastInterestDate: string | null;
+  emi: number | null;
+  npaSince: string | null;
+  dpd: number;
+  assetClass: AssetClass;
+  closedOn: string | null;
+}
+
+export interface StoredLoan {
+  id: string;
+  loanNo: string;
+  customerId: string;
+  /** Product frozen into the loan at booking. */
+  product: LoanProduct;
+  branch: string;
+  supplierState: string;
+  recipientState: string;
+  /** Paise. */
+  amount: number;
+  rate: number;
+  tenorMonths: number;
+  moratoriumMonths: number;
+  /** Paise; 0 when none. */
+  balloon: number;
+  firstDueDate: string | null;
+  openDate: string;
+  externalRef: string | null;
+  kfs: LoanKfs;
+  kfsAcceptedAt: string | null;
+  kfsChannel: string | null;
+  disbursedOn: string | null;
+  /** Paise. */
+  netDisbursed: number | null;
+  frozen: boolean;
+  events: StoredLoanEvent[];
+  /** Derived state as of the last refresh (after every change and every day-end). */
+  state: LoanState;
+}
 
 export interface StoredApproval {
   approval: Approval;
@@ -67,6 +197,15 @@ export interface MockDb {
   eodRunSeq: number;
   eodSchedule: EodSchedule;
   audit: AuditRecord[];
+  loanProducts: LoanProduct[];
+  loans: StoredLoan[];
+  loanSeq: number;
+  staff: StoredStaff[];
+  branchSets: BranchSet[];
+  systemProperties: StoredProperty[];
+  enumerations: Record<string, StoredEnumValue[]>;
+  states: State[];
+  pincodes: PincodePlace[];
   idempotency: Map<string, { status: number; body: unknown }>;
   /** Fault injection for demos/tests: the named EOD step fails once. */
   eodFailAtStep: string | null;

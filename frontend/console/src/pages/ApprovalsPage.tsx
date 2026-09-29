@@ -27,7 +27,24 @@ import {
 } from '../ui';
 
 const STATUSES: ApprovalStatus[] = ['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN'];
-const ENTITY_TYPES = ['CUSTOMER', 'BRANCH', 'GL_HEAD', 'VOUCHER', 'TAX_RATE', 'HOLIDAY', 'EOD_SCHEDULE'];
+const ENTITY_TYPES = [
+  'CUSTOMER',
+  'BRANCH',
+  'GL_HEAD',
+  'VOUCHER',
+  'TAX_RATE',
+  'HOLIDAY',
+  'EOD_SCHEDULE',
+  'LOAN_PRODUCT',
+  'LOAN_DISBURSEMENT',
+  'LOAN_WAIVER',
+  'LOAN_REVERSAL',
+  'STAFF',
+  'BRANCH_SET',
+  'SYSTEM_PROPERTY',
+  'ENUMERATION',
+  'TERRITORY',
+];
 
 export function slaClass(a: Pick<Approval, 'status' | 'ageHours'>): string | undefined {
   if (a.status !== 'PENDING' || a.ageHours === undefined) return undefined;
@@ -54,6 +71,11 @@ function summaryOf(a: Approval): string {
     return hs.map((h) => `${h.day} ${h.reason}`).join(', ');
   }
   if (a.entityType === 'EOD_SCHEDULE') return `Mode ${String(p.mode ?? '')}`;
+  if (a.entityType.startsWith('LOAN_') && p.loanNo) return [p.loanNo, p.customer ?? p.charge ?? p.transaction].filter(Boolean).join(' — ');
+  if (a.entityType === 'STAFF') return [p.username, p.displayName].filter(Boolean).join(' — ');
+  if (a.entityType === 'SYSTEM_PROPERTY') return `${String(p.key ?? '')} = ${String(p.value ?? '')}`;
+  if (a.entityType === 'ENUMERATION') return `${String(p.type ?? '')} (${((p.values as unknown[] | undefined) ?? []).length} value(s))`;
+  if (a.entityType === 'TERRITORY') return `${String(p.rows ?? '')} row(s) · ${String(p.states ?? '')}`;
   return [p.code, p.name].filter(Boolean).join(' — ');
 }
 
@@ -203,7 +225,7 @@ function renderValue(v: unknown): React.ReactNode {
             {typeof x === 'object' && x !== null
               ? Object.entries(x as Record<string, unknown>)
                   .filter(([, val]) => val !== null && val !== undefined && val !== '')
-                  .map(([k, val]) => (k === 'amount' && typeof val === 'string' && isMoney(val) ? formatINR(val) : String(val)))
+                  .map(([k, val]) => (k === 'amount' && typeof val === 'string' && isMoney(val) ? formatINR(val) : typeof val === 'object' ? JSON.stringify(val) : String(val)))
                   .join(' · ')
               : String(x)}
           </li>

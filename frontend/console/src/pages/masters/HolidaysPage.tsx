@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useBranches, useHolidays, useMe, useProposeHolidays } from '../../api/hooks';
+import { useUploadHolidays } from '../../api/masterHooks';
 import type { Holiday } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
-import { Button, Card, DateText, Dialog, EmptyState, ErrorBanner, Input, PageHeader, Select, Spinner, Table } from '../../ui';
+import { Button, Card, CsvUpload, DateText, Dialog, EmptyState, ErrorBanner, Input, PageHeader, Select, Spinner, Table } from '../../ui';
 import { useProposalToast } from '../proposal';
 
 export function HolidaysPage() {
@@ -13,10 +14,19 @@ export function HolidaysPage() {
   const branches = useBranches();
   const q = useHolidays(year, branch);
   const [adding, setAdding] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const canPropose = hasPermission(me.permissions, P.holidayPropose);
   return (
     <div className="stack">
-      <PageHeader title="Holidays" subtitle="Tenant-wide holidays (all branches) skip the business date in end-of-day." actions={canPropose && <Button variant="primary" onClick={() => setAdding(true)}>Add holidays</Button>} />
+      <PageHeader title="Holidays" subtitle="Tenant-wide holidays (all branches) skip the business date in end-of-day." actions={
+          canPropose && (
+            <>
+              <Button onClick={() => setUploading(true)}>Upload file</Button>
+              <Button variant="primary" onClick={() => setAdding(true)}>Add holidays</Button>
+            </>
+          )
+        }
+      />
       <Card flush>
         <div className="filters" style={{ padding: 12, marginBottom: 0 }}>
           <Select
@@ -53,6 +63,7 @@ export function HolidaysPage() {
         )}
       </Card>
       {adding && <AddHolidaysDialog onClose={() => setAdding(false)} />}
+      {uploading && <UploadHolidaysDialog onClose={() => setUploading(false)} />}
     </div>
   );
 }
@@ -123,6 +134,30 @@ function AddHolidaysDialog({ onClose }: { onClose: () => void }) {
         </div>
         <ErrorBanner error={propose.error} />
       </div>
+    </Dialog>
+  );
+}
+
+export const HOLIDAY_COLUMNS = ['day', 'reason', 'branchCode'];
+
+function UploadHolidaysDialog({ onClose }: { onClose: () => void }) {
+  const upload = useUploadHolidays();
+  const toast = useProposalToast();
+  return (
+    <Dialog open wide onClose={onClose} title="Upload holidays" footer={<Button onClick={onClose}>Close</Button>}>
+      <CsvUpload
+        label="Holiday file"
+        columns={HOLIDAY_COLUMNS}
+        exampleRows={[['2026-11-01', 'Kerala Piravi', 'HO'], ['2026-12-25', 'Christmas', '']]}
+        templateName="holidays-template.csv"
+        maxRows={366}
+        hint="day is YYYY-MM-DD; leave branchCode empty for all branches"
+        mutation={upload}
+        onUploaded={(a, rows) => {
+          toast(a, `${rows} holiday(s)`);
+          onClose();
+        }}
+      />
     </Dialog>
   );
 }

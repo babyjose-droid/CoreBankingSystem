@@ -4,6 +4,8 @@ import { customerNumber } from '../lib/luhn';
 import { maskMobile, maskPan } from '../lib/mask';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb, type StoredCustomer } from './db';
 import { postVoucher } from './ledger';
+import { seedLending } from './lending';
+import { seedPlatform } from './platform';
 
 export const SEED_BUSINESS_DATE = '2026-06-30';
 export const CUSTOMER_SERIES_PREFIX = '9001';
@@ -220,6 +222,15 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     eodRunSeq: 103,
     eodSchedule: { mode: 'MANUAL', cron: null, alertEmails: ['eod-alerts@demo-nbfc.example'] },
     audit: [],
+    loanProducts: [],
+    loans: [],
+    loanSeq: 0,
+    staff: [],
+    branchSets: [],
+    systemProperties: [],
+    enumerations: {},
+    states: [],
+    pincodes: [],
     idempotency: new Map(),
     eodFailAtStep: null,
   };
@@ -241,6 +252,9 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     const vch = postVoucher(db, input, input.valueDate);
     appendAudit(db, `${input.valueDate}T12:00:00.000Z`, 'checker', 'VOUCHER_POSTED', 'VOUCHER', vch.id, { voucherNo: vch.voucherNo, amount: vch.amount });
   }
+
+  seedPlatform(db, seedAt);
+  seedLending(db);
 
   db.eodRuns.push(
     completedRun(101, '2026-06-26', '2026-06-27', '2026-06-26T18:00:00.000Z', false),

@@ -10,3 +10,4 @@ export { ToastProvider, useToast } from './Toast';
 export { MoneyText, DateText, DateTimeText, Masked, EmptyState, Spinner, Banner } from './Display';
 export { ErrorBanner } from './ErrorBanner';
 export { PageHeader } from './PageHeader';
+export { CsvUpload, type CsvUploadProps, type CsvUploadMutation } from './CsvUpload';

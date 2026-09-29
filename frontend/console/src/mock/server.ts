@@ -22,25 +22,12 @@ import { appendAudit, uuid, verifyAudit, type ApprovalPayload, type MockDb, type
 import { balanceSheet, headByCode, postVoucher, profitAndLoss, reverseVoucher, trialBalance, voucherTotals } from './ledger';
 import { createSeedDb, customerRecord, EOD_STEPS } from './seed';
 
-const PROBLEM_BASE = 'https://corebanking.example/problems/';
+import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
+import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
+import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
 
-class HttpProblem extends Error {
-  constructor(
-    readonly status: number,
-    readonly title: string,
-    readonly detail?: string,
-    readonly extra: Record<string, unknown> = {},
-    readonly type = 'about:blank',
-  ) {
-    super(detail ?? title);
-  }
-}
-
-const bad = (detail: string, errors?: Array<{ field: string; message: string }>) =>
-  new HttpProblem(422, 'Validation failed', detail, errors ? { errors } : {}, PROBLEM_BASE + 'validation');
-const conflict = (title: string, detail?: string, extra: Record<string, unknown> = {}) =>
-  new HttpProblem(409, title, detail, extra, PROBLEM_BASE + 'conflict');
-const notFound = (what: string) => new HttpProblem(404, 'Not found', `${what} not found`, {}, PROBLEM_BASE + 'not-found');
+/** Largest request body the API accepts (the contract's maxLength for CSV uploads). */
+const MAX_BODY_CHARS = 5_000_000;
 
 interface Ctx {
   user: DemoUser;
@@ -263,6 +250,10 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       case 'EOD_SCHEDULE':
         db.eodSchedule = { ...p.schedule };
         break;
+      default:
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyPlatformApproval(db, p, a, checker, at)) {
+          throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
+        }
     }
   }
 
@@ -375,6 +366,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     const next = run.nextBusinessDate ?? nextBusinessDate(run.businessDate);
     run.nextBusinessDate = next;
     db.businessDate = next;
+    lendingDayEnd(db);
     db.dayStatus = 'OPEN';
     appendAudit(db, run.finishedAt, 'system', 'EOD_COMPLETED', 'EOD_RUN', String(run.id), { businessDate: run.businessDate, next, status: run.status });
   }
@@ -388,12 +380,15 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   }
 
   on('GET', '/api/v1/me', ({ user }) => {
+    const scope = branchScope(db, user.username, user.homeBranch);
     const me: Me = {
       userId: user.username,
       displayName: user.name,
       tenant: db.tenant,
       tenantName: db.tenantName,
-      homeBranch: user.homeBranch,
+      homeBranch: db.staff.find((s) => s.username === user.username)?.homeBranch ?? user.homeBranch,
+      allBranches: scope.allBranches,
+      branches: scope.branches,
       businessDate: db.businessDate,
       permissions: [...user.permissions],
       modules: ['CUSTOMER', 'GL', 'EOD', 'LENDING'],
@@ -434,20 +429,39 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         .sort((a, b) => a.day.localeCompare(b.day)),
     );
   });
-  on('POST', '/api/v1/holidays', ({ user, body }) => {
-    require(user, P.holidayPropose);
-    const list = body as Holiday[];
+  function validateHolidays(list: Holiday[], rowLabel: (i: number) => string = (i) => `Row ${i + 1}`): Holiday[] {
     if (!Array.isArray(list) || list.length === 0) throw bad('At least one holiday is required');
-    const errors: Array<{ field: string; message: string }> = [];
+    const errors: FieldProblem[] = [];
+    const seen = new Set<string>();
     list.forEach((h, i) => {
-      if (!ISO_DATE.test(h.day ?? '')) errors.push({ field: `[${i}].day`, message: `Row ${i + 1}: date required` });
-      if (!h.reason?.trim()) errors.push({ field: `[${i}].reason`, message: `Row ${i + 1}: reason required` });
-      if (h.branchCode && !db.branches.some((b) => b.code === h.branchCode)) errors.push({ field: `[${i}].branchCode`, message: `Row ${i + 1}: unknown branch` });
-      if (h.day && h.day <= db.businessDate) errors.push({ field: `[${i}].day`, message: `Row ${i + 1}: holidays must be after the business date` });
-      if (db.holidays.some((x) => x.day === h.day && (x.branchCode ?? null) === (h.branchCode ?? null))) errors.push({ field: `[${i}].day`, message: `Row ${i + 1}: ${h.day} is already a holiday` });
+      const at = rowLabel(i);
+      if (!ISO_DATE.test(h.day ?? '')) errors.push({ field: `[${i}].day`, message: `${at}: date (YYYY-MM-DD) required` });
+      if (!h.reason?.trim()) errors.push({ field: `[${i}].reason`, message: `${at}: reason required` });
+      if (h.branchCode && !db.branches.some((b) => b.code === h.branchCode)) errors.push({ field: `[${i}].branchCode`, message: `${at}: unknown branch ${h.branchCode}` });
+      if (h.day && ISO_DATE.test(h.day) && h.day <= db.businessDate) errors.push({ field: `[${i}].day`, message: `${at}: holidays must be after the business date` });
+      if (db.holidays.some((x) => x.day === h.day && (x.branchCode ?? null) === (h.branchCode || null))) errors.push({ field: `[${i}].day`, message: `${at}: ${h.day} is already a holiday` });
+      const key = `${h.day}|${h.branchCode || ''}`;
+      if (seen.has(key)) errors.push({ field: `[${i}].day`, message: `${at}: ${h.day} appears twice` });
+      seen.add(key);
     });
     if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
-    const holidays = list.map((h) => ({ branchCode: h.branchCode || null, day: h.day, reason: h.reason.trim() }));
+    return list.map((h) => ({ branchCode: h.branchCode || null, day: h.day, reason: h.reason.trim() }));
+  }
+  on('POST', '/api/v1/holidays', ({ user, body }) => {
+    require(user, P.holidayPropose);
+    const holidays = validateHolidays(body as Holiday[]);
+    return propose(user, 'HOLIDAY', 'CREATE', { kind: 'HOLIDAY', holidays }, { holidays });
+  });
+  on('POST', '/api/v1/holidays/upload', ({ user, body }) => {
+    require(user, P.holidayPropose);
+    const rows = readCsvUpload(body, ['day', 'reason'], ['branchCode'], 366);
+    let holidays: Holiday[];
+    try {
+      holidays = validateHolidays(rows.map((r) => ({ day: r.day, reason: r.reason, branchCode: r.branchCode || null })), (i) => `Row ${i + 2}`);
+    } catch (e) {
+      if (e instanceof HttpProblem && Array.isArray(e.extra.errors)) throw rowErrors(e.extra.errors as FieldProblem[]);
+      throw e;
+    }
     return propose(user, 'HOLIDAY', 'CREATE', { kind: 'HOLIDAY', holidays }, { holidays });
   });
 
@@ -471,21 +485,6 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
     const rate: TaxRate = { ...t, effectiveTo: t.effectiveTo ?? null };
     return propose(user, 'TAX_RATE', current ? 'UPDATE' : 'CREATE', { kind: 'TAX_RATE', rate }, { ...rate }, current ? { ...current } : null, current ? t.code : null);
-  });
-
-  const ENUMS: Record<string, Array<{ code: string; label: string; active?: boolean }>> = {
-    'customer-type': [{ code: 'INDIVIDUAL', label: 'Individual' }, { code: 'NON_INDIVIDUAL', label: 'Non-individual' }],
-    gender: [{ code: 'FEMALE', label: 'Female' }, { code: 'MALE', label: 'Male' }, { code: 'OTHER', label: 'Other' }],
-    'voucher-type': [{ code: 'CONTRA', label: 'Contra' }, { code: 'RECEIPT', label: 'Receipt' }, { code: 'PAYMENT', label: 'Payment' }, { code: 'JOURNAL', label: 'Journal' }],
-    'gst-state': [
-      ['01', 'Jammu and Kashmir'], ['06', 'Haryana'], ['07', 'Delhi'], ['08', 'Rajasthan'], ['09', 'Uttar Pradesh'], ['19', 'West Bengal'],
-      ['24', 'Gujarat'], ['27', 'Maharashtra'], ['29', 'Karnataka'], ['32', 'Kerala'], ['33', 'Tamil Nadu'], ['36', 'Telangana'], ['37', 'Andhra Pradesh'],
-    ].map(([code, label]) => ({ code, label, active: true })),
-  };
-  on('GET', '/api/v1/enumerations/{type}', ({ params }) => {
-    const values = ENUMS[params.type];
-    if (!values) throw notFound(`Enumeration ${params.type}`);
-    return ok(values);
   });
 
   // Approvals
@@ -611,6 +610,50 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     const { dr } = voucherTotals(input.lines);
     const clean: VoucherInput = { ...input, lines: input.lines.map((l) => ({ ...l, amount: fromUnits(toUnits(l.amount)) })) };
     return propose(user, 'VOUCHER', 'CREATE', { kind: 'VOUCHER', input: clean }, { ...clean }, null, null, fromUnits(dr));
+  });
+  on('POST', '/api/v1/gl/vouchers/upload', ({ user, body }) => {
+    require(user, P.voucherCreate);
+    const rows = readCsvUpload(body, ['voucherRef', 'voucherType', 'valueDate', 'description', 'branch', 'glCode', 'side', 'amount'], ['account', 'narration', 'reference'], 20_000);
+    const groups = new Map<string, Array<{ line: number; r: Record<string, string> }>>();
+    const errors: FieldProblem[] = [];
+    rows.forEach((r, i) => {
+      if (!r.voucherRef) errors.push({ field: `row ${i + 2}`, message: `Row ${i + 2}: voucherRef is required` });
+      else groups.set(r.voucherRef, [...(groups.get(r.voucherRef) ?? []), { line: i + 2, r }]);
+    });
+    const inputs: VoucherInput[] = [];
+    for (const [ref, lines] of groups) {
+      const head = lines[0].r;
+      const firstLine = lines[0].line;
+      const mismatch = lines.find(({ r }) => r.voucherType !== head.voucherType || r.valueDate !== head.valueDate || r.description !== head.description);
+      if (mismatch) {
+        errors.push({ field: `row ${mismatch.line}`, message: `Row ${mismatch.line}: voucher ${ref} must have the same type, value date and description on every line` });
+        continue;
+      }
+      const input: VoucherInput = {
+        voucherType: head.voucherType.toUpperCase() as VoucherInput['voucherType'],
+        valueDate: head.valueDate,
+        description: head.description,
+        reference: lines.find(({ r }) => r.reference)?.r.reference || ref,
+        lines: lines.map(({ r }) => ({
+          branch: r.branch.toUpperCase(),
+          glCode: r.glCode,
+          side: r.side.toUpperCase() as 'DR' | 'CR',
+          amount: r.amount,
+          ...(r.account ? { account: r.account } : {}),
+          ...(r.narration ? { narration: r.narration } : {}),
+        })),
+      };
+      try {
+        validateVoucher(input);
+        inputs.push({ ...input, lines: input.lines.map((l) => ({ ...l, amount: fromUnits(toUnits(l.amount)) })) });
+      } catch (e) {
+        if (!(e instanceof HttpProblem)) throw e;
+        errors.push({ field: `row ${firstLine}`, message: `Voucher ${ref} (from row ${firstLine}): ${e.detail ?? e.title}` });
+      }
+    }
+    if (errors.length) throw rowErrors(errors);
+    const approvals = inputs.map((input) => propose(user, 'VOUCHER', 'CREATE', { kind: 'VOUCHER', input }, { ...input }, null, null, fromUnits(voucherTotals(input.lines).dr)).body);
+    return accepted({ vouchers: inputs.length, approvals });
   });
   on('POST', '/api/v1/gl/vouchers/{id}/reverse', ({ user, params, body }) => {
     require(user, P.voucherReverse);
@@ -744,6 +787,9 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     return ok(verifyAudit(db));
   });
 
+  registerLendingRoutes(db, { on, require, propose, nowIso });
+  registerPlatformRoutes(db, { on, require, propose });
+
   // ---------- dispatcher ----------
   function respond(status: number, body: unknown): Response {
     const isProblem = status >= 400;
@@ -771,8 +817,12 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       const params: Record<string, string> = {};
       route.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
       const text = request.method === 'GET' ? '' : await request.text();
+      if (text.length > MAX_BODY_CHARS) {
+        throw new HttpProblem(413, 'File too large', `The request body is ${text.length.toLocaleString('en-IN')} characters; the limit is ${MAX_BODY_CHARS.toLocaleString('en-IN')}`, {}, PROBLEM_BASE + 'payload-too-large');
+      }
       let body: unknown = null;
-      if (text) {
+      if (text && /^text\/csv/i.test(request.headers.get('Content-Type') ?? '')) body = text;
+      else if (text) {
         try {
           body = JSON.parse(text);
         } catch {

@@ -7,6 +7,7 @@ import { hasPermission } from '../auth/permissions';
 import { cx } from '../lib/cx';
 import { formatDate } from '../lib/dates';
 import { Badge, Button, ErrorBanner, Spinner } from '../ui';
+import { branchScopeText } from './branchScope';
 import { visibleNav } from './nav';
 import { usePendingForMe } from './usePendingForMe';
 
@@ -138,6 +139,9 @@ function UserMenu() {
           <div className="usermenu__info">
             <div style={{ fontWeight: 600 }}>{me.displayName}</div>
             <div className="muted mono">{me.userId}</div>
+            <div style={{ fontSize: 12, marginTop: 4 }} data-testid="branch-scope">
+              {branchScopeText(me)}
+            </div>
             <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
               Tenant <span className="mono">{me.tenant}</span> · {me.permissions.length} permissions
               {auth.mode === 'mock' && ' · mock mode'}

@@ -528,3 +528,28 @@
     grid-column: auto;
   }
 }
+
+/* ---------- lending ---------- */
+/* Asset classification (RBI IRACP): SMA stages step from info to warning; NPA classes are danger, deepening with age. */
+.badge--asset-standard { background: var(--ok-soft); color: var(--ok); }
+.badge--asset-sma0 { background: var(--info-soft); color: var(--info); }
+.badge--asset-sma1 { background: var(--warn-soft); color: var(--warn); }
+.badge--asset-sma2 { background: var(--warn-soft); color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); font-weight: 600; }
+.badge--asset-substandard { background: var(--danger-soft); color: var(--danger); }
+.badge--asset-doubtful1,
+.badge--asset-doubtful2,
+.badge--asset-doubtful3 { background: var(--danger-soft); color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); font-weight: 600; }
+.badge--asset-loss { background: var(--danger); color: var(--surface); font-weight: 600; }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-3); }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); }
+.stat__label { font-size: 12px; color: var(--text-muted); }
+.stat__value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+.action-bar { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.checklist { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-2) var(--space-3); margin: 0; }
+.checklist legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+
+.csv-upload__errors { margin: 0; padding-left: 20px; color: var(--danger); font-size: 13px; }
+.fee-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--space-2); align-items: end; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); margin: 0; }
+.fee-row legend { font-weight: 600; font-size: 13px; padding: 0 4px; }

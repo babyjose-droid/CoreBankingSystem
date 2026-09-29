@@ -19,6 +19,8 @@ describe('api client', () => {
     expect(needsIdempotencyKey('POST', 'http://x/api/v1/gl/vouchers/abc/reverse')).toBe(true);
     expect(needsIdempotencyKey('POST', 'http://x/api/v1/approvals/abc/approve')).toBe(false);
     expect(needsIdempotencyKey('POST', 'http://x/api/v1/customers/dedupe-check')).toBe(false);
+    expect(needsIdempotencyKey('POST', 'http://x/api/v1/loans/preview')).toBe(false);
+    expect(needsIdempotencyKey('POST', 'http://x/api/v1/loans')).toBe(true);
     expect(needsIdempotencyKey('GET', 'http://x/api/v1/customers')).toBe(false);
   });
 

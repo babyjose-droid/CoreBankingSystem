@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useGlHeads, useMe, useProposeReversal, useVouchers } from '../../api/hooks';
+import { useUploadVouchers } from '../../api/masterHooks';
 import type { Voucher } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { financialYearStart } from '../../lib/dates';
 import {
   Button,
   Card,
+  CsvUpload,
   DateText,
   Dialog,
   EmptyState,
@@ -19,6 +21,7 @@ import {
   Table,
   Textarea,
   humanize,
+  useToast,
 } from '../../ui';
 import { useProposalToast } from '../proposal';
 
@@ -29,12 +32,21 @@ export function VouchersPage() {
   const q = useVouchers(from, to);
   const navigate = useNavigate();
   const [open, setOpen] = useState<Voucher | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const canCreate = hasPermission(me.permissions, P.voucherCreate);
   return (
     <div className="stack">
       <PageHeader
         title="Vouchers"
         subtitle="Posted manual vouchers. New vouchers and reversals go through maker-checker."
-        actions={hasPermission(me.permissions, P.voucherCreate) && <Button variant="primary" onClick={() => navigate('/ledger/vouchers/new')}>New voucher</Button>}
+        actions={
+          canCreate && (
+            <>
+              <Button onClick={() => setUploading(true)}>Upload file</Button>
+              <Button variant="primary" onClick={() => navigate('/ledger/vouchers/new')}>New voucher</Button>
+            </>
+          )
+        }
       />
       <Card flush>
         <div className="filters" style={{ padding: 12, marginBottom: 0 }}>
@@ -70,6 +82,7 @@ export function VouchersPage() {
         )}
       </Card>
       <VoucherDrawer voucher={open} onClose={() => setOpen(null)} />
+      {uploading && <UploadVouchersDialog onClose={() => setUploading(false)} />}
     </div>
   );
 }
@@ -164,6 +177,34 @@ function VoucherDrawer({ voucher, onClose }: { voucher: Voucher | null; onClose:
           <ErrorBanner error={reverse.error} />
         </div>
       )}
+    </Dialog>
+  );
+}
+
+export const VOUCHER_UPLOAD_COLUMNS = ['voucherRef', 'voucherType', 'valueDate', 'description', 'branch', 'glCode', 'side', 'amount', 'account', 'narration', 'reference'];
+
+function UploadVouchersDialog({ onClose }: { onClose: () => void }) {
+  const me = useMe().data!;
+  const upload = useUploadVouchers();
+  const toast = useToast();
+  return (
+    <Dialog open wide onClose={onClose} title="Upload vouchers" footer={<Button onClick={onClose}>Close</Button>}>
+      <CsvUpload
+        label="Voucher file"
+        columns={VOUCHER_UPLOAD_COLUMNS}
+        exampleRows={[
+          ['V1', 'JOURNAL', me.businessDate, 'Accrual true-up', 'HO', '1210', 'DR', '1000.00', '', '', ''],
+          ['V1', 'JOURNAL', me.businessDate, 'Accrual true-up', 'HO', '4101', 'CR', '1000.00', '', '', ''],
+        ]}
+        templateName="vouchers-template.csv"
+        hint="rows with the same voucherRef form one voucher; each voucher is a separate approval; all or nothing"
+        mutation={upload}
+        onUploaded={(r) => {
+          const n = r.vouchers ?? r.approvals?.length ?? 0;
+          toast({ tone: 'success', message: `${n} voucher(s) sent for approval.`, link: { to: '/approvals?status=PENDING&entityType=VOUCHER', label: 'View requests' } });
+          onClose();
+        }}
+      />
     </Dialog>
   );
 }
