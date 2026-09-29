@@ -21,8 +21,8 @@ const ENUMS: Record<string, Array<[code: string, label: string]>> = {
     ['01', 'Jammu and Kashmir'], ['06', 'Haryana'], ['07', 'Delhi'], ['08', 'Rajasthan'], ['09', 'Uttar Pradesh'], ['19', 'West Bengal'],
     ['24', 'Gujarat'], ['27', 'Maharashtra'], ['29', 'Karnataka'], ['32', 'Kerala'], ['33', 'Tamil Nadu'], ['36', 'Telangana'], ['37', 'Andhra Pradesh'],
   ],
-  LOAN_PURPOSE: [['EDUCATION', 'Education'], ['MEDICAL', 'Medical'], ['TRAVEL', 'Travel'], ['HOME_RENOVATION', 'Home renovation'], ['OTHER', 'Other']],
-  REPAYMENT_MODE: [['NACH', 'NACH mandate'], ['UPI', 'UPI'], ['CASH', 'Cash at branch'], ['NEFT', 'NEFT/RTGS']],
+  'loan-purpose': [['EDUCATION', 'Education'], ['MEDICAL', 'Medical'], ['TRAVEL', 'Travel'], ['HOME_RENOVATION', 'Home renovation'], ['OTHER', 'Other']],
+  'repayment-mode': [['NACH', 'NACH mandate'], ['UPI', 'UPI'], ['CASH', 'Cash at branch'], ['NEFT', 'NEFT/RTGS']],
 };
 
 type St = [code: string, name: string, gst: string, ut: boolean];
@@ -208,7 +208,7 @@ export interface PlatformRouter {
 }
 
 const ok = (body: unknown): Result => ({ status: 200, body });
-const ENUM_TYPE_PATTERN = /^[A-Z][A-Z0-9_]{1,40}$/;
+const ENUM_TYPE_PATTERN = /^[a-z][a-z0-9-]{1,40}$/;
 const PROPERTY_KEY_PATTERN = /^[a-z][a-z0-9_.-]+$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9._@-]{2,80}$/;
 
@@ -230,14 +230,13 @@ export function registerPlatformRoutes(db: MockDb, r: PlatformRouter) {
   on('GET', '/api/v1/enumerations/{type}', ({ params }) => {
     const values = db.enumerations[params.type];
     if (!values) throw notFound(`Enumeration ${params.type}`);
-    return ok([...values].sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code)).map(({ code, label, active }) => ({ code, label, active })));
+    return ok([...values].sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code)).map(({ code, label, active, sortOrder }) => ({ code, label, active, sortOrder })));
   });
   on('POST', '/api/v1/enumerations/{type}', ({ user, params, body }) => {
     require(user, P.masterPropose);
     const type = params.type;
     const existing = db.enumerations[type];
-    // Existing lower-case types (seeded before the pattern existed) stay editable; new types must match the contract pattern.
-    if (!existing && !ENUM_TYPE_PATTERN.test(type)) throw bad('Type must be upper-case letters, digits or _ (2-41 characters)', [{ field: 'type', message: 'Invalid type' }]);
+    if (!ENUM_TYPE_PATTERN.test(type)) throw bad('Type must be lower-case letters, digits or - (2-41 characters, starting with a letter)', [{ field: 'type', message: 'Invalid type' }]);
     const list = body as EnumValueInput[];
     if (!Array.isArray(list) || list.length === 0) throw bad('At least one value is required');
     if (list.length > 500) throw bad('At most 500 values per request');

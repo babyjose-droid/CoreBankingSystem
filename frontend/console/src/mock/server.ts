@@ -18,10 +18,11 @@ import { P } from '../auth/permissions';
 import { addDays, ageOn, dayOfWeek, ISO_DATE } from '../lib/dates';
 import { BRANCH_CODE_PATTERN, EMAIL_PATTERN, IFSC_PATTERN, MOBILE_PATTERN, PAN_PATTERN, PINCODE_PATTERN, maskMobile, maskPan } from '../lib/mask';
 import { formatINR, fromUnits, isMoney, toUnits } from '../lib/money';
-import { appendAudit, uuid, verifyAudit, type ApprovalPayload, type MockDb, type StoredApproval, type StoredCustomer } from './db';
+import { appendAudit, TWO_CHECKER_VOUCHER_AMOUNT, uuid, verifyAudit, type ApprovalPayload, type MockDb, type StoredApproval, type StoredCustomer } from './db';
 import { balanceSheet, headByCode, postVoucher, profitAndLoss, reverseVoucher, trialBalance, voucherTotals } from './ledger';
 import { createSeedDb, customerRecord, EOD_STEPS } from './seed';
 
+import { applyAmendmentApproval, registerAmendmentRoutes } from './amendments';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
@@ -79,7 +80,20 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   function approvalView(s: StoredApproval): Approval {
     const a = s.approval;
     const end = a.checkedAt ? Date.parse(a.checkedAt) : Date.now();
-    return { ...a, ageHours: Math.max(0, Math.round(((end - Date.parse(a.madeAt)) / 3600_000) * 10) / 10) };
+    return {
+      ...a,
+      checkersRequired: a.checkersRequired ?? 1,
+      approvalsSoFar: s.approvedBy?.length ?? (a.status === 'APPROVED' ? 1 : 0),
+      appliedRef: a.appliedRef ?? null,
+      ageHours: Math.max(0, Math.round(((end - Date.parse(a.madeAt)) / 3600_000) * 10) / 10),
+    };
+  }
+
+  /** The backend's approval rules as the mock knows them: restructures and vouchers of ₹10 lakh or more need two checkers. */
+  function checkersRequired(entityType: string, amount: string | null): number {
+    if (entityType === 'LOAN_RESTRUCTURE') return 2;
+    if (entityType === 'VOUCHER' && amount && isMoney(amount) && toUnits(amount) >= toUnits(TWO_CHECKER_VOUCHER_AMOUNT)) return 2;
+    return 1;
   }
 
   function propose(
@@ -104,10 +118,12 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       checkedAt: null,
       note: null,
       amount,
+      checkersRequired: checkersRequired(entityType, amount),
+      appliedRef: null,
       current,
       proposed,
     };
-    const stored = { approval, payload };
+    const stored: StoredApproval = { approval, payload, approvedBy: [] };
     db.approvals.push(stored);
     appendAudit(db, approval.madeAt, user.username, 'APPROVAL_REQUESTED', entityType, approval.id, { action, entityId });
     return accepted(approvalView(stored));
@@ -229,6 +245,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         if (p.input.pan && db.customers.some((c) => c.input.pan === p.input.pan)) throw conflict('Duplicate PAN', 'A customer with this PAN was created meanwhile');
         const c = customerRecord(db, { ...p.input }, at);
         a.entityId = c.id;
+        a.appliedRef = c.customerNo;
         appendAudit(db, at, checker, 'CUSTOMER_CREATED', 'CUSTOMER', c.id, { customerNo: c.customerNo });
         break;
       }
@@ -236,6 +253,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         validateVoucher(p.input); // heads may have been frozen since the proposal
         const vch = postVoucher(db, p.input, db.businessDate);
         a.entityId = vch.id;
+        a.appliedRef = vch.voucherNo;
         appendAudit(db, at, checker, 'VOUCHER_POSTED', 'VOUCHER', vch.id, { voucherNo: vch.voucherNo, amount: vch.amount });
         break;
       }
@@ -251,7 +269,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyPlatformApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -267,7 +285,21 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     }
     if (!approve && !note?.trim()) throw bad('A note is required to reject', [{ field: 'note', message: 'Required' }]);
     if (note && note.length > 500) throw bad('Note must be at most 500 characters', [{ field: 'note', message: 'Too long' }]);
+    const required = s.approval.checkersRequired ?? 1;
+    const prior = (s.approvedBy ??= []);
+    if (approve && required > 1) {
+      // Several distinct checkers: each approval is recorded; the change applies with the last one.
+      if (prior.includes(user.username)) throw conflict('Already approved by you', `This request needs ${required} different checkers`);
+      if (prior.length + 1 < required) {
+        prior.push(user.username);
+        s.approval.note = note?.trim() || s.approval.note || null;
+        appendAudit(db, nowIso(), user.username, 'APPROVAL_RECORDED', s.approval.entityType, s.approval.id, { approvalsSoFar: prior.length, checkersRequired: required, note: note?.trim() || null });
+        return approvalView(s);
+      }
+    }
     if (approve) applyApproval(s, user.username);
+    if (approve) prior.push(user.username);
+    if (approve && !s.approval.appliedRef) s.approval.appliedRef = s.approval.entityId ?? null;
     s.approval.status = approve ? 'APPROVED' : 'REJECTED';
     s.approval.checker = user.username;
     s.approval.checkedAt = nowIso();
@@ -789,6 +821,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
 
   registerLendingRoutes(db, { on, require, propose, nowIso });
   registerPlatformRoutes(db, { on, require, propose });
+  registerAmendmentRoutes(db, { on, require, propose, nowIso });
 
   // ---------- dispatcher ----------
   function respond(status: number, body: unknown): Response {

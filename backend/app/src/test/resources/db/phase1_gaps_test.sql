@@ -70,10 +70,10 @@ SELECT pg_temp.expect_fail($q$ SELECT platform.load_territory('[{"state":"32","d
                            '22023', 'T10 district required');
 
 -- Enumerations ----------------------------------------------------------------------------------------
-INSERT INTO platform.enumeration (enum_type, code, label) VALUES ('OCCUPATION','SALARIED','Salaried');
-SELECT pg_temp.expect_fail($q$ INSERT INTO platform.enumeration (enum_type, code, label) VALUES ('OCCUPATION','self employed','x') $q$,
+INSERT INTO platform.enumeration (enum_type, code, label) VALUES ('occupation','SALARIED','Salaried');
+SELECT pg_temp.expect_fail($q$ INSERT INTO platform.enumeration (enum_type, code, label) VALUES ('occupation','self employed','x') $q$,
                            '23514', 'N1 enumeration code format enforced');
-SELECT pg_temp.expect_fail($q$ INSERT INTO platform.enumeration (enum_type, code, label) VALUES ('occupation','X','x') $q$,
+SELECT pg_temp.expect_fail($q$ INSERT INTO platform.enumeration (enum_type, code, label) VALUES ('OCCUPATION','X','x') $q$,
                            '23514', 'N2 enumeration type format enforced');
 SELECT pg_temp.expect_fail($q$ INSERT INTO platform.system_property (key, value, updated_by) VALUES ('Bad Key','1','t') $q$,
                            '23514', 'N3 property key format enforced');

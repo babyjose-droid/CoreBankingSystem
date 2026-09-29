@@ -13,6 +13,7 @@ import { addDays, formatDate, ISO_DATE } from '../lib/dates';
 import { customerNumber } from '../lib/luhn';
 import { formatINR, isMoney } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type ChargeState, type LoanState, type MockDb, type StoredCustomer, type StoredLoan, type StoredLoanEvent } from './db';
+import { amendState, restructureState } from './amendCalc';
 import * as C from './lendingCalc';
 import { bad, conflict, notFound, type FieldProblem } from './problems';
 
@@ -21,8 +22,10 @@ export const LOAN_SERIES_PREFIX = '1001';
 const LOAN_STP = 'loan:stp';
 
 const inr = (p: number) => formatINR(C.fromPaise(p));
-const FINANCIAL = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION']);
-const REVERSIBLE = FINANCIAL;
+/** Transactions replayed to derive the loan's state. */
+const FINANCIAL = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION', 'AMENDMENT', 'RESTRUCTURE']);
+/** A restructure cannot be reversed (and blocks reversing anything before it). */
+const REVERSIBLE = new Set([...FINANCIAL].filter((t) => t !== 'RESTRUCTURE'));
 const PENAL_NOTE = 'Penal charges apply only on overdue amounts, are not added to the interest rate and are not compounded.';
 
 // ------------------------------------------------------------------ seed products
@@ -99,7 +102,7 @@ const RATE_TABLES: Record<string, Array<{ upTo: number; rate: number }>> = {
 
 // ------------------------------------------------------------------ helpers
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
-const displayName = (c: StoredCustomer) => [c.input.firstName, c.input.middleName, c.input.lastName].filter(Boolean).join(' ');
+export const displayName = (c: StoredCustomer) => [c.input.firstName, c.input.middleName, c.input.lastName].filter(Boolean).join(' ');
 
 function money(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
@@ -108,12 +111,12 @@ function money(v: unknown): number | null {
   return C.toPaise(s);
 }
 
-function arrearsOf(st: LoanState): number {
+export function arrearsOf(st: LoanState): number {
   return st.demands.reduce((s, d) => s + (d.principalDue - d.principalPaid) + (d.interestDue - d.interestPaid), 0);
 }
 const unpaidOf = (c: ChargeState) => c.amount - c.paid - c.waived;
 const unpaidCharges = (st: LoanState) => st.charges.reduce((s, c) => s + unpaidOf(c), 0);
-const futurePrincipal = (st: LoanState) => st.rows.slice(st.raised).reduce((s, r) => s + r.principal, 0);
+export const futurePrincipal = (st: LoanState) => st.rows.slice(st.raised).reduce((s, r) => s + r.principal, 0);
 function oldestUnpaidDue(st: LoanState): string | null {
   const d = st.demands.find((x) => x.principalDue - x.principalPaid + x.interestDue - x.interestPaid > 0);
   return d ? d.dueDate : null;
@@ -355,7 +358,7 @@ function advanceTo(loan: StoredLoan, st: LoanState, date: string) {
       const amt = C.roundRupee((arrears * penalRate) / 1200);
       if (amt > 0) st.charges.push({ id: `PEN-${row.dueDate}`, code: 'PENAL', name: `Penal charge on overdue ${inr(arrears)}`, kind: 'PENAL', date: row.dueDate, amount: amt, paid: 0, waived: 0 });
     }
-    st.demands.push({ no: row.no, dueDate: row.dueDate, principalDue: row.principal, interestDue: row.interest, principalPaid: 0, interestPaid: 0 });
+    st.demands.push({ no: row.no, dueDate: row.dueDate, principalDue: row.principal, interestDue: row.interest, principalPaid: 0, interestPaid: 0, principalRescheduled: 0, interestCapitalised: 0 });
     st.raised += 1;
     st.lastInterestDate = row.dueDate;
     if (st.advance > 0) st.advance = payDemands(st, st.advance);
@@ -384,11 +387,11 @@ function rebuildFuture(loan: StoredLoan, st: LoanState, balance: number, mode: s
   const dates = future.map((r) => r.dueDate);
   const method = loan.product.repaymentMethod;
   const morLeft = Math.max(0, loan.moratoriumMonths - st.raised);
-  const common = { balance, ratePct: loan.rate, from: st.lastInterestDate!, dueDates: dates, method, moratoriumRows: morLeft, startNo: st.raised + 1 };
+  const common = { balance, ratePct: st.rate, from: st.lastInterestDate!, dueDates: dates, method, moratoriumRows: morLeft, startNo: st.raised + 1 };
   let rows: C.Row[];
   if (balance <= 0) rows = [];
   else if (method === 'EQUATED') {
-    const emi = mode === 'REDUCE_EMI' ? C.pmt(balance, loan.rate, dates.length - morLeft) : st.emi;
+    const emi = mode === 'REDUCE_EMI' ? C.pmt(balance, st.rate, dates.length - morLeft) : st.emi;
     rows = C.buildRows({ ...common, emi });
     st.emi = emi;
   } else if (method === 'FIXED_PRINCIPAL' && mode === 'REDUCE_TENURE') {
@@ -400,7 +403,7 @@ function rebuildFuture(loan: StoredLoan, st: LoanState, balance: number, mode: s
 function initialState(loan: StoredLoan, asOf: string): LoanState {
   const base: LoanState = {
     asOf, status: 'SANCTIONED', rows: [], raised: 0, demands: [], charges: [], advance: 0, principalPaid: 0,
-    lastInterestDate: null, emi: loan.kfs.emi ? C.toPaise(loan.kfs.emi) : null, npaSince: null, dpd: 0, assetClass: 'STANDARD', closedOn: null,
+    lastInterestDate: null, emi: loan.kfs.emi ? C.toPaise(loan.kfs.emi) : null, rate: loan.rate, capitalised: 0, restructuredOn: null, restructureCount: 0, upgradeNotBefore: null, npaSince: null, dpd: 0, assetClass: 'STANDARD', closedOn: null,
   };
   if (!loan.disbursedOn) return { ...base, rows: (loan.kfs.schedule ?? []).map(fromScheduleRow) };
   const { rows, emi } = planRows(loan.product, loan.amount, loan.rate, loan.tenorMonths, loan.moratoriumMonths, loan.disbursedOn, loan.firstDueDate, loan.balloon);
@@ -452,8 +455,20 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
     case 'CANCELLATION':
       settleAll(st, e.valueDate, 'CANCELLED');
       break;
+    case 'AMENDMENT':
+      // Applied as approved; if the loan has since changed so much that it no longer applies, it is skipped.
+      try {
+        amendState(loan, st, e.data.amendment!, e.valueDate);
+      } catch {
+        /* skipped */
+      }
+      break;
+    case 'RESTRUCTURE':
+      restructureState(loan, st, e.data.restructure!, e.valueDate);
+      break;
   }
-  if (st.npaSince && arrearsOf(st) === 0) st.npaSince = null; // upgrade only when all arrears of interest and principal are paid
+  // Upgrade only when all arrears of interest and principal are paid, and (restructured) after the specified period.
+  if (st.npaSince && arrearsOf(st) === 0 && (!st.upgradeNotBefore || e.valueDate >= st.upgradeNotBefore)) st.npaSince = null;
   maybeClose(st, e.valueDate);
 }
 
@@ -485,7 +500,7 @@ function quoteFrom(loan: StoredLoan, st: LoanState, asOf: string) {
   const principal = futurePrincipal(st);
   const overdue = arrearsOf(st);
   const from = st.lastInterestDate ?? asOf;
-  const accrued = asOf > from ? C.interestFor(principal, loan.rate, C.daysBetween(from, asOf)) : 0;
+  const accrued = asOf > from ? C.interestFor(principal, st.rate, C.daysBetween(from, asOf)) : 0;
   const charges = unpaidCharges(st);
   const rule = (loan.product.fees ?? []).find((f) => f.event === 'PRECLOSURE');
   const fc = rule && principal > 0 ? C.computeFee(rule, principal, loan.supplierState, loan.recipientState) : null;
@@ -521,14 +536,14 @@ function cancellationTotal(loan: StoredLoan, asOf: string): number {
 }
 
 // ------------------------------------------------------------------ views
-function customerOf(db: MockDb, loan: StoredLoan) {
+export function customerOf(db: MockDb, loan: StoredLoan) {
   return db.customers.find((c) => c.id === loan.customerId);
 }
 
 function principalOutstanding(loan: StoredLoan): number {
   const st = loan.state;
   if (!loan.disbursedOn || st.closedOn) return 0;
-  return loan.amount - st.principalPaid;
+  return loan.amount + st.capitalised - st.principalPaid;
 }
 
 export function summaryView(db: MockDb, loan: StoredLoan): LoanSummary {
@@ -571,6 +586,10 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     kfsAcceptedAt: loan.kfsAcceptedAt,
     externalRef: loan.externalRef,
     closedOn: st.closedOn,
+    currentRate: C.pct(st.rate),
+    restructuredOn: st.restructuredOn,
+    restructureCount: st.restructureCount,
+    upgradeNotBefore: st.restructuredOn ? st.upgradeNotBefore : null,
   };
 }
 
@@ -585,6 +604,8 @@ export function scheduleView(loan: StoredLoan): LoanSchedule {
       interestDue: C.fromPaise(d.interestDue),
       principalPaid: C.fromPaise(d.principalPaid),
       interestPaid: C.fromPaise(d.interestPaid),
+      principalRescheduled: C.fromPaise(d.principalRescheduled),
+      interestCapitalised: C.fromPaise(d.interestCapitalised),
     })),
     charges: st.charges.map((c) => ({
       id: c.id,
@@ -622,7 +643,7 @@ function txnView(e: StoredLoanEvent): LoanTxn {
 const txnLabel = (e: StoredLoanEvent) => `#${e.seq} ${e.type}${e.amount !== null ? ` ${inr(e.amount)}` : ''} on ${formatDate(e.valueDate)}`;
 
 // ------------------------------------------------------------------ mutations
-function addEvent(db: MockDb, loan: StoredLoan, by: string, at: string, e: Pick<StoredLoanEvent, 'type' | 'valueDate' | 'amount' | 'summary'> & Partial<StoredLoanEvent>): StoredLoanEvent {
+export function addEvent(db: MockDb, loan: StoredLoan, by: string, at: string, e: Pick<StoredLoanEvent, 'type' | 'valueDate' | 'amount' | 'summary'> & Partial<StoredLoanEvent>): StoredLoanEvent {
   const ev: StoredLoanEvent = {
     id: uuid(),
     seq: loan.events.reduce((m, x) => Math.max(m, x.seq), 0) + 1,
@@ -668,6 +689,7 @@ function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate:
     netDisbursed: null,
     frozen: false,
     events: [],
+    amendments: [],
     state: undefined as unknown as LoanState,
   };
   loan.state = replay(loan, db.businessDate);
@@ -735,6 +757,7 @@ export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: {
       if (!target) throw notFound('Transaction');
       if (target.reversedBy) throw conflict('Transaction already reversed');
       const later = loan.events.filter((e) => FINANCIAL.has(e.type) && !e.reversedBy && e.seq > target.seq);
+      if (later.some((e) => e.type === 'RESTRUCTURE')) throw conflict('Loan was restructured since', 'A restructure cannot be reversed, so nothing before it can be either');
       const rev = addEvent(db, loan, checker, at, {
         type: 'REVERSAL',
         valueDate: db.businessDate,
@@ -744,6 +767,7 @@ export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: {
         data: { reason: p.reason },
       });
       for (const e of [target, ...later]) e.reversedBy = rev.id;
+      for (const am of loan.amendments) if ([target, ...later].some((e) => e.id === am.txnId)) am.reversedBy = rev.id;
       refreshLoan(db, loan);
       appendAudit(db, at, checker, 'LOAN_TXN_REVERSED', 'LOAN', loan.id, { txnId: target.id, alsoReversed: later.map((e) => e.id) });
       return true;
@@ -1175,6 +1199,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (txn.reversedBy) throw conflict('Transaction already reversed');
     if (hasPending('LOAN_REVERSAL', (p) => p.kind === 'LOAN_REVERSAL' && p.loanId === loan.id)) throw conflict('Reversal already pending', `Loan ${loan.loanNo} already has a reversal awaiting approval`);
     const later = loan.events.filter((e) => FINANCIAL.has(e.type) && !e.reversedBy && e.seq > txn.seq);
+    if (later.some((e) => e.type === 'RESTRUCTURE')) throw conflict('Loan was restructured since', 'A restructure cannot be reversed, so nothing before it can be either');
     return propose(
       user, 'LOAN_REVERSAL', 'REVERSE',
       { kind: 'LOAN_REVERSAL', loanId: loan.id, txnId: txn.id, reason },

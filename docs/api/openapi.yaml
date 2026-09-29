@@ -168,7 +168,7 @@ paths:
       operationId: proposeEnumeration
       summary: Add or change values of one enumeration type (maker-checker; values are deactivated, never deleted)
       parameters:
-        - { name: type, in: path, required: true, schema: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,40}$' } }
+        - { name: type, in: path, required: true, schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,40}$' } }
       requestBody:
         required: true
         content:
@@ -1387,6 +1387,15 @@ components:
         status: { type: integer }
         detail: { type: string }
         instance: { type: string }
+        errors:
+          type: array
+          description: Field-level problems (validation), when there are several
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
     Me:
       type: object
       required: [userId, displayName, tenant, businessDate, permissions, modules]
@@ -1448,6 +1457,7 @@ components:
         code: { type: string }
         label: { type: string }
         active: { type: boolean }
+        sortOrder: { type: integer }
     EnumValueInput:
       type: object
       required: [code, label]
@@ -1535,7 +1545,7 @@ components:
       required: [id, entityType, action, status, maker, madeAt]
       properties:
         id: { type: string, format: uuid }
-        entityType: { type: string, examples: [CUSTOMER, BRANCH, GL_HEAD, VOUCHER, TAX_RATE, HOLIDAY, EOD_SCHEDULE] }
+        entityType: { type: string, examples: [CUSTOMER, BRANCH, BRANCH_SET, STAFF, GL_HEAD, VOUCHER, TAX_RATE, HOLIDAY, TERRITORY, ENUMERATION, SYSTEM_PROPERTY, EOD_SCHEDULE, LOAN_PRODUCT, LOAN_DISBURSEMENT, LOAN_WAIVER, LOAN_REVERSAL, LOAN_AMENDMENT, LOAN_RESTRUCTURE] }
         entityId: { type: [string, 'null'] }
         action: { type: string, examples: [CREATE, UPDATE, REVERSE] }
         status: { $ref: '#/components/schemas/ApprovalStatus' }
@@ -1546,6 +1556,9 @@ components:
         note: { type: [string, 'null'] }
         amount: { oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ] }
         ageHours: { type: number, description: SLA ageing }
+        checkersRequired: { type: integer, description: 'Distinct checkers needed (0-3), from the approval rules' }
+        approvalsSoFar: { type: integer, description: Approvals already recorded while PENDING }
+        appliedRef: { type: [string, 'null'], description: 'What the approval produced (customer id, voucher number …)' }
         current: { type: [object, 'null'], description: State before the change (null for CREATE) }
         proposed: { type: object, description: Proposed state }
     Decision:

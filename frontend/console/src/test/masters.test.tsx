@@ -90,8 +90,8 @@ describe('system properties and enumerations', () => {
   it('deactivates and adds enumeration values (never deletes)', async () => {
     const user = userEvent.setup();
     const { server } = renderApp({ user: 'maker', route: '/masters/enumerations' });
-    await user.click(await screen.findByRole('row', { name: 'Open enumeration LOAN_PURPOSE' }));
-    expect(await screen.findByRole('heading', { name: 'Enumeration LOAN_PURPOSE' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('row', { name: 'Open enumeration loan-purpose' }));
+    expect(await screen.findByRole('heading', { name: 'Enumeration loan-purpose' })).toBeInTheDocument();
     const submit = screen.getByRole('button', { name: 'Submit for approval' });
     expect(submit).toBeDisabled();
     await user.click(screen.getByRole('checkbox', { name: 'Active: TRAVEL' }));
@@ -100,13 +100,18 @@ describe('system properties and enumerations', () => {
     await user.type(screen.getByLabelText('Label of new value 6'), 'Wedding');
     expect(screen.getByText('2 value(s) changed or added')).toBeInTheDocument();
     await user.click(submit);
-    expect(await screen.findByText('2 value change(s) to LOAN_PURPOSE sent for approval.')).toBeInTheDocument();
+    expect(await screen.findByText('2 value change(s) to loan-purpose sent for approval.')).toBeInTheDocument();
     const a = server.db.approvals.find((s) => s.approval.entityType === 'ENUMERATION')!;
     await mockCall(server, 'checker', 'POST', `/api/v1/approvals/${a.approval.id}/approve`, {});
-    const values = (await mockCall(server, 'maker', 'GET', '/api/v1/enumerations/LOAN_PURPOSE')).body as Array<{ code: string; active: boolean }>;
+    const values = (await mockCall(server, 'maker', 'GET', '/api/v1/enumerations/loan-purpose')).body as Array<{ code: string; active: boolean }>;
     expect(values).toHaveLength(6);
     expect(values.find((v) => v.code === 'TRAVEL')).toMatchObject({ active: false });
     expect(values.find((v) => v.code === 'WEDDING')).toMatchObject({ active: true });
+    expect(values.find((v) => v.code === 'EDUCATION')).toMatchObject({ sortOrder: 10 });
+    expect(values.find((v) => v.code === 'WEDDING')).toMatchObject({ sortOrder: 60 });
+    // Types are lower-case kebab; upper-case names are refused
+    const bad = await mockCall(server, 'maker', 'POST', '/api/v1/enumerations/LOAN_PURPOSE', [{ code: 'X', label: 'X' }]);
+    expect(bad.status).toBe(422);
   });
 });
 

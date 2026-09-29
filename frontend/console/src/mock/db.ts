@@ -1,4 +1,5 @@
 import type {
+  AmendmentRequest,
   Approval,
   AssetClass,
   AuditEvent,
@@ -11,10 +12,12 @@ import type {
   GlHead,
   Holiday,
   LedgerEntry,
+  LoanAmendment,
   LoanKfs,
   LoanProduct,
   LoanStatus,
   PincodePlace,
+  RestructureTerms,
   Staff,
   State,
   TaxRate,
@@ -48,6 +51,8 @@ export type ApprovalPayload =
   | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
   | { kind: 'LOAN_REVERSAL'; loanId: string; txnId: string; reason: string }
+  | { kind: 'LOAN_AMENDMENT'; loanId: string; request: AmendmentRequest; figures: Record<string, unknown> }
+  | { kind: 'LOAN_RESTRUCTURE'; loanId: string; terms: RestructureTerms; figures: Record<string, unknown> }
   | { kind: 'STAFF'; staff: StoredStaff }
   | { kind: 'BRANCH_SET'; set: BranchSet }
   | { kind: 'SYSTEM_PROPERTY'; key: string; value: string; description: string | null }
@@ -92,8 +97,13 @@ export interface StoredLoanEvent {
     code?: string;
     name?: string;
     reason?: string;
+    amendment?: AmendmentRequest;
+    restructure?: RestructureTerms;
   };
 }
+
+/** History row (amendments and restructures), as returned by GET /loans/{id}/amendments. */
+export type StoredAmendment = LoanAmendment & { id: string; txnId: string };
 
 export interface DemandState {
   no: number;
@@ -102,6 +112,10 @@ export interface DemandState {
   interestDue: number;
   principalPaid: number;
   interestPaid: number;
+  /** Unpaid principal moved into a restructured schedule. */
+  principalRescheduled: number;
+  /** Unpaid interest capitalised on restructuring. */
+  interestCapitalised: number;
 }
 
 export interface ChargeState {
@@ -129,6 +143,13 @@ export interface LoanState {
   /** Date up to which interest has been demanded (last raised due date, or disbursal). */
   lastInterestDate: string | null;
   emi: number | null;
+  /** Rate now charged (% p.a.); amendments and restructures change it. */
+  rate: number;
+  /** Interest capitalised into principal by restructures (paise). */
+  capitalised: number;
+  restructuredOn: string | null;
+  restructureCount: number;
+  upgradeNotBefore: string | null;
   npaSince: string | null;
   dpd: number;
   assetClass: AssetClass;
@@ -162,6 +183,7 @@ export interface StoredLoan {
   netDisbursed: number | null;
   frozen: boolean;
   events: StoredLoanEvent[];
+  amendments: StoredAmendment[];
   /** Derived state as of the last refresh (after every change and every day-end). */
   state: LoanState;
 }
@@ -169,7 +191,12 @@ export interface StoredLoan {
 export interface StoredApproval {
   approval: Approval;
   payload: ApprovalPayload;
+  /** Checkers who approved so far (a request needing several stays PENDING until approval.checkersRequired distinct ones). */
+  approvedBy?: string[];
 }
+
+/** Voucher amount from which the backend's approval rule asks for two checkers (₹10 lakh). */
+export const TWO_CHECKER_VOUCHER_AMOUNT = '1000000.00';
 
 export interface AuditRecord extends Required<Omit<AuditEvent, 'entityId' | 'detail'>> {
   entityId: string | null;

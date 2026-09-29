@@ -21,6 +21,7 @@ import { IFSC_PATTERN } from '../../lib/mask';
 import { Banner, Button, Dialog, ErrorBanner, Input, MoneyText, Select, Spinner, Textarea, humanize, useToast } from '../../ui';
 import { useProposalToast } from '../proposal';
 import { moneyInput } from './common';
+import { AmendDialog, RestructureDialog } from './restructuring';
 
 export type LoanAction =
   | { kind: 'disburse' }
@@ -32,6 +33,8 @@ export type LoanAction =
   | { kind: 'freeze' }
   | { kind: 'unfreeze' }
   | { kind: 'kfs' }
+  | { kind: 'amend' }
+  | { kind: 'restructure' }
   | { kind: 'waive'; charge: LoanCharge }
   | { kind: 'reverse'; txn: LoanTxn };
 
@@ -54,6 +57,10 @@ export function LoanActionDialog({ action, loan, businessDate, onClose }: { acti
       return <FreezeDialog loan={loan} freeze={action.kind === 'freeze'} onClose={onClose} />;
     case 'kfs':
       return <KfsAcceptanceDialog loan={loan} onClose={onClose} />;
+    case 'amend':
+      return <AmendDialog loan={loan} onClose={onClose} />;
+    case 'restructure':
+      return <RestructureDialog loan={loan} onClose={onClose} />;
     case 'waive':
       return <WaiveDialog loan={loan} charge={action.charge} onClose={onClose} />;
     case 'reverse':

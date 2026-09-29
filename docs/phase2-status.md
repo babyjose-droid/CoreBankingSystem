@@ -112,6 +112,16 @@ Updated 29-Sep-2026. Source: product backlog v1.0, 51 Phase 2 stories. Built in 
 - **Database rules:** 21 SQL checks (`lending_rules_test.sql`).
 - **JSON:** a round-trip test for the stored loan state runs in CI.
 
+## P2-1d console screens
+
+- **Lending:** loan products (list, detail, propose), loans list with search and filters, new loan with preview (EMI, APR, fees and GST, schedule, KFS) and create, loan detail with Schedule, Transactions, KFS and Amendments tabs.
+- **Servicing actions** (each only with its permission and in the right loan state): disburse, repayment, part-prepayment, pre-closure (quote then confirm), cooling-off cancellation, charge and waive fees, reverse, freeze/unfreeze, amend (preview then propose) and restructure (up to 3 simulated options side by side, two checkers).
+- **Masters:** staff and branch scope, branch sets, territory (states, pincode lookup, upload), system properties, enumerations; CSV uploads with templates for holidays, territory and vouchers.
+- **Approvals:** shows multi-checker progress ("1 of 2 approvals") and what an approval produced.
+- **Tests:** 138 console tests in mock mode.
+- **Contract fixes made with it:** enumeration types are kebab-case (V15); enumeration values return `sortOrder`; validation problems carry `errors[{field, message}]`; the Approval schema documents `checkersRequired`, `approvalsSoFar`, `appliedRef`.
+- **Open:** the queue cannot yet tell a checker that they already approved a two-checker request (the second click gets 409); a floating-rate reset above the product's rate band is refused — decide whether resets may exceed the band (D-14).
+
 ## P2-3 amendments and restructure
 
 ### What was built
@@ -187,13 +197,12 @@ Updated 29-Sep-2026. Source: product backlog v1.0, 51 Phase 2 stories. Built in 
 - **JSON:** the stored loan state round-trips with the new fields, and state stored before this increment still loads at the booked rate (`LoanStateJsonTest`).
 
 ### Not yet built in P2-3
-- Console screens (P2-1d).
 - FITL as a separate facility.
 - Diminution-in-fair-value provisioning from the NPV loss.
 - Borrower communication of a rate reset (letter or SMS, P2-2/P2-4).
 
 ### Not yet built in P2-1
-- **P2-1d:** the console's loan screens. The partial work is parked and continues next.
+- **P2-1d:** console screens — built, see the P2-1d section below.
 - **P2-2:** payout gateway, NACH presentation and responses, collection webhooks, SMS and email, signed webhooks, OAuth clients, LOS integration.
   - These need decision D-09 and sandbox credentials from the partners.
 - **P2-3:** amendments and restructure — built, see the P2-3 section above.

@@ -198,7 +198,9 @@
               "loan:reverse",
               "staff:view",
               "master:view",
-              "master:propose"
+              "master:propose",
+              "loan:amend",
+              "loan:restructure"
             ]
           }
         }
@@ -310,7 +312,9 @@
               "staff:view",
               "staff:propose",
               "master:view",
-              "master:propose"
+              "master:propose",
+              "loan:amend",
+              "loan:restructure"
             ]
           }
         }
@@ -515,6 +519,18 @@
           "description": "Propose territory, enumeration and system-property changes",
           "composite": false,
           "clientRole": true
+        },
+        {
+          "name": "loan:amend",
+          "description": "Propose loan amendments (rate, tenure, EMI, due day)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:restructure",
+          "description": "Propose loan restructuring",
+          "composite": false,
+          "clientRole": true
         }
       ]
     }
@@ -715,7 +731,9 @@
           "staff:view",
           "staff:propose",
           "master:view",
-          "master:propose"
+          "master:propose",
+          "loan:amend",
+          "loan:restructure"
         ]
       },
       {
@@ -753,7 +771,9 @@
           "staff:view",
           "staff:propose",
           "master:view",
-          "master:propose"
+          "master:propose",
+          "loan:amend",
+          "loan:restructure"
         ]
       }
     ]

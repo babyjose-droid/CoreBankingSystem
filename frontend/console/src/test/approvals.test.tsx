@@ -1,8 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { formatAge, slaClass } from '../pages/ApprovalsPage';
-import { renderApp } from './utils';
+import { approvalProgress, formatAge, slaClass } from '../pages/ApprovalsPage';
+import { createMockServer } from '../mock/server';
+import { mockCall, renderApp } from './utils';
 
 describe('approvals queue', () => {
   it('counts only requests the user can act on in the header badge', async () => {
@@ -89,5 +90,51 @@ describe('approvals queue', () => {
     await user.click(screen.getByRole('button', { name: 'Approve selected (4)' }));
     expect(await screen.findByText('Approved 4 of 4.')).toBeInTheDocument();
     expect(await screen.findByText('No approval requests match these filters')).toBeInTheDocument();
+  });
+});
+
+describe('multi-checker approvals', () => {
+  it('formats progress from checkersRequired / approvalsSoFar, with the note as a fallback', () => {
+    expect(approvalProgress({ status: 'PENDING', checkersRequired: 2, approvalsSoFar: 1 })).toBe('1 of 2 approvals');
+    expect(approvalProgress({ status: 'PENDING', checkersRequired: 1, approvalsSoFar: 0 })).toBeNull();
+    expect(approvalProgress({ status: 'APPROVED', checkersRequired: 2, approvalsSoFar: 2 })).toBeNull();
+    expect(approvalProgress({ status: 'PENDING', note: 'First approval by checker. Needs a second checker.' })).toBe('1 of 2 approvals');
+    expect(approvalProgress({ status: 'PENDING', note: 'fine' })).toBeNull();
+  });
+
+  it('vouchers of ₹10 lakh or more need two checkers; smaller ones one', async () => {
+    const server = createMockServer();
+    const voucher = (amount: string) => ({
+      voucherType: 'JOURNAL', valueDate: '2026-06-30', description: 'CLAUDE-TEST big journal',
+      lines: [{ branch: 'HO', glCode: '1210', side: 'DR', amount }, { branch: 'HO', glCode: '4101', side: 'CR', amount }],
+    });
+    const big = await mockCall(server, 'maker', 'POST', '/api/v1/gl/vouchers', voucher('1000000.00'));
+    expect(big.body).toMatchObject({ checkersRequired: 2, approvalsSoFar: 0 });
+    const small = await mockCall(server, 'maker', 'POST', '/api/v1/gl/vouchers', voucher('999999.99'));
+    expect(small.body).toMatchObject({ checkersRequired: 1, approvalsSoFar: 0 });
+    const once = await mockCall(server, 'checker', 'POST', `/api/v1/approvals/${big.body.id}/approve`, {});
+    expect(once.body).toMatchObject({ status: 'PENDING', approvalsSoFar: 1, appliedRef: null });
+    const done = await mockCall(server, 'admin', 'POST', `/api/v1/approvals/${big.body.id}/approve`, {});
+    expect(done.body).toMatchObject({ status: 'APPROVED', approvalsSoFar: 2 });
+    expect(done.body.appliedRef).toMatch(/^\S+$/);
+    expect(server.db.vouchers.some((v) => v.voucherNo === done.body.appliedRef)).toBe(true);
+  });
+
+  it('shows "1 of 2 approvals" in the queue and the drawer', async () => {
+    const user = userEvent.setup();
+    const server = createMockServer();
+    const big = await mockCall(server, 'maker', 'POST', '/api/v1/gl/vouchers', {
+      voucherType: 'JOURNAL', valueDate: '2026-06-30', description: 'CLAUDE-TEST twelve lakh',
+      lines: [{ branch: 'HO', glCode: '1210', side: 'DR', amount: '1200000.00' }, { branch: 'HO', glCode: '4101', side: 'CR', amount: '1200000.00' }],
+    });
+    await mockCall(server, 'checker', 'POST', `/api/v1/approvals/${big.body.id}/approve`, {});
+    renderApp({ user: 'admin', route: '/approvals', server });
+    const row = (await screen.findByText('CLAUDE-TEST twelve lakh')).closest('tr')!;
+    expect(within(row).getByText('1 of 2 approvals')).toBeInTheDocument();
+    await user.click(row);
+    const d = await screen.findByRole('dialog');
+    expect(within(d).getByTestId('approval-checkers')).toHaveTextContent('2 different checkers required; 1 recorded so far');
+    await user.click(await within(d).findByRole('button', { name: 'Approve' }));
+    expect(await screen.findByText('Approved and applied.')).toBeInTheDocument();
   });
 });

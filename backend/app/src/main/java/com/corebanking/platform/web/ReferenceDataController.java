@@ -238,7 +238,7 @@ class ReferenceDataController {
     @PreAuthorize("hasAuthority('master:propose')")
     @ResponseStatus(HttpStatus.ACCEPTED)
     Map<String, Object> proposeEnumeration(@PathVariable String type, @RequestBody List<EnumValue> values) {
-        if (!type.matches("[A-Z][A-Z0-9_]{1,40}")) throw ApiException.invalid("type must be capitals, digits or _");
+        if (!type.matches("[a-z][a-z0-9-]{1,40}")) throw ApiException.invalid("type must be lower-case letters, digits or -, e.g. customer-type");
         if (values == null || values.isEmpty() || values.size() > 500) throw ApiException.invalid("send 1 to 500 values");
         Set<String> codes = new LinkedHashSet<>();
         List<EnumValue> normalised = new ArrayList<>();

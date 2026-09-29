@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useBusinessDay, useMe } from '../../api/hooks';
-import { useLoan, useLoanKfs, useLoanSchedule, useLoanTransactions } from '../../api/lendingHooks';
+import { useLoan, useLoanAmendments, useLoanKfs, useLoanSchedule, useLoanTransactions } from '../../api/lendingHooks';
 import type { Loan, LoanCharge, LoanDemand, LoanTxn } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { addDays } from '../../lib/dates';
@@ -10,8 +10,9 @@ import { Badge, Banner, Button, Card, DateText, DateTimeText, EmptyState, ErrorB
 import { AssetClassBadge, Stat, pct } from './common';
 import { KfsView, ScheduleTable } from './KfsView';
 import { LoanActionDialog, type LoanAction } from './loanActions';
+import { amendmentKindLabel } from './restructuring';
 
-const REVERSIBLE = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION']);
+const REVERSIBLE = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION', 'AMENDMENT']);
 
 export function LoanDetailPage() {
   const { id } = useParams();
@@ -39,6 +40,8 @@ export function LoanDetailPage() {
     { key: 'preclose', label: 'Pre-closure', show: can(P.loanRepay) && active },
     { key: 'cancel', label: 'Cancel (cooling-off)', show: can(P.loanRepay) && inCoolingOff },
     { key: 'charge', label: 'Charge fee', show: can(P.loanRepay) && active },
+    { key: 'amend', label: 'Amend', show: can(P.loanAmend) && active && loan.repaymentMethod === 'EQUATED' },
+    { key: 'restructure', label: 'Restructure', show: can(P.loanRestructure) && active && loan.repaymentMethod === 'EQUATED', variant: 'danger' },
     { key: 'freeze', label: 'Freeze', show: can(P.loanAdmin) && active, variant: 'danger' },
     { key: 'unfreeze', label: 'Unfreeze', show: can(P.loanAdmin) && status === 'FROZEN' },
   ];
@@ -72,6 +75,15 @@ export function LoanDetailPage() {
         }
       />
       {status === 'FROZEN' && <Banner tone="warn">This loan is frozen: repayments and other transactions are blocked until it is unfrozen. Interest keeps accruing.</Banner>}
+      {loan.restructuredOn && (
+        <Banner tone="warn">
+          <span>
+            Restructured on <DateText value={loan.restructuredOn} />
+            {(loan.restructureCount ?? 1) > 1 ? ` (${loan.restructureCount} times)` : ''}. Under monitoring: the account cannot be upgraded before{' '}
+            <DateText value={loan.upgradeNotBefore} />.
+          </span>
+        </Banner>
+      )}
       {status === 'SANCTIONED' && !loan.kfsAcceptedAt && <Banner tone="info">Sanctioned. The borrower has not accepted the Key Fact Statement yet; record it on the KFS tab before disbursement.</Banner>}
       {visible.length > 0 && (
         <div className="action-bar" role="toolbar" aria-label="Loan actions">
@@ -90,6 +102,7 @@ export function LoanDetailPage() {
         tabs={[
           { id: 'schedule', label: 'Schedule', content: <ScheduleTab loan={loan} canWaive={can(P.loanWaive)} onWaive={(charge) => setAction({ kind: 'waive', charge })} /> },
           { id: 'transactions', label: 'Transactions', content: <TransactionsTab loan={loan} canReverse={can(P.loanReverse)} onReverse={(txn) => setAction({ kind: 'reverse', txn })} /> },
+          { id: 'amendments', label: 'Amendments', content: <AmendmentsTab loan={loan} /> },
           {
             id: 'kfs',
             label: 'KFS',
@@ -148,8 +161,13 @@ function LoanSummaryStats({ loan, coolingOffEnd }: { loan: Loan; coolingOffEnd: 
         )}
       </Stat>
       <Stat label="EMI">{loan.emi ? <MoneyText value={loan.emi} /> : <span className="muted">—</span>}</Stat>
-      <Stat label="Rate / APR">
-        {pct(loan.rate)} / {loan.apr ? pct(loan.apr) : '—'}
+      <Stat label="Rate / APR" testId="stat-rate">
+        {pct(loan.currentRate ?? loan.rate)} / {loan.apr ? pct(loan.apr) : '—'}
+        {loan.currentRate && loan.rate && Number(loan.currentRate) !== Number(loan.rate) && (
+          <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+            sanctioned at {pct(loan.rate)}
+          </div>
+        )}
       </Stat>
       <Stat label="Tenor">
         {loan.tenorMonths} months <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>{humanize(loan.repaymentMethod ?? '')}</span>
@@ -181,10 +199,11 @@ function LoanSummaryStats({ loan, coolingOffEnd }: { loan: Loan; coolingOffEnd: 
   );
 }
 
-function demandState(d: LoanDemand): { label: string; tone: 'ok' | 'warn' | 'danger' } {
+function demandState(d: LoanDemand): { label: string; tone: 'ok' | 'warn' | 'danger' | 'info' } {
   const due = addMoney(d.principalDue ?? '0', d.interestDue ?? '0');
   const paid = addMoney(d.principalPaid ?? '0', d.interestPaid ?? '0');
-  if (isZero(subtractMoney(due, paid))) return { label: 'Paid', tone: 'ok' };
+  const moved = addMoney(d.principalRescheduled ?? '0', d.interestCapitalised ?? '0');
+  if (isZero(subtractMoney(due, paid))) return isZero(moved) ? { label: 'Paid', tone: 'ok' } : { label: 'Rescheduled', tone: 'info' };
   if (isZero(paid)) return { label: 'Unpaid', tone: 'danger' };
   return { label: 'Part paid', tone: 'warn' };
 }
@@ -295,6 +314,46 @@ function TransactionsTab({ loan, canReverse, onReverse }: { loan: Loan; canRever
         rows={rows}
         rowKey={(t) => t.id ?? String(t.seq)}
         empty={<EmptyState title="No transactions yet" />}
+      />
+    </Card>
+  );
+}
+
+function AmendmentsTab({ loan }: { loan: Loan }) {
+  const q = useLoanAmendments(loan.id);
+  if (q.isLoading) return <Spinner />;
+  if (q.error) return <ErrorBanner error={q.error} />;
+  const arrow = (a: unknown, b: unknown) => (String(a ?? '') === String(b ?? '') ? String(b ?? '—') : `${String(a ?? '—')} → ${String(b ?? '—')}`);
+  return (
+    <Card flush>
+      <Table
+        caption="Amendment and restructure history"
+        captionHidden
+        columns={[
+          { key: 'seq', header: '#', numeric: true, render: (a) => a.seq },
+          { key: 'kind', header: 'Change', render: (a) => (a.kind === 'RESTRUCTURE' ? <Badge tone="danger">Restructure</Badge> : amendmentKindLabel(a.kind)) },
+          { key: 'date', header: 'Business date', render: (a) => <DateText value={a.businessDate} /> },
+          { key: 'rate', header: 'Rate %', render: (a) => arrow(a.rateBefore, a.rateAfter) },
+          { key: 'emi', header: 'EMI', render: (a) => arrow(a.emiBefore, a.emiAfter) },
+          { key: 'tenure', header: 'Instalments left', render: (a) => arrow(a.tenureBefore, a.tenureAfter) },
+          { key: 'maturity', header: 'Maturity', render: (a) => (<span><DateText value={a.maturityBefore} /> → <DateText value={a.maturityAfter} /></span>) },
+          { key: 'interest', header: 'Interest to come', render: (a) => (<span><MoneyText value={a.interestBefore} /> → <MoneyText value={a.interestAfter} /></span>) },
+          { key: 'who', header: 'Maker / checker', render: (a) => <span className="mono">{a.madeBy} / {a.checkedBy}</span> },
+          { key: 'reason', header: 'Reason', render: (a) => a.reason ?? '' },
+          {
+            key: 'flags',
+            header: <span className="sr-only">Flags</span>,
+            render: (a) => (
+              <span className="row" style={{ gap: 4 }}>
+                {a.differsFromProposal && <Badge tone="warn" title="The loan changed after the proposal; the figures at approval were applied">Differs from proposal</Badge>}
+                {a.reversedBy && <Badge>Reversed</Badge>}
+              </span>
+            ),
+          },
+        ]}
+        rows={q.data ?? []}
+        rowKey={(a) => a.id ?? String(a.seq)}
+        empty={<EmptyState title="No amendments or restructures" />}
       />
     </Card>
   );

@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApiClient } from './useApiClient';
 import { unwrap, unwrapWithStatus } from './client';
 import type {
+  AmendmentPreview,
+  AmendmentRequest,
   Approval,
   CancellationQuote,
   Loan,
@@ -11,9 +13,12 @@ import type {
   LoanSchedule,
   LoanStatus,
   LoanSummary,
+  LoanAmendment,
   LoanTxn,
   Money,
   PreclosureQuote,
+  RestructureSimulation,
+  RestructureTerms,
 } from './types';
 
 // ---------- products ----------
@@ -252,6 +257,49 @@ export function useFreezeLoan(id: string) {
           ? api.POST('/api/v1/loans/{id}/freeze', { params: { path: { id } }, body: { reason } })
           : api.POST('/api/v1/loans/{id}/unfreeze', { params: { path: { id } }, body: { reason } }),
       ),
+    onSuccess: after,
+  });
+}
+
+// ---------- amendments and restructure ----------
+export function useLoanAmendments(id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['loan', id, 'amendments'],
+    queryFn: () => unwrap<LoanAmendment[]>(api.GET('/api/v1/loans/{id}/amendments', { params: { path: { id: id! } } })),
+    enabled: !!id,
+  });
+}
+
+export function usePreviewAmendment(id: string) {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: (req: AmendmentRequest) => unwrap<AmendmentPreview>(api.POST('/api/v1/loans/{id}/amendments/preview', { params: { path: { id } }, body: req })),
+  });
+}
+
+export function useProposeAmendment(id: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: (req: AmendmentRequest) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/amendments', { params: { path: { id } }, body: req }) as never),
+    onSuccess: after,
+  });
+}
+
+export function useSimulateRestructure(id: string) {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: (options: RestructureTerms[]) =>
+      unwrap<RestructureSimulation>(api.POST('/api/v1/loans/{id}/restructure/simulation', { params: { path: { id } }, body: { options } })),
+  });
+}
+
+export function useProposeRestructure(id: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: (terms: RestructureTerms) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/restructure', { params: { path: { id } }, body: terms }) as never),
     onSuccess: after,
   });
 }

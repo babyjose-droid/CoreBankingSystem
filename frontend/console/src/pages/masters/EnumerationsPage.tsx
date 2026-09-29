@@ -52,7 +52,7 @@ interface Row {
 /** Accessible name of a row: its code, or "new value N" while the code is being typed. */
 const nameOf = (r: Row) => (r.isNew ? `new value ${r.key}` : r.code);
 
-const toRows = (values: EnumValue[]): Row[] => values.map((v, i) => ({ key: i + 1, code: v.code, label: v.label, sortOrder: String((i + 1) * 10), active: v.active ?? true, isNew: false }));
+const toRows = (values: EnumValue[]): Row[] => values.map((v, i) => ({ key: i + 1, code: v.code, label: v.label, sortOrder: String(v.sortOrder ?? (i + 1) * 10), active: v.active ?? true, isNew: false }));
 
 export function EnumerationValuesPage() {
   const { type = '' } = useParams();

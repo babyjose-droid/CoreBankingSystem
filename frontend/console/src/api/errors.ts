@@ -1,16 +1,14 @@
 import type { Problem } from './types';
 
-export interface FieldError {
-  field: string;
-  message: string;
-}
+/** Field-level problem (Problem.errors items in the contract). */
+export type FieldError = NonNullable<Problem['errors']>[number];
 
 /** RFC 9457 problem details, typed. `errors` is an optional extension member used for field validation. */
 export class ApiError extends Error {
   readonly status: number;
-  readonly problem: Problem & { errors?: FieldError[] };
+  readonly problem: Problem;
 
-  constructor(status: number, problem: Problem & { errors?: FieldError[] }) {
+  constructor(status: number, problem: Problem) {
     super(problem.detail || problem.title || `Request failed (${status})`);
     this.name = 'ApiError';
     this.status = status;
@@ -27,7 +25,7 @@ export class ApiError extends Error {
 
   static fromResponse(response: Response, body: unknown): ApiError {
     if (body && typeof body === 'object') {
-      const p = body as Problem & { errors?: FieldError[] };
+      const p = body as Problem;
       return new ApiError(response.status, { status: response.status, ...p });
     }
     return new ApiError(response.status, {

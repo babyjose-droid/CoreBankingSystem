@@ -118,12 +118,13 @@ class MasterDataController {
     // ---- enumerations ------------------------------------------------------------------------
     @GetMapping("/enumerations/{type}")
     List<Map<String, Object>> enumeration(@PathVariable String type) {
-        return jdbc.query("SELECT code, label, active FROM platform.enumeration WHERE enum_type = ? ORDER BY sort_order, label",
+        return jdbc.query("SELECT code, label, active, sort_order FROM platform.enumeration WHERE enum_type = ? ORDER BY sort_order, label",
                 (rs, i) -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("code", rs.getString(1));
                     m.put("label", rs.getString(2));
                     m.put("active", rs.getBoolean(3));
+                    m.put("sortOrder", rs.getInt(4));
                     return m;
                 }, type);
     }

@@ -969,6 +969,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loans/{id}/amendments/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Before/after figures and the new schedule for a rate, tenure, EMI or due-day change (nothing changes)
+         * @description Same engine as the posting. Rate resets follow RBI's 18-Aug-2023 circular on floating-rate EMI loans: the borrower keeps the EMI and changes the tenure, keeps the tenure and changes the EMI, or changes both. A tenure extension may not pass the product's maximum tenure and the EMI must cover the monthly interest. Extending the tenure or lowering the EMI of a borrower in arrears is refused (409): that is a restructure.
+         */
+        post: operations["previewLoanAmendment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/amendments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Amendment and restructure history (newest first) */
+        get: operations["listLoanAmendments"];
+        put?: never;
+        /**
+         * Propose an amendment (maker-checker, entity LOAN_AMENDMENT); applied on approval
+         * @description The approval re-runs the engine on the loan as it is then. If the figures differ from those proposed (the loan changed in between), the current figures are applied and both are kept in the history. Amendments move no money and can be reversed like any other loan transaction.
+         */
+        post: operations["proposeLoanAmendment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/restructure/simulation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Compare up to three restructuring options (schedule, EMI, tenure, interest, NPV at the contract rate) */
+        post: operations["simulateLoanRestructure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/restructure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose a restructure (maker-checker with two checkers, entity LOAN_RESTRUCTURE)
+         * @description RBI Prudential Framework for Resolution of Stressed Assets (7-Jun-2019): a standard account is downgraded to sub-standard; an NPA keeps its class. The account can be upgraded only after the specified period (at least one year from the first payment under the new schedule and 10% of the principal repaid) with no default in that period and no arrears. A restructure cannot be reversed.
+         */
+        post: operations["proposeLoanRestructure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans/{id}/freeze": {
         parameters: {
             query?: never;
@@ -1067,6 +1145,11 @@ export interface components {
             status?: number;
             detail?: string;
             instance?: string;
+            /** @description Field-level problems (validation), when there are several */
+            errors?: {
+                field: string;
+                message: string;
+            }[];
         };
         Me: {
             userId: string;
@@ -1123,6 +1206,7 @@ export interface components {
             code: string;
             label: string;
             active?: boolean;
+            sortOrder?: number;
         };
         EnumValueInput: {
             code: string;
@@ -1200,11 +1284,22 @@ export interface components {
             /**
              * @example CUSTOMER
              * @example BRANCH
+             * @example BRANCH_SET
+             * @example STAFF
              * @example GL_HEAD
              * @example VOUCHER
              * @example TAX_RATE
              * @example HOLIDAY
+             * @example TERRITORY
+             * @example ENUMERATION
+             * @example SYSTEM_PROPERTY
              * @example EOD_SCHEDULE
+             * @example LOAN_PRODUCT
+             * @example LOAN_DISBURSEMENT
+             * @example LOAN_WAIVER
+             * @example LOAN_REVERSAL
+             * @example LOAN_AMENDMENT
+             * @example LOAN_RESTRUCTURE
              */
             entityType: string;
             entityId?: string | null;
@@ -1225,6 +1320,12 @@ export interface components {
             amount?: components["schemas"]["Money"] | null;
             /** @description SLA ageing */
             ageHours?: number;
+            /** @description Distinct checkers needed (0-3), from the approval rules */
+            checkersRequired?: number;
+            /** @description Approvals already recorded while PENDING */
+            approvalsSoFar?: number;
+            /** @description What the approval produced (customer id, voucher number …) */
+            appliedRef?: string | null;
             /** @description State before the change (null for CREATE) */
             current?: Record<string, never> | null;
             /** @description Proposed state */
@@ -1628,6 +1729,16 @@ export interface components {
             externalRef?: string | null;
             /** Format: date */
             closedOn?: string | null;
+            /** @description Rate now charged (rate is the rate as sanctioned) */
+            currentRate?: string;
+            /** Format: date */
+            restructuredOn?: string | null;
+            restructureCount?: number;
+            /**
+             * Format: date
+             * @description Restructured and under monitoring: earliest end of the specified period
+             */
+            upgradeNotBefore?: string | null;
         };
         LoanSchedule: {
             demands?: {
@@ -1638,6 +1749,10 @@ export interface components {
                 interestDue?: string;
                 principalPaid?: string;
                 interestPaid?: string;
+                /** @description Unpaid principal moved into the restructured schedule */
+                principalRescheduled?: string;
+                /** @description Unpaid interest capitalised on restructuring */
+                interestCapitalised?: string;
             }[];
             charges?: {
                 id?: string;
@@ -1670,6 +1785,8 @@ export interface components {
              * @example WAIVER
              * @example REVERSAL
              * @example FREEZE
+             * @example AMENDMENT
+             * @example RESTRUCTURE
              */
             type?: string;
             /** Format: date */
@@ -1683,6 +1800,164 @@ export interface components {
             /** Format: uuid */
             reverses?: string | null;
             createdBy?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        /** @description Fields used depend on kind; reason is required when proposing. */
+        AmendmentRequest: {
+            /** @enum {string} */
+            kind: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE";
+            /** @description RATE_CHANGE: new annual rate, within the product band */
+            newRatePercent?: number | string;
+            /**
+             * @description RATE_CHANGE: the borrower's choice (RBI 18-Aug-2023)
+             * @enum {string}
+             */
+            rateOption?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI" | "CHANGE_BOTH";
+            /** @description TENURE_CHANGE, or CHANGE_BOTH: instalments still to be demanded */
+            remainingInstalments?: number;
+            /** @description EMI_CHANGE, or CHANGE_BOTH instead of remainingInstalments */
+            newEmi?: number | string;
+            /** @description DUE_DAY_CHANGE: day of month; 31 = month end */
+            newDueDay?: number;
+            reason?: string;
+        };
+        AmendmentFigures: {
+            rateBefore?: string;
+            rateAfter?: string;
+            emiBefore?: components["schemas"]["Money"];
+            emiAfter?: components["schemas"]["Money"];
+            remainingBefore?: number;
+            remainingAfter?: number;
+            /** Format: date */
+            nextDueBefore?: string;
+            /** Format: date */
+            nextDueAfter?: string;
+            /** Format: date */
+            maturityBefore?: string;
+            /** Format: date */
+            maturityAfter?: string;
+            interestBefore?: components["schemas"]["Money"];
+            interestAfter?: components["schemas"]["Money"];
+            brokenPeriodInterest?: components["schemas"]["Money"];
+        };
+        AmendmentPreview: components["schemas"]["AmendmentFigures"] & {
+            /** Format: date */
+            asOf?: string;
+            kind?: string;
+            principal?: components["schemas"]["Money"];
+            /** @description Interest accrued since the last due date, carried into the next instalment */
+            accruedInterest?: string;
+            schedule?: components["schemas"]["ScheduleRow"][];
+            currentSchedule?: components["schemas"]["ScheduleRow"][];
+        };
+        /** @description Overdue principal is always rescheduled. A separate funded-interest term loan (FITL) is not offered. */
+        RestructureTerms: {
+            /** @description Omit to keep the current rate */
+            newRatePercent?: number | string | null;
+            remainingInstalments: number;
+            /** @default 0 */
+            principalMoratoriumMonths: number;
+            /** @enum {string} */
+            overdueInterest: "CAPITALISE" | "KEEP_AS_ARREARS";
+            /** @description Required when proposing */
+            reason?: string;
+        };
+        RestructureOption: {
+            newRatePercent?: string | null;
+            remainingInstalments?: number;
+            principalMoratoriumMonths?: number;
+            /** @enum {string} */
+            overdueInterestTreatment?: "CAPITALISE" | "KEEP_AS_ARREARS";
+            classBefore?: components["schemas"]["AssetClass"];
+            classAfter?: components["schemas"]["AssetClass"];
+            principalBefore?: components["schemas"]["Money"];
+            overduePrincipalRescheduled?: components["schemas"]["Money"];
+            overdueInterest?: components["schemas"]["Money"];
+            interestCapitalised?: components["schemas"]["Money"];
+            arrearsKept?: components["schemas"]["Money"];
+            principalAfter?: components["schemas"]["Money"];
+            rateBefore?: string;
+            rateAfter?: string;
+            emiBefore?: components["schemas"]["Money"];
+            emiAfter?: components["schemas"]["Money"];
+            remainingBefore?: number;
+            remainingAfter?: number;
+            /** Format: date */
+            maturityBefore?: string;
+            /** Format: date */
+            maturityAfter?: string;
+            interestBefore?: components["schemas"]["Money"];
+            interestAfter?: components["schemas"]["Money"];
+            npvBefore?: components["schemas"]["Money"];
+            npvAfter?: components["schemas"]["Money"];
+            /** @description NPV before minus after at the contract rate (monthly periods): the lender's sacrifice */
+            npvLoss?: string;
+            /**
+             * Format: date
+             * @description Earliest end of the specified period
+             */
+            upgradeNotBefore?: string;
+            schedule?: components["schemas"]["ScheduleRow"][];
+        };
+        RestructureSimulation: {
+            /** Format: date */
+            asOf?: string;
+            current?: {
+                rate?: string;
+                emi?: components["schemas"]["Money"];
+                remainingInstalments?: number;
+                /** Format: date */
+                nextDueDate?: string | null;
+                principalOutstanding?: components["schemas"]["Money"];
+                assetClass?: components["schemas"]["AssetClass"];
+                dpd?: number;
+            };
+            options?: components["schemas"]["RestructureOption"][];
+        };
+        LoanAmendment: {
+            /** Format: uuid */
+            id?: string;
+            seq?: number;
+            /** Format: uuid */
+            txnId?: string;
+            /** @enum {string} */
+            kind?: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "RESTRUCTURE";
+            /** @description The request as proposed */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            emiBefore?: string;
+            emiAfter?: string;
+            /** @description Instalments still to be demanded */
+            tenureBefore?: number;
+            tenureAfter?: number;
+            rateBefore?: string;
+            rateAfter?: string;
+            /** Format: date */
+            maturityBefore?: string | null;
+            /** Format: date */
+            maturityAfter?: string;
+            interestBefore?: string;
+            interestAfter?: string;
+            /** @description What the checker saw */
+            proposedFigures?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description What was applied */
+            appliedFigures?: {
+                [key: string]: unknown;
+            };
+            differsFromProposal?: boolean;
+            /** Format: uuid */
+            approvalId?: string;
+            madeBy?: string;
+            checkedBy?: string;
+            /** Format: date */
+            businessDate?: string;
+            reason?: string | null;
+            /** Format: uuid */
+            reversedBy?: string | null;
             /** Format: date-time */
             createdAt?: string;
         };
@@ -3331,6 +3606,123 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ReasonBody"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    previewLoanAmendment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmendmentRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AmendmentPreview"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLoanAmendments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanAmendment"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanAmendment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmendmentRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulateLoanRestructure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    options: components["schemas"]["RestructureTerms"][];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestructureSimulation"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanRestructure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestructureTerms"];
             };
         };
         responses: {

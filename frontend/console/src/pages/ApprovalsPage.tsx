@@ -7,6 +7,7 @@ import { P, hasPermission } from '../auth/permissions';
 import { canActOn } from '../layout/usePendingForMe';
 import { formatINR, isMoney } from '../lib/money';
 import {
+  Badge,
   Banner,
   Button,
   Card,
@@ -39,6 +40,8 @@ const ENTITY_TYPES = [
   'LOAN_DISBURSEMENT',
   'LOAN_WAIVER',
   'LOAN_REVERSAL',
+  'LOAN_AMENDMENT',
+  'LOAN_RESTRUCTURE',
   'STAFF',
   'BRANCH_SET',
   'SYSTEM_PROPERTY',
@@ -51,6 +54,25 @@ export function slaClass(a: Pick<Approval, 'status' | 'ageHours'>): string | und
   if (a.ageHours > 48) return 'sla-red';
   if (a.ageHours > 24) return 'sla-amber';
   return undefined;
+}
+
+/**
+ * "1 of 2 approvals" for a pending request that needs several checkers. Uses checkersRequired / approvalsSoFar;
+ * falls back to the older note-based message when a backend does not send them.
+ */
+export function approvalProgress(a: Pick<Approval, 'status' | 'checkersRequired' | 'approvalsSoFar' | 'note'>): string | null {
+  if (a.status !== 'PENDING') return null;
+  if (a.checkersRequired !== undefined) return a.checkersRequired > 1 ? `${a.approvalsSoFar ?? 0} of ${a.checkersRequired} approvals` : null;
+  return a.note && /needs a second checker/i.test(a.note) ? '1 of 2 approvals' : null;
+}
+
+function ProgressBadge({ a }: { a: Approval }) {
+  const text = approvalProgress(a);
+  return text ? (
+    <Badge tone="info" title="Each approval must come from a different checker">
+      {text}
+    </Badge>
+  ) : null;
 }
 
 export function formatAge(hours: number | undefined): string {
@@ -71,7 +93,7 @@ function summaryOf(a: Approval): string {
     return hs.map((h) => `${h.day} ${h.reason}`).join(', ');
   }
   if (a.entityType === 'EOD_SCHEDULE') return `Mode ${String(p.mode ?? '')}`;
-  if (a.entityType.startsWith('LOAN_') && p.loanNo) return [p.loanNo, p.customer ?? p.charge ?? p.transaction].filter(Boolean).join(' — ');
+  if (a.entityType.startsWith('LOAN_') && p.loanNo) return [p.loanNo, p.customer ?? p.charge ?? p.transaction ?? p.kind ?? p.reason].filter(Boolean).join(' — ');
   if (a.entityType === 'STAFF') return [p.username, p.displayName].filter(Boolean).join(' — ');
   if (a.entityType === 'SYSTEM_PROPERTY') return `${String(p.key ?? '')} = ${String(p.value ?? '')}`;
   if (a.entityType === 'ENUMERATION') return `${String(p.type ?? '')} (${((p.values as unknown[] | undefined) ?? []).length} value(s))`;
@@ -118,7 +140,7 @@ export function ApprovalsPage() {
           </span>
         ),
       },
-      { key: 'status', header: 'Status', render: (a) => <StatusBadge status={a.status} /> },
+      { key: 'status', header: 'Status', render: (a) => (<span className="row" style={{ gap: 4 }}><StatusBadge status={a.status} /><ProgressBadge a={a} /></span>) },
     ],
     [],
   );
@@ -341,8 +363,23 @@ function ApprovalDrawer({ id, onClose }: { id: string | null; onClose: () => voi
           <dl className="kv">
             <dt>Status</dt>
             <dd>
-              <StatusBadge status={a.status} />
+              <StatusBadge status={a.status} /> <ProgressBadge a={a} />
             </dd>
+            {(a.checkersRequired ?? 1) > 1 && (
+              <>
+                <dt>Checkers</dt>
+                <dd data-testid="approval-checkers">
+                  {a.checkersRequired} different checkers required
+                  {pending ? `; ${a.approvalsSoFar ?? 0} recorded so far. The change applies with the last approval.` : '.'}
+                </dd>
+              </>
+            )}
+            {a.appliedRef && (
+              <>
+                <dt>Applied as</dt>
+                <dd className="mono">{a.appliedRef}</dd>
+              </>
+            )}
             <dt>Maker</dt>
             <dd className="mono">{a.maker}</dd>
             <dt>Made at</dt>

@@ -2,6 +2,7 @@ package com.corebanking.platform.web;
 
 import com.corebanking.platform.ApiException;
 import java.sql.SQLException;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -46,7 +47,7 @@ class ProblemHandler {
     ProblemDetail validation(MethodArgumentNotValidException e) {
         ProblemDetail p = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, "validation failed");
         p.setProperty("errors", e.getBindingResult().getFieldErrors().stream()
-                .map(f -> f.getField() + ": " + f.getDefaultMessage()).toList());
+                .map(f -> Map.of("field", f.getField(), "message", String.valueOf(f.getDefaultMessage()))).toList());
         return p;
     }
 

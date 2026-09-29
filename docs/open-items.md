@@ -15,3 +15,4 @@
 | SEC-05 | Rate limits (dedupe check, login-adjacent APIs) and free-text length limits. | Claude | Phase 2 |
 | SEC-08 | Console hosting headers (CSP, HSTS, frame-ancestors), forward-headers for HSTS from the backend, internal TLS decision. | Platform ops | Sandbox deploy |
 | D-13 | Password policy: backlog US-026 asks for complexity rules and 90-day expiry; ASVS 5.0 L2 advises length + breached-password check without composition or forced expiry. Choose one (regulator expectations may favour the backlog). | Product owner | Before first production tenant |
+| D-14 | A floating-rate reset is currently refused if the new rate is outside the product's rate band. Decide whether benchmark-linked resets may exceed the band (then the band limits only negotiated rates). | Product owner | Phase 2 |

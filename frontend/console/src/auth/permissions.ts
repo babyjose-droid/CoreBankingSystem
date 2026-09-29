@@ -31,6 +31,8 @@ export const P = {
   loanWaive: 'loan:waive',
   loanReverse: 'loan:reverse',
   loanAdmin: 'loan:admin',
+  loanAmend: 'loan:amend',
+  loanRestructure: 'loan:restructure',
   staffView: 'staff:view',
   staffPropose: 'staff:propose',
   masterView: 'master:view',
@@ -70,6 +72,8 @@ export const PROPOSE_PERMISSIONS: Permission[] = [
   P.loanRepay,
   P.loanWaive,
   P.loanReverse,
+  P.loanAmend,
+  P.loanRestructure,
   P.staffPropose,
   P.masterPropose,
 ];
