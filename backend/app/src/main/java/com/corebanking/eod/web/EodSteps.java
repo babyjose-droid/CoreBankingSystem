@@ -6,15 +6,23 @@ import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
- * Phase 1 end-of-day steps. Lending steps (interest accrual, demand raising, DPD/NPA, provisioning) are added in
- * Phase 2 as further {@link EodEngine.ItemStep}s between the account checks and the GL snapshot.
+ * Platform end-of-day steps. Modules add theirs through {@link com.corebanking.eod.EodStepProvider} (lending: loan
+ * day-end and borrower-level NPA).
  */
 final class EodSteps {
 
     private EodSteps() {}
 
-    static List<EodEngine.Step> phase1(JdbcTemplate jdbc) {
-        return List.of(preChecks(jdbc), loanAccountChecks(jdbc), glSnapshot(jdbc), trialBalanceGate(jdbc), advanceDate(jdbc));
+    /** Pre-checks, then every module's steps (by order), then GL snapshot, trial balance gate and date roll. */
+    static List<EodEngine.Step> all(JdbcTemplate jdbc, String tenant, List<com.corebanking.eod.EodStepProvider> providers) {
+        List<EodEngine.Step> steps = new java.util.ArrayList<>();
+        steps.add(preChecks(jdbc));
+        providers.stream().sorted(java.util.Comparator.comparingInt(com.corebanking.eod.EodStepProvider::order))
+                .forEach(p -> steps.addAll(p.steps(jdbc, tenant)));
+        steps.add(glSnapshot(jdbc));
+        steps.add(trialBalanceGate(jdbc));
+        steps.add(advanceDate(jdbc));
+        return steps;
     }
 
     static EodEngine.TaskStep preChecks(JdbcTemplate jdbc) {
@@ -26,24 +34,6 @@ final class EodSteps {
                     throw new IllegalStateException("run is for " + ctx.businessDate() + " but the business date is " + bd);
                 }
             }
-        };
-    }
-
-    /** Per-account step: every active loan must have a repayment schedule. One bad account never stops EOD. */
-    static EodEngine.ItemStep loanAccountChecks(JdbcTemplate jdbc) {
-        return new EodEngine.ItemStep() {
-            @Override public String name() { return "Loan account checks"; }
-            @Override public List<String> items(EodEngine.Context ctx) {
-                return jdbc.queryForList("SELECT loan_no FROM lending.loan_account WHERE status = 'ACTIVE' ORDER BY loan_no", String.class);
-            }
-            @Override public void process(EodEngine.Context ctx, String loanNo) {
-                Integer rows = jdbc.queryForObject("""
-                        SELECT count(*) FROM lending.repayment_schedule s JOIN lending.loan_account a ON a.id = s.loan_id
-                         WHERE a.loan_no = ?
-                        """, Integer.class, loanNo);
-                if (rows == null || rows == 0) throw new IllegalStateException("active loan has no repayment schedule");
-            }
-            @Override public double maxFailureRatio() { return 0.2; }
         };
     }
 

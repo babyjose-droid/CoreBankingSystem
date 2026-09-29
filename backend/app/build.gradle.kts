@@ -11,6 +11,7 @@ dependencies {
     implementation(project(":backend:calc"))
     implementation(project(":backend:ledger-core"))
     implementation(project(":backend:kernel"))
+    implementation(project(":backend:lending-core"))
 
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-validation")

@@ -51,8 +51,8 @@ INSERT INTO customer.customer (id,customer_no,customer_type,display_name,home_br
   ('00000000-0000-0000-0000-0000000000c1','90010000000013','INDIVIDUAL','CLAUDE-TEST One','MUM');
 INSERT INTO lending.loan_product (code,name,repayment_method,min_amount,max_amount,min_tenor_months,max_tenor_months,min_rate,max_rate,gl_principal,gl_interest_income,gl_interest_receivable)
   VALUES ('PL01','Personal loan','EQUATED',10000,500000,6,60,12,24,'1101','4101','1102');
-INSERT INTO lending.loan_account (id,loan_no,customer_id,product_code,branch_code,sanctioned_amount,rate,tenor_months,open_date,status,kfs_accepted_at)
-  VALUES (gen_random_uuid(),'10010000000017','00000000-0000-0000-0000-0000000000c1','PL01','MUM',100000,18,12,'2026-10-13','ACTIVE',now());
+INSERT INTO lending.loan_account (id,loan_no,customer_id,product_code,branch_code,sanctioned_amount,rate,tenor_months,open_date,status,kfs_accepted_at,state)
+  VALUES (gen_random_uuid(),'10010000000017','00000000-0000-0000-0000-0000000000c1','PL01','MUM',100000,18,12,'2026-10-13','ACTIVE',now(),'{}'::jsonb);
 SELECT pg_temp.expect_fail($q$ UPDATE platform.branch SET status = 'CLOSED' WHERE code = 'MUM' $q$, '23514', 'B2 branch with live loans cannot close');
 
 -- GL heads ----------------------------------------------------------------------------------------------

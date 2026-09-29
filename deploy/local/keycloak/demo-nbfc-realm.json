@@ -187,7 +187,15 @@
               "voucher:create",
               "voucher:reverse",
               "gl:head-propose",
-              "gl:reports"
+              "gl:reports",
+              "product:view",
+              "product:propose",
+              "loan:view",
+              "loan:create",
+              "loan:disburse",
+              "loan:repay",
+              "loan:waive",
+              "loan:reverse"
             ]
           }
         }
@@ -208,7 +216,9 @@
               "gl:view",
               "eod:view",
               "approval:approve",
-              "gl:reports"
+              "gl:reports",
+              "product:view",
+              "loan:view"
             ]
           }
         }
@@ -224,7 +234,9 @@
               "eod:view",
               "eod:run",
               "gl:view",
-              "gl:reports"
+              "gl:reports",
+              "loan:view",
+              "loan:repay"
             ]
           }
         }
@@ -245,7 +257,9 @@
               "gl:view",
               "eod:view",
               "audit:view",
-              "gl:reports"
+              "gl:reports",
+              "product:view",
+              "loan:view"
             ]
           }
         }
@@ -276,7 +290,16 @@
               "eod:view",
               "eod:run",
               "eod:schedule",
-              "audit:view"
+              "audit:view",
+              "product:view",
+              "product:propose",
+              "loan:view",
+              "loan:create",
+              "loan:disburse",
+              "loan:repay",
+              "loan:waive",
+              "loan:reverse",
+              "loan:admin"
             ]
           }
         }
@@ -395,6 +418,66 @@
         {
           "name": "audit:view",
           "description": "View the audit trail",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "product:view",
+          "description": "View loan products",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "product:propose",
+          "description": "Propose loan product changes",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:view",
+          "description": "View loans, schedules and statements",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:create",
+          "description": "Create loans and record KFS acceptance",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:disburse",
+          "description": "Request loan disbursement (maker-checker)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:repay",
+          "description": "Post receipts, prepayments, pre-closure, cancellation and charges",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:waive",
+          "description": "Propose charge waivers",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:reverse",
+          "description": "Propose loan transaction reversals",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:admin",
+          "description": "Freeze and unfreeze loans",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:stp",
+          "description": "Straight-through processing for LOS integration (API clients only)",
           "composite": false,
           "clientRole": true
         }

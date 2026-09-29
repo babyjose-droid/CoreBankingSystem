@@ -98,6 +98,7 @@ public class TenantProvisioner {
             t.update("INSERT INTO platform.weekly_off (branch_code, day_of_week, week_of_month) VALUES (NULL, 6, 2), (NULL, 6, 4)");
         }
         t.queryForObject("SELECT ledger.load_starter_kit(?)", Integer.class, kit);
+        t.execute("SELECT ledger.load_lending_heads()");
         t.update("""
                 INSERT INTO platform.tax_rate (code, tax_type, rate_percent, effective_from) VALUES
                   ('GST18', 'GST', 18, '2017-07-01'), ('TDS194A', 'TDS', 10, '2020-04-01')

@@ -33,6 +33,23 @@ public class PostingService {
         if (!lot.businessDate().equals(open)) {
             throw new LedgerException("lot business date " + lot.businessDate() + " is not the open business date " + open);
         }
+        write(jdbc, lot, user);
+    }
+
+    /**
+     * Posting from an end-of-day worker thread, on the tenant's own connection and transaction. Allowed only while
+     * EOD is running and only for the business date being closed.
+     */
+    public static void postDuringEod(JdbcTemplate tenantJdbc, TransactionLot lot, String user) {
+        LocalDate bd = tenantJdbc.queryForObject(
+                "SELECT business_date FROM platform.business_day WHERE id = 1 AND status = 'EOD_RUNNING' FOR SHARE", LocalDate.class);
+        if (!lot.businessDate().equals(bd)) {
+            throw new LedgerException("EOD lot date " + lot.businessDate() + " is not the date being closed " + bd);
+        }
+        write(tenantJdbc, lot, user);
+    }
+
+    private static void write(JdbcTemplate jdbc, TransactionLot lot, String user) {
         jdbc.update("""
                 INSERT INTO ledger.transaction_lot (id, lot_type, business_date, value_date, reference, reverses, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -50,6 +67,10 @@ public class PostingService {
 
     /** Reads a posted lot back from the ledger, e.g. to reverse it. */
     public TransactionLot load(UUID lotId) {
+        return load(jdbc, lotId);
+    }
+
+    public static TransactionLot load(JdbcTemplate jdbc, UUID lotId) {
         record Head(String type, LocalDate businessDate, LocalDate valueDate, String reference, UUID reverses) {}
         List<Head> heads = jdbc.query(
                 "SELECT lot_type, business_date, value_date, reference, reverses FROM ledger.transaction_lot WHERE id = ?",

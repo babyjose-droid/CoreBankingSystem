@@ -29,12 +29,14 @@ class EodService {
     private final AuditLog audit;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final int partitions;
+    private final List<com.corebanking.eod.EodStepProvider> providers;
 
-    EodService(TenantDataSources dataSources, AuditLog audit,
+    EodService(TenantDataSources dataSources, AuditLog audit, List<com.corebanking.eod.EodStepProvider> providers,
                @org.springframework.beans.factory.annotation.Value("${corebanking.eod.partitions:4}") int partitions) {
         this.dataSources = dataSources;
         this.audit = audit;
         this.partitions = partitions;
+        this.providers = List.copyOf(providers);
     }
 
     Map<String, Object> start(String tenant, String user) {
@@ -76,7 +78,7 @@ class EodService {
             JdbcTemplate jdbc = new JdbcTemplate(dataSources.of(tenant));
             EodEngine.RunStatus status;
             try {
-                status = new EodEngine(EodSteps.phase1(jdbc), new JdbcEodStore(jdbc), partitions)
+                status = new EodEngine(EodSteps.all(jdbc, tenant, providers), new JdbcEodStore(jdbc), partitions)
                         .run(new EodEngine.Context(runId, bd, tenant));
             } catch (RuntimeException e) {
                 log.error("EOD run {} for {} crashed", runId, tenant, e);

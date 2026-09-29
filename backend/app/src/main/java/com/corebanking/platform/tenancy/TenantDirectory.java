@@ -26,6 +26,7 @@ public class TenantDirectory {
     private static final Map<String, String> MODULE_PATHS = Map.of(
             "/api/v1/gl/", "GL",
             "/api/v1/loans/", "LENDING",
+            "/api/v1/loan-products/", "LENDING",
             "/api/v1/casa/", "CASA",
             "/api/v1/deposits/", "TD",
             "/api/v1/collections/", "COLLECTIONS");
@@ -38,7 +39,10 @@ public class TenantDirectory {
     }
 
     public static String moduleForPath(String path) {
-        for (var e : MODULE_PATHS.entrySet()) if (path.startsWith(e.getKey())) return e.getValue();
+        for (var e : MODULE_PATHS.entrySet()) {
+            String prefix = e.getKey();
+            if (path.startsWith(prefix) || path.equals(prefix.substring(0, prefix.length() - 1))) return e.getValue();
+        }
         return null;
     }
 

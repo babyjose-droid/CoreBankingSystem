@@ -28,6 +28,7 @@ tags:
   - name: Ledger
   - name: EOD
   - name: Audit
+  - name: Lending
   - name: Control plane
 paths:
   /api/v1/me:
@@ -582,6 +583,401 @@ paths:
                   firstBrokenId: { type: [integer, 'null'], format: int64 }
         default: { $ref: '#/components/responses/Problem' }
 
+  /api/v1/loan-products:
+    get:
+      tags: [Lending]
+      operationId: listLoanProducts
+      summary: Loan products with fee rules
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LoanProduct' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Lending]
+      operationId: proposeLoanProduct
+      summary: Create or change a product (maker-checker; approval bumps the version)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoanProduct' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loan-products/{code}:
+    get:
+      tags: [Lending]
+      operationId: getLoanProduct
+      summary: One loan product
+      parameters: [ { name: code, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanProduct' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/preview:
+    post:
+      tags: [Lending]
+      operationId: previewLoan
+      summary: Schedule, fees, net disbursal and APR from the same engine that posts (KFS figures)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoanApplication' }
+      responses:
+        '200':
+          description: KFS figures
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanKfs' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans:
+    get:
+      tags: [Lending]
+      operationId: searchLoans
+      summary: Search loans by number, customer, name or LOS reference
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/LoanStatus' } }
+        - { name: page, in: query, schema: { type: integer, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LoanSummary' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Lending]
+      operationId: createLoan
+      summary: Book a loan as SANCTIONED (idempotent on externalRef); money moves at disbursement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoanApplication' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}:
+    get:
+      tags: [Lending]
+      operationId: getLoan
+      summary: Loan with balances, DPD and asset class
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/schedule:
+    get:
+      tags: [Lending]
+      operationId: getLoanSchedule
+      summary: Demands raised, charges and the future schedule
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanSchedule' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/transactions:
+    get:
+      tags: [Lending]
+      operationId: getLoanTransactions
+      summary: Financial transactions (newest first); day-end accruals are not listed
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LoanTxn' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/kfs:
+    get:
+      tags: [Lending]
+      operationId: getLoanKfs
+      summary: Key Fact Statement as generated at booking
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanKfs' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/kfs-acceptance:
+    post:
+      tags: [Lending]
+      operationId: acceptLoanKfs
+      summary: Record the borrower's KFS acceptance (required before disbursement)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel: { type: string, examples: [OTP, ESIGN, BRANCH] }
+                evidenceRef: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/disbursement:
+    post:
+      tags: [Lending]
+      operationId: disburseLoan
+      summary: Staff users get a 202 approval; LOS clients with loan:stp are disbursed immediately (200)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                beneficiaryName: { type: string }
+                beneficiaryAccount: { type: string }
+                ifsc: { type: string }
+                mode: { type: string, examples: [IMPS, NEFT, CASH] }
+      responses:
+        '200':
+          description: Disbursed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/repayments:
+    post:
+      tags: [Lending]
+      operationId: repayLoan
+      summary: Receipt appropriated per product sequence; any excess is kept as an advance
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { $ref: '#/components/schemas/Money' }
+                valueDate: { type: string, format: date }
+                mode: { type: string, examples: [CASH, NACH, UPI, NEFT] }
+                reference: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/prepayments:
+    post:
+      tags: [Lending]
+      operationId: prepayLoan
+      summary: Part-prepayment; the schedule is rebuilt (reduce EMI or reduce tenure)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { $ref: '#/components/schemas/Money' }
+                mode: { type: string, enum: [REDUCE_EMI, REDUCE_TENURE] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/preclosure-quote:
+    get:
+      tags: [Lending]
+      operationId: getPreclosureQuote
+      summary: Pre-closure amount today (the posting uses the same figures)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreclosureQuote' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/preclosure:
+    post:
+      tags: [Lending]
+      operationId: precloseLoan
+      summary: Close the loan; amount must equal the quote total
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmountBody' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/cancellation-quote:
+    get:
+      tags: [Lending]
+      operationId: getCancellationQuote
+      summary: Amount to exit within the cooling-off period
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { $ref: '#/components/schemas/Money' }
+                  asOf: { type: string, format: date }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/cancellation:
+    post:
+      tags: [Lending]
+      operationId: cancelLoan
+      summary: Cooling-off exit (principal + interest for days used; disclosed fees retained)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmountBody' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/charges:
+    post:
+      tags: [Lending]
+      operationId: chargeLoanFee
+      summary: Charge a product fee (with GST) to the loan
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [feeCode]
+              properties:
+                feeCode: { type: string }
+                base: { $ref: '#/components/schemas/Money' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/charges/{chargeId}/waiver:
+    post:
+      tags: [Lending]
+      operationId: waiveLoanCharge
+      summary: Propose a waiver of an unpaid charge (maker-checker)
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: chargeId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, reason]
+              properties:
+                amount: { $ref: '#/components/schemas/Money' }
+                reason: { type: string }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/transactions/{txnId}/reverse:
+    post:
+      tags: [Lending]
+      operationId: reverseLoanTransaction
+      summary: Propose reversal of a transaction and every later one; days since are replayed (maker-checker)
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: txnId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonBody' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/freeze:
+    post:
+      tags: [Lending]
+      operationId: freezeLoan
+      summary: Block transactions (accrual continues)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonBody' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/unfreeze:
+    post:
+      tags: [Lending]
+      operationId: unfreezeLoan
+      summary: Allow transactions again
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonBody' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        default: { $ref: '#/components/responses/Problem' }
   /platform/v1/tenants:
     get:
       tags: [Control plane]
@@ -975,3 +1371,223 @@ components:
         pending: { type: array, items: { type: string } }
         status: { type: string, enum: [UP_TO_DATE, PENDING, MIGRATED, FAILED] }
         error: { type: [string, 'null'] }
+    LoanStatus:
+      type: string
+      enum: [SANCTIONED, ACTIVE, FROZEN, CLOSED, CANCELLED, WRITTEN_OFF]
+    AssetClass:
+      type: string
+      enum: [STANDARD, SMA0, SMA1, SMA2, SUBSTANDARD, DOUBTFUL1, DOUBTFUL2, DOUBTFUL3, LOSS]
+    AmountBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { $ref: '#/components/schemas/Money' }
+    ReasonBody:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string }
+    FeeRule:
+      type: object
+      required: [code, name, event, calcType]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_]{2,20}$' }
+        name: { type: string }
+        event: { type: string, enum: [DISBURSEMENT, PRECLOSURE, PART_PREPAYMENT, BOUNCE, LATE_PAYMENT, CANCELLATION, ADHOC] }
+        calcType: { type: string, enum: [FIXED, PERCENT, SLAB] }
+        amount: { type: [number, string, 'null'] }
+        percent: { type: [number, string, 'null'] }
+        slabs:
+          type: array
+          items:
+            type: object
+            properties:
+              from: { type: [number, string] }
+              to: { type: [number, string] }
+              fee: { type: [number, string] }
+        minAmount: { type: [number, string, 'null'] }
+        maxAmount: { type: [number, string, 'null'] }
+        gstRate: { type: [number, string, 'null'], default: 18 }
+        taxTreatment: { type: string, enum: [EXCLUSIVE, INCLUSIVE] }
+        deductFromDisbursal: { type: boolean }
+    LoanProduct:
+      type: object
+      required: [code, name, repaymentMethod, minAmount, maxAmount, minTenorMonths, maxTenorMonths, minRate, maxRate]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9]{2,12}$' }
+        name: { type: string }
+        repaymentMethod: { type: string, enum: [EQUATED, FIXED_PRINCIPAL, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST] }
+        minAmount: { type: [number, string] }
+        maxAmount: { type: [number, string] }
+        minTenorMonths: { type: integer }
+        maxTenorMonths: { type: integer }
+        minRate: { type: [number, string] }
+        maxRate: { type: [number, string] }
+        interestTableCode: { type: [string, 'null'] }
+        rateType: { type: string, enum: [FIXED, FLOATING] }
+        dayCount: { type: string, enum: [ACTUAL_365, ACTUAL_360, ACTUAL_ACTUAL, THIRTY_360] }
+        rounding: { type: string, enum: [RUPEE_HALF_UP, RUPEE_DOWN, RUPEE_UP, PAISE_HALF_UP, PAISE_HALF_EVEN] }
+        penalChargeRate: { type: [number, string, 'null'] }
+        maxMoratoriumMonths: { type: integer }
+        coolingOffDays: { type: integer }
+        secured: { type: boolean }
+        appropriationSequence: { type: array, items: { type: string, enum: [INTEREST, PRINCIPAL, PENAL, FEE] } }
+        appropriationMode: { type: string, enum: [BY_DEMAND, BY_COMPONENT] }
+        prepaymentMode: { type: string, enum: [REDUCE_EMI, REDUCE_TENURE] }
+        status: { type: string, enum: [DRAFT, ACTIVE, WITHDRAWN] }
+        fees: { type: array, items: { $ref: '#/components/schemas/FeeRule' } }
+        version: { type: integer, readOnly: true }
+    LoanApplication:
+      type: object
+      required: [productCode, customerId, amount, tenorMonths]
+      properties:
+        productCode: { type: string }
+        customerId: { type: string, format: uuid }
+        branch: { type: string, description: Defaults to the customer's home branch }
+        amount: { type: [number, string] }
+        tenorMonths: { type: integer }
+        rate: { type: [number, string, 'null'], description: 'Omit to use the product interest table' }
+        disbursalDate: { type: string, format: date }
+        firstDueDate: { type: string, format: date }
+        moratoriumMonths: { type: integer }
+        balloon: { type: [number, string, 'null'] }
+        securedPortion: { type: [number, string, 'null'] }
+        externalRef: { type: string, description: 'LOS application id; repeating it returns the existing loan' }
+    ScheduleRow:
+      type: object
+      properties:
+        instalmentNo: { type: integer }
+        dueDate: { type: string, format: date }
+        days: { type: integer }
+        openingBalance: { $ref: '#/components/schemas/Money' }
+        interest: { $ref: '#/components/schemas/Money' }
+        principal: { $ref: '#/components/schemas/Money' }
+        instalment: { $ref: '#/components/schemas/Money' }
+        closingBalance: { $ref: '#/components/schemas/Money' }
+    LoanKfs:
+      type: object
+      properties:
+        productCode: { type: string }
+        productName: { type: string }
+        productVersion: { type: integer }
+        amount: { $ref: '#/components/schemas/Money' }
+        tenorMonths: { type: integer }
+        repaymentMethod: { type: string }
+        rateType: { type: string }
+        interestRate: { type: string }
+        rateExplanation: { type: string }
+        emi: { type: [string, 'null'] }
+        instalments: { type: integer }
+        totalInterest: { $ref: '#/components/schemas/Money' }
+        fees:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              name: { type: string }
+              fee: { type: string }
+              cgst: { type: string }
+              sgst: { type: string }
+              igst: { type: string }
+              total: { type: string }
+        netDisbursal: { $ref: '#/components/schemas/Money' }
+        totalRepayable: { $ref: '#/components/schemas/Money' }
+        apr: { type: string, description: 'Annual percentage rate (IRR of net flows, fees ex-GST)' }
+        penalChargeRate: { type: [string, 'null'] }
+        penalChargeNote: { type: string }
+        coolingOffDays: { type: integer }
+        placeOfSupply: { type: string }
+        schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+    LoanSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        loanNo: { type: string }
+        customerName: { type: string }
+        customerNo: { type: string }
+        productCode: { type: string }
+        status: { $ref: '#/components/schemas/LoanStatus' }
+        amount: { $ref: '#/components/schemas/Money' }
+        principalOutstanding: { $ref: '#/components/schemas/Money' }
+        overdueAmount: { $ref: '#/components/schemas/Money' }
+        dpd: { type: integer }
+        assetClass: { $ref: '#/components/schemas/AssetClass' }
+        nextDueDate: { type: [string, 'null'], format: date }
+        branch: { type: string }
+    Loan:
+      allOf:
+        - $ref: '#/components/schemas/LoanSummary'
+        - type: object
+          properties:
+            customerId: { type: string, format: uuid }
+            productVersion: { type: integer }
+            rate: { type: string }
+            tenorMonths: { type: integer }
+            repaymentMethod: { type: string }
+            emi: { type: [string, 'null'] }
+            apr: { type: [string, 'null'] }
+            openDate: { type: string, format: date }
+            disbursedOn: { type: [string, 'null'], format: date }
+            netDisbursed: { type: [string, 'null'] }
+            npaSince: { type: [string, 'null'], format: date }
+            provisionHeld: { type: string }
+            kfsAcceptedAt: { type: [string, 'null'], format: date-time }
+            externalRef: { type: [string, 'null'] }
+            closedOn: { type: [string, 'null'], format: date }
+    LoanSchedule:
+      type: object
+      properties:
+        demands:
+          type: array
+          items:
+            type: object
+            properties:
+              instalmentNo: { type: integer }
+              dueDate: { type: string, format: date }
+              principalDue: { type: string }
+              interestDue: { type: string }
+              principalPaid: { type: string }
+              interestPaid: { type: string }
+        charges:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              code: { type: string }
+              name: { type: string }
+              kind: { type: string, enum: [FEE, PENAL] }
+              date: { type: string, format: date }
+              amount: { type: string }
+              paid: { type: string }
+              waived: { type: string }
+              unpaid: { type: string }
+        future: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+        accruedInterest: { type: string }
+        advance: { type: string }
+    LoanTxn:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer }
+        type: { type: string, examples: [DISBURSEMENT, REPAYMENT, PREPAYMENT, PRECLOSURE, CANCELLATION, FEE_CHARGE, WAIVER, REVERSAL, FREEZE] }
+        valueDate: { type: string, format: date }
+        businessDate: { type: string, format: date }
+        amount: { type: [string, 'null'] }
+        summary: { type: string }
+        reversedBy: { type: [string, 'null'], format: uuid }
+        reverses: { type: [string, 'null'], format: uuid }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    PreclosureQuote:
+      type: object
+      properties:
+        asOf: { type: string, format: date }
+        principal: { type: string }
+        overdueDues: { type: string }
+        accruedInterest: { type: string }
+        charges: { type: string }
+        foreclosureFee: { type: string }
+        advanceAdjusted: { type: string }
+        total: { type: string }

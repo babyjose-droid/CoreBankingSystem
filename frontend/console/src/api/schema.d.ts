@@ -471,6 +471,365 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loan-products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Loan products with fee rules */
+        get: operations["listLoanProducts"];
+        put?: never;
+        /** Create or change a product (maker-checker; approval bumps the version) */
+        post: operations["proposeLoanProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loan-products/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One loan product */
+        get: operations["getLoanProduct"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Schedule, fees, net disbursal and APR from the same engine that posts (KFS figures) */
+        post: operations["previewLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search loans by number, customer, name or LOS reference */
+        get: operations["searchLoans"];
+        put?: never;
+        /** Book a loan as SANCTIONED (idempotent on externalRef); money moves at disbursement */
+        post: operations["createLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Loan with balances, DPD and asset class */
+        get: operations["getLoan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Demands raised, charges and the future schedule */
+        get: operations["getLoanSchedule"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Financial transactions (newest first); day-end accruals are not listed */
+        get: operations["getLoanTransactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/kfs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Key Fact Statement as generated at booking */
+        get: operations["getLoanKfs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/kfs-acceptance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the borrower's KFS acceptance (required before disbursement) */
+        post: operations["acceptLoanKfs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/disbursement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Staff users get a 202 approval; LOS clients with loan:stp are disbursed immediately (200) */
+        post: operations["disburseLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/repayments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receipt appropriated per product sequence; any excess is kept as an advance */
+        post: operations["repayLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/prepayments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Part-prepayment; the schedule is rebuilt (reduce EMI or reduce tenure) */
+        post: operations["prepayLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/preclosure-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pre-closure amount today (the posting uses the same figures) */
+        get: operations["getPreclosureQuote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/preclosure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close the loan; amount must equal the quote total */
+        post: operations["precloseLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/cancellation-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Amount to exit within the cooling-off period */
+        get: operations["getCancellationQuote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cooling-off exit (principal + interest for days used; disclosed fees retained) */
+        post: operations["cancelLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/charges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Charge a product fee (with GST) to the loan */
+        post: operations["chargeLoanFee"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/charges/{chargeId}/waiver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Propose a waiver of an unpaid charge (maker-checker) */
+        post: operations["waiveLoanCharge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/transactions/{txnId}/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Propose reversal of a transaction and every later one; days since are replayed (maker-checker) */
+        post: operations["reverseLoanTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/freeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Block transactions (accrual continues) */
+        post: operations["freezeLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/unfreeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Allow transactions again */
+        post: operations["unfreezeLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/v1/tenants": {
         parameters: {
             query?: never;
@@ -851,6 +1210,241 @@ export interface components {
             /** @enum {string} */
             status?: "UP_TO_DATE" | "PENDING" | "MIGRATED" | "FAILED";
             error?: string | null;
+        };
+        /** @enum {string} */
+        LoanStatus: "SANCTIONED" | "ACTIVE" | "FROZEN" | "CLOSED" | "CANCELLED" | "WRITTEN_OFF";
+        /** @enum {string} */
+        AssetClass: "STANDARD" | "SMA0" | "SMA1" | "SMA2" | "SUBSTANDARD" | "DOUBTFUL1" | "DOUBTFUL2" | "DOUBTFUL3" | "LOSS";
+        AmountBody: {
+            amount: components["schemas"]["Money"];
+        };
+        ReasonBody: {
+            reason: string;
+        };
+        FeeRule: {
+            code: string;
+            name: string;
+            /** @enum {string} */
+            event: "DISBURSEMENT" | "PRECLOSURE" | "PART_PREPAYMENT" | "BOUNCE" | "LATE_PAYMENT" | "CANCELLATION" | "ADHOC";
+            /** @enum {string} */
+            calcType: "FIXED" | "PERCENT" | "SLAB";
+            amount?: number | string | null;
+            percent?: number | string | null;
+            slabs?: {
+                from?: number | string;
+                to?: number | string;
+                fee?: number | string;
+            }[];
+            minAmount?: number | string | null;
+            maxAmount?: number | string | null;
+            /** @default 18 */
+            gstRate: number | string | null;
+            /** @enum {string} */
+            taxTreatment?: "EXCLUSIVE" | "INCLUSIVE";
+            deductFromDisbursal?: boolean;
+        };
+        LoanProduct: {
+            code: string;
+            name: string;
+            /** @enum {string} */
+            repaymentMethod: "EQUATED" | "FIXED_PRINCIPAL" | "BULLET_TOTAL_INTEREST" | "BULLET_PERIODIC_INTEREST";
+            minAmount: number | string;
+            maxAmount: number | string;
+            minTenorMonths: number;
+            maxTenorMonths: number;
+            minRate: number | string;
+            maxRate: number | string;
+            interestTableCode?: string | null;
+            /** @enum {string} */
+            rateType?: "FIXED" | "FLOATING";
+            /** @enum {string} */
+            dayCount?: "ACTUAL_365" | "ACTUAL_360" | "ACTUAL_ACTUAL" | "THIRTY_360";
+            /** @enum {string} */
+            rounding?: "RUPEE_HALF_UP" | "RUPEE_DOWN" | "RUPEE_UP" | "PAISE_HALF_UP" | "PAISE_HALF_EVEN";
+            penalChargeRate?: number | string | null;
+            maxMoratoriumMonths?: number;
+            coolingOffDays?: number;
+            secured?: boolean;
+            appropriationSequence?: ("INTEREST" | "PRINCIPAL" | "PENAL" | "FEE")[];
+            /** @enum {string} */
+            appropriationMode?: "BY_DEMAND" | "BY_COMPONENT";
+            /** @enum {string} */
+            prepaymentMode?: "REDUCE_EMI" | "REDUCE_TENURE";
+            /** @enum {string} */
+            status?: "DRAFT" | "ACTIVE" | "WITHDRAWN";
+            fees?: components["schemas"]["FeeRule"][];
+            readonly version?: number;
+        };
+        LoanApplication: {
+            productCode: string;
+            /** Format: uuid */
+            customerId: string;
+            /** @description Defaults to the customer's home branch */
+            branch?: string;
+            amount: number | string;
+            tenorMonths: number;
+            /** @description Omit to use the product interest table */
+            rate?: number | string | null;
+            /** Format: date */
+            disbursalDate?: string;
+            /** Format: date */
+            firstDueDate?: string;
+            moratoriumMonths?: number;
+            balloon?: number | string | null;
+            securedPortion?: number | string | null;
+            /** @description LOS application id; repeating it returns the existing loan */
+            externalRef?: string;
+        };
+        ScheduleRow: {
+            instalmentNo?: number;
+            /** Format: date */
+            dueDate?: string;
+            days?: number;
+            openingBalance?: components["schemas"]["Money"];
+            interest?: components["schemas"]["Money"];
+            principal?: components["schemas"]["Money"];
+            instalment?: components["schemas"]["Money"];
+            closingBalance?: components["schemas"]["Money"];
+        };
+        LoanKfs: {
+            productCode?: string;
+            productName?: string;
+            productVersion?: number;
+            amount?: components["schemas"]["Money"];
+            tenorMonths?: number;
+            repaymentMethod?: string;
+            rateType?: string;
+            interestRate?: string;
+            rateExplanation?: string;
+            emi?: string | null;
+            instalments?: number;
+            totalInterest?: components["schemas"]["Money"];
+            fees?: {
+                code?: string;
+                name?: string;
+                fee?: string;
+                cgst?: string;
+                sgst?: string;
+                igst?: string;
+                total?: string;
+            }[];
+            netDisbursal?: components["schemas"]["Money"];
+            totalRepayable?: components["schemas"]["Money"];
+            /** @description Annual percentage rate (IRR of net flows, fees ex-GST) */
+            apr?: string;
+            penalChargeRate?: string | null;
+            penalChargeNote?: string;
+            coolingOffDays?: number;
+            placeOfSupply?: string;
+            schedule?: components["schemas"]["ScheduleRow"][];
+        };
+        LoanSummary: {
+            /** Format: uuid */
+            id?: string;
+            loanNo?: string;
+            customerName?: string;
+            customerNo?: string;
+            productCode?: string;
+            status?: components["schemas"]["LoanStatus"];
+            amount?: components["schemas"]["Money"];
+            principalOutstanding?: components["schemas"]["Money"];
+            overdueAmount?: components["schemas"]["Money"];
+            dpd?: number;
+            assetClass?: components["schemas"]["AssetClass"];
+            /** Format: date */
+            nextDueDate?: string | null;
+            branch?: string;
+        };
+        Loan: components["schemas"]["LoanSummary"] & {
+            /** Format: uuid */
+            customerId?: string;
+            productVersion?: number;
+            rate?: string;
+            tenorMonths?: number;
+            repaymentMethod?: string;
+            emi?: string | null;
+            apr?: string | null;
+            /** Format: date */
+            openDate?: string;
+            /** Format: date */
+            disbursedOn?: string | null;
+            netDisbursed?: string | null;
+            /** Format: date */
+            npaSince?: string | null;
+            provisionHeld?: string;
+            /** Format: date-time */
+            kfsAcceptedAt?: string | null;
+            externalRef?: string | null;
+            /** Format: date */
+            closedOn?: string | null;
+        };
+        LoanSchedule: {
+            demands?: {
+                instalmentNo?: number;
+                /** Format: date */
+                dueDate?: string;
+                principalDue?: string;
+                interestDue?: string;
+                principalPaid?: string;
+                interestPaid?: string;
+            }[];
+            charges?: {
+                id?: string;
+                code?: string;
+                name?: string;
+                /** @enum {string} */
+                kind?: "FEE" | "PENAL";
+                /** Format: date */
+                date?: string;
+                amount?: string;
+                paid?: string;
+                waived?: string;
+                unpaid?: string;
+            }[];
+            future?: components["schemas"]["ScheduleRow"][];
+            accruedInterest?: string;
+            advance?: string;
+        };
+        LoanTxn: {
+            /** Format: uuid */
+            id?: string;
+            seq?: number;
+            /**
+             * @example DISBURSEMENT
+             * @example REPAYMENT
+             * @example PREPAYMENT
+             * @example PRECLOSURE
+             * @example CANCELLATION
+             * @example FEE_CHARGE
+             * @example WAIVER
+             * @example REVERSAL
+             * @example FREEZE
+             */
+            type?: string;
+            /** Format: date */
+            valueDate?: string;
+            /** Format: date */
+            businessDate?: string;
+            amount?: string | null;
+            summary?: string;
+            /** Format: uuid */
+            reversedBy?: string | null;
+            /** Format: uuid */
+            reverses?: string | null;
+            createdBy?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        PreclosureQuote: {
+            /** Format: date */
+            asOf?: string;
+            principal?: string;
+            overdueDues?: string;
+            accruedInterest?: string;
+            charges?: string;
+            foreclosureFee?: string;
+            advanceAdjusted?: string;
+            total?: string;
         };
     };
     responses: {
@@ -1675,6 +2269,609 @@ export interface operations {
                         /** Format: int64 */
                         firstBrokenId?: number | null;
                     };
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLoanProducts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanProduct"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanProduct"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanProduct"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    previewLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanApplication"];
+            };
+        };
+        responses: {
+            /** @description KFS figures */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanKfs"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    searchLoans: {
+        parameters: {
+            query?: {
+                q?: string;
+                status?: components["schemas"]["LoanStatus"];
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanSummary"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    createLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanApplication"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanSchedule"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanTransactions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanTxn"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanKfs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanKfs"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    acceptLoanKfs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @example OTP
+                     * @example ESIGN
+                     * @example BRANCH
+                     */
+                    channel?: string;
+                    evidenceRef?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    disburseLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    beneficiaryName?: string;
+                    beneficiaryAccount?: string;
+                    ifsc?: string;
+                    /**
+                     * @example IMPS
+                     * @example NEFT
+                     * @example CASH
+                     */
+                    mode?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Disbursed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    repayLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    amount: components["schemas"]["Money"];
+                    /** Format: date */
+                    valueDate?: string;
+                    /**
+                     * @example CASH
+                     * @example NACH
+                     * @example UPI
+                     * @example NEFT
+                     */
+                    mode?: string;
+                    reference?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    prepayLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    amount: components["schemas"]["Money"];
+                    /** @enum {string} */
+                    mode?: "REDUCE_EMI" | "REDUCE_TENURE";
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getPreclosureQuote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreclosureQuote"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    precloseLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmountBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCancellationQuote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        total?: components["schemas"]["Money"];
+                        /** Format: date */
+                        asOf?: string;
+                    };
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    cancelLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmountBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    chargeLoanFee: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    feeCode: string;
+                    base?: components["schemas"]["Money"];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    waiveLoanCharge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                chargeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    amount: components["schemas"]["Money"];
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    reverseLoanTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                txnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonBody"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    freezeLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    unfreezeLoan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Loan"];
                 };
             };
             default: components["responses"]["Problem"];

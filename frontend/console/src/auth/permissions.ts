@@ -22,6 +22,15 @@ export const P = {
   taxRatePropose: 'tax:propose',
   auditView: 'audit:view',
   glReports: 'gl:reports',
+  productView: 'product:view',
+  productPropose: 'product:propose',
+  loanView: 'loan:view',
+  loanCreate: 'loan:create',
+  loanDisburse: 'loan:disburse',
+  loanRepay: 'loan:repay',
+  loanWaive: 'loan:waive',
+  loanReverse: 'loan:reverse',
+  loanAdmin: 'loan:admin',
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];
@@ -36,6 +45,8 @@ export const VIEW_PERMISSIONS: Permission[] = [
   P.holidayView,
   P.taxRateView,
   P.glReports,
+  P.productView,
+  P.loanView,
 ];
 
 export const PROPOSE_PERMISSIONS: Permission[] = [
@@ -47,6 +58,12 @@ export const PROPOSE_PERMISSIONS: Permission[] = [
   P.branchPropose,
   P.holidayPropose,
   P.taxRatePropose,
+  P.productPropose,
+  P.loanCreate,
+  P.loanDisburse,
+  P.loanRepay,
+  P.loanWaive,
+  P.loanReverse,
 ];
 
 export const ALL_PERMISSIONS: Permission[] = Object.values(P);
