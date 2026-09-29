@@ -1145,6 +1145,104 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/amendments/preview:
+    post:
+      tags: [Lending]
+      operationId: previewLoanAmendment
+      summary: Before/after figures and the new schedule for a rate, tenure, EMI or due-day change (nothing changes)
+      description: >-
+        Same engine as the posting. Rate resets follow RBI's 18-Aug-2023 circular on floating-rate EMI loans: the
+        borrower keeps the EMI and changes the tenure, keeps the tenure and changes the EMI, or changes both. A
+        tenure extension may not pass the product's maximum tenure and the EMI must cover the monthly interest.
+        Extending the tenure or lowering the EMI of a borrower in arrears is refused (409): that is a restructure.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmendmentRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AmendmentPreview' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/amendments:
+    get:
+      tags: [Lending]
+      operationId: listLoanAmendments
+      summary: Amendment and restructure history (newest first)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LoanAmendment' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Lending]
+      operationId: proposeLoanAmendment
+      summary: Propose an amendment (maker-checker, entity LOAN_AMENDMENT); applied on approval
+      description: >-
+        The approval re-runs the engine on the loan as it is then. If the figures differ from those proposed (the
+        loan changed in between), the current figures are applied and both are kept in the history. Amendments move
+        no money and can be reversed like any other loan transaction.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmendmentRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/restructure/simulation:
+    post:
+      tags: [Lending]
+      operationId: simulateLoanRestructure
+      summary: Compare up to three restructuring options (schedule, EMI, tenure, interest, NPV at the contract rate)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [options]
+              properties:
+                options:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items: { $ref: '#/components/schemas/RestructureTerms' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RestructureSimulation' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/restructure:
+    post:
+      tags: [Lending]
+      operationId: proposeLoanRestructure
+      summary: Propose a restructure (maker-checker with two checkers, entity LOAN_RESTRUCTURE)
+      description: >-
+        RBI Prudential Framework for Resolution of Stressed Assets (7-Jun-2019): a standard account is downgraded
+        to sub-standard; an NPA keeps its class. The account can be upgraded only after the specified period (at
+        least one year from the first payment under the new schedule and 10% of the principal repaid) with no
+        default in that period and no arrears. A restructure cannot be reversed.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RestructureTerms' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans/{id}/freeze:
     post:
       tags: [Lending]
@@ -1828,6 +1926,10 @@ components:
             kfsAcceptedAt: { type: [string, 'null'], format: date-time }
             externalRef: { type: [string, 'null'] }
             closedOn: { type: [string, 'null'], format: date }
+            currentRate: { type: string, description: Rate now charged (rate is the rate as sanctioned) }
+            restructuredOn: { type: [string, 'null'], format: date }
+            restructureCount: { type: integer }
+            upgradeNotBefore: { type: [string, 'null'], format: date, description: 'Restructured and under monitoring: earliest end of the specified period' }
     LoanSchedule:
       type: object
       properties:
@@ -1842,6 +1944,8 @@ components:
               interestDue: { type: string }
               principalPaid: { type: string }
               interestPaid: { type: string }
+              principalRescheduled: { type: string, description: Unpaid principal moved into the restructured schedule }
+              interestCapitalised: { type: string, description: Unpaid interest capitalised on restructuring }
         charges:
           type: array
           items:
@@ -1864,7 +1968,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         seq: { type: integer }
-        type: { type: string, examples: [DISBURSEMENT, REPAYMENT, PREPAYMENT, PRECLOSURE, CANCELLATION, FEE_CHARGE, WAIVER, REVERSAL, FREEZE] }
+        type: { type: string, examples: [DISBURSEMENT, REPAYMENT, PREPAYMENT, PRECLOSURE, CANCELLATION, FEE_CHARGE, WAIVER, REVERSAL, FREEZE, AMENDMENT, RESTRUCTURE] }
         valueDate: { type: string, format: date }
         businessDate: { type: string, format: date }
         amount: { type: [string, 'null'] }
@@ -1872,6 +1976,131 @@ components:
         reversedBy: { type: [string, 'null'], format: uuid }
         reverses: { type: [string, 'null'], format: uuid }
         createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    AmendmentRequest:
+      type: object
+      required: [kind]
+      description: Fields used depend on kind; reason is required when proposing.
+      properties:
+        kind: { type: string, enum: [RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE] }
+        newRatePercent: { type: [number, string], description: 'RATE_CHANGE: new annual rate, within the product band' }
+        rateOption:
+          type: string
+          enum: [KEEP_EMI_CHANGE_TENURE, KEEP_TENURE_CHANGE_EMI, CHANGE_BOTH]
+          description: 'RATE_CHANGE: the borrower''s choice (RBI 18-Aug-2023)'
+        remainingInstalments: { type: integer, minimum: 1, maximum: 480, description: 'TENURE_CHANGE, or CHANGE_BOTH: instalments still to be demanded' }
+        newEmi: { type: [number, string], description: 'EMI_CHANGE, or CHANGE_BOTH instead of remainingInstalments' }
+        newDueDay: { type: integer, minimum: 1, maximum: 31, description: 'DUE_DAY_CHANGE: day of month; 31 = month end' }
+        reason: { type: string }
+    AmendmentFigures:
+      type: object
+      properties:
+        rateBefore: { type: string }
+        rateAfter: { type: string }
+        emiBefore: { $ref: '#/components/schemas/Money' }
+        emiAfter: { $ref: '#/components/schemas/Money' }
+        remainingBefore: { type: integer }
+        remainingAfter: { type: integer }
+        nextDueBefore: { type: string, format: date }
+        nextDueAfter: { type: string, format: date }
+        maturityBefore: { type: string, format: date }
+        maturityAfter: { type: string, format: date }
+        interestBefore: { $ref: '#/components/schemas/Money' }
+        interestAfter: { $ref: '#/components/schemas/Money' }
+        brokenPeriodInterest: { $ref: '#/components/schemas/Money' }
+    AmendmentPreview:
+      allOf:
+        - $ref: '#/components/schemas/AmendmentFigures'
+        - type: object
+          properties:
+            asOf: { type: string, format: date }
+            kind: { type: string }
+            principal: { $ref: '#/components/schemas/Money' }
+            accruedInterest: { type: string, description: 'Interest accrued since the last due date, carried into the next instalment' }
+            schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+            currentSchedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+    RestructureTerms:
+      type: object
+      required: [remainingInstalments, overdueInterest]
+      description: Overdue principal is always rescheduled. A separate funded-interest term loan (FITL) is not offered.
+      properties:
+        newRatePercent: { type: [number, string, 'null'], description: Omit to keep the current rate }
+        remainingInstalments: { type: integer, minimum: 1, maximum: 480 }
+        principalMoratoriumMonths: { type: integer, minimum: 0, default: 0 }
+        overdueInterest: { type: string, enum: [CAPITALISE, KEEP_AS_ARREARS] }
+        reason: { type: string, description: Required when proposing }
+    RestructureOption:
+      type: object
+      properties:
+        newRatePercent: { type: [string, 'null'] }
+        remainingInstalments: { type: integer }
+        principalMoratoriumMonths: { type: integer }
+        overdueInterestTreatment: { type: string, enum: [CAPITALISE, KEEP_AS_ARREARS] }
+        classBefore: { $ref: '#/components/schemas/AssetClass' }
+        classAfter: { $ref: '#/components/schemas/AssetClass' }
+        principalBefore: { $ref: '#/components/schemas/Money' }
+        overduePrincipalRescheduled: { $ref: '#/components/schemas/Money' }
+        overdueInterest: { $ref: '#/components/schemas/Money' }
+        interestCapitalised: { $ref: '#/components/schemas/Money' }
+        arrearsKept: { $ref: '#/components/schemas/Money' }
+        principalAfter: { $ref: '#/components/schemas/Money' }
+        rateBefore: { type: string }
+        rateAfter: { type: string }
+        emiBefore: { $ref: '#/components/schemas/Money' }
+        emiAfter: { $ref: '#/components/schemas/Money' }
+        remainingBefore: { type: integer }
+        remainingAfter: { type: integer }
+        maturityBefore: { type: string, format: date }
+        maturityAfter: { type: string, format: date }
+        interestBefore: { $ref: '#/components/schemas/Money' }
+        interestAfter: { $ref: '#/components/schemas/Money' }
+        npvBefore: { $ref: '#/components/schemas/Money' }
+        npvAfter: { $ref: '#/components/schemas/Money' }
+        npvLoss: { type: string, description: 'NPV before minus after at the contract rate (monthly periods): the lender''s sacrifice' }
+        upgradeNotBefore: { type: string, format: date, description: Earliest end of the specified period }
+        schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+    RestructureSimulation:
+      type: object
+      properties:
+        asOf: { type: string, format: date }
+        current:
+          type: object
+          properties:
+            rate: { type: string }
+            emi: { $ref: '#/components/schemas/Money' }
+            remainingInstalments: { type: integer }
+            nextDueDate: { type: [string, 'null'], format: date }
+            principalOutstanding: { $ref: '#/components/schemas/Money' }
+            assetClass: { $ref: '#/components/schemas/AssetClass' }
+            dpd: { type: integer }
+        options: { type: array, items: { $ref: '#/components/schemas/RestructureOption' } }
+    LoanAmendment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer }
+        txnId: { type: string, format: uuid }
+        kind: { type: string, enum: [RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, RESTRUCTURE] }
+        parameters: { type: object, additionalProperties: true, description: The request as proposed }
+        emiBefore: { type: string }
+        emiAfter: { type: string }
+        tenureBefore: { type: integer, description: Instalments still to be demanded }
+        tenureAfter: { type: integer }
+        rateBefore: { type: string }
+        rateAfter: { type: string }
+        maturityBefore: { type: [string, 'null'], format: date }
+        maturityAfter: { type: string, format: date }
+        interestBefore: { type: string }
+        interestAfter: { type: string }
+        proposedFigures: { type: [object, 'null'], additionalProperties: true, description: What the checker saw }
+        appliedFigures: { type: object, additionalProperties: true, description: What was applied }
+        differsFromProposal: { type: boolean }
+        approvalId: { type: string, format: uuid }
+        madeBy: { type: string }
+        checkedBy: { type: string }
+        businessDate: { type: string, format: date }
+        reason: { type: [string, 'null'] }
+        reversedBy: { type: [string, 'null'], format: uuid }
         createdAt: { type: string, format: date-time }
     PreclosureQuote:
       type: object

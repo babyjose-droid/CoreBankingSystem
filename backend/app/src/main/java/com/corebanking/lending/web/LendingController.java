@@ -186,6 +186,41 @@ class LendingController {
         return loans.proposeReversal(visible(id), txnId, r.reason());
     }
 
+    // ---- amendments and restructure (P2-3) -----------------------------------------------------
+    record RestructureOptions(List<LoanService.RestructureRequest> options) {}
+
+    @PostMapping("/loans/{id}/amendments/preview")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> previewAmendment(@PathVariable UUID id, @RequestBody LoanService.AmendmentRequest a) {
+        return loans.previewAmendment(visible(id), a);
+    }
+
+    @PostMapping("/loans/{id}/amendments")
+    @PreAuthorize("hasAuthority('loan:amend')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> proposeAmendment(@PathVariable UUID id, @RequestBody LoanService.AmendmentRequest a) {
+        return loans.proposeAmendment(visible(id), a);
+    }
+
+    @GetMapping("/loans/{id}/amendments")
+    @PreAuthorize("hasAuthority('loan:view')")
+    List<Map<String, Object>> amendments(@PathVariable UUID id) {
+        return loans.amendments(visible(id));
+    }
+
+    @PostMapping("/loans/{id}/restructure/simulation")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> simulateRestructure(@PathVariable UUID id, @RequestBody RestructureOptions o) {
+        return loans.simulateRestructure(visible(id), o == null ? null : o.options());
+    }
+
+    @PostMapping("/loans/{id}/restructure")
+    @PreAuthorize("hasAuthority('loan:restructure')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> proposeRestructure(@PathVariable UUID id, @RequestBody LoanService.RestructureRequest r) {
+        return loans.proposeRestructure(visible(id), r);
+    }
+
     @PostMapping("/loans/{id}/freeze")
     @PreAuthorize("hasAuthority('loan:admin')")
     Map<String, Object> freeze(@PathVariable UUID id, @RequestBody Reason r) {

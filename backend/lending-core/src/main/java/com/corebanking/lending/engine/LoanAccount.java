@@ -1,6 +1,7 @@
 package com.corebanking.lending.engine;
 
 import com.corebanking.calc.DayCount;
+import com.corebanking.calc.EmiCalculator;
 import com.corebanking.calc.Rounding;
 import com.corebanking.calc.ScheduleGenerator.Instalment;
 import com.corebanking.lending.engine.Appropriation.Component;
@@ -44,11 +45,38 @@ public final class LoanAccount {
         }
     }
 
+    /**
+     * A demand raised. On restructuring, unpaid principal is rescheduled into the new schedule
+     * ({@code principalRescheduled}) and unpaid interest may be capitalised ({@code interestCapitalised}); neither is
+     * a payment, and the demand keeps its original figures.
+     */
     public record DemandRow(int instalmentNo, LocalDate dueDate, BigDecimal principalDue, BigDecimal interestDue,
-                            BigDecimal principalPaid, BigDecimal interestPaid) {
-        public BigDecimal principalUnpaid() { return principalDue.subtract(principalPaid); }
-        public BigDecimal interestUnpaid() { return interestDue.subtract(interestPaid); }
+                            BigDecimal principalPaid, BigDecimal interestPaid, BigDecimal principalRescheduled,
+                            BigDecimal interestCapitalised) {
+        public DemandRow {
+            principalRescheduled = principalRescheduled == null ? BigDecimal.ZERO : principalRescheduled;   // state stored before P2-3
+            interestCapitalised = interestCapitalised == null ? BigDecimal.ZERO : interestCapitalised;
+        }
+
+        public DemandRow(int instalmentNo, LocalDate dueDate, BigDecimal principalDue, BigDecimal interestDue,
+                         BigDecimal principalPaid, BigDecimal interestPaid) {
+            this(instalmentNo, dueDate, principalDue, interestDue, principalPaid, interestPaid, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+
+        public BigDecimal principalUnpaid() { return principalDue.subtract(principalPaid).subtract(principalRescheduled); }
+        public BigDecimal interestUnpaid() { return interestDue.subtract(interestPaid).subtract(interestCapitalised); }
         boolean unpaid() { return principalUnpaid().signum() > 0 || interestUnpaid().signum() > 0; }
+
+        DemandRow paid(Component c, BigDecimal amount) {
+            return c == Component.INTEREST
+                    ? new DemandRow(instalmentNo, dueDate, principalDue, interestDue, principalPaid, interestPaid.add(amount), principalRescheduled, interestCapitalised)
+                    : new DemandRow(instalmentNo, dueDate, principalDue, interestDue, principalPaid.add(amount), interestPaid, principalRescheduled, interestCapitalised);
+        }
+
+        DemandRow restructured(BigDecimal principal, BigDecimal interest) {
+            return new DemandRow(instalmentNo, dueDate, principalDue, interestDue, principalPaid, interestPaid,
+                    principalRescheduled.add(principal), interestCapitalised.add(interest));
+        }
     }
 
     public record ChargeRow(String id, String code, String name, Component kind, LocalDate date, BigDecimal amount,
@@ -56,12 +84,21 @@ public final class LoanAccount {
         public BigDecimal unpaid() { return amount.subtract(paid).subtract(waived); }
     }
 
-    /** Complete state, serialisable as JSON; stored before every transaction so it can be reversed. */
+    /**
+     * Complete state, serialisable as JSON; stored before every transaction so it can be reversed.
+     *
+     * @param ratePercent          current rate (changes on a rate amendment or restructure); null in state stored
+     *                             before P2-3 means the booked rate
+     * @param capitalisedSuspense  part of {@code suspense} that is interest capitalised on restructuring; realised
+     *                             only as principal is repaid
+     * @param restructure          set once the loan has been restructured
+     */
     public record Snapshot(Status status, LocalDate disbursedOn, BigDecimal disbursedAmount, BigDecimal principalOutstanding,
                            List<Instalment> futureSchedule, List<DemandRow> demands, List<ChargeRow> charges,
                            BigDecimal accruedNotDemanded, BigDecimal carriedInterest, LocalDate lastAccrualDate,
                            BigDecimal excess, AssetClass assetClass, LocalDate npaSince, int dpd, BigDecimal suspense,
-                           BigDecimal provisionHeld, int chargeSeq) {}
+                           BigDecimal provisionHeld, int chargeSeq, BigDecimal ratePercent, BigDecimal capitalisedSuspense,
+                           RestructureStatus restructure) {}
 
     public record Result(List<TransactionLot> lots, String summary) {}
 
@@ -83,6 +120,9 @@ public final class LoanAccount {
     private BigDecimal suspense;
     private BigDecimal provisionHeld;
     private int chargeSeq;
+    private BigDecimal rate;
+    private BigDecimal capitalisedSuspense;
+    private RestructureStatus restructure;
 
     private LoanAccount(Params p, Snapshot s) {
         this.p = p;
@@ -111,12 +151,15 @@ public final class LoanAccount {
         suspense = s.suspense();
         provisionHeld = s.provisionHeld();
         chargeSeq = s.chargeSeq();
+        rate = s.ratePercent() == null ? p.ratePercent() : s.ratePercent();
+        capitalisedSuspense = s.capitalisedSuspense() == null ? BigDecimal.ZERO : s.capitalisedSuspense();
+        restructure = s.restructure();
     }
 
     public Snapshot snapshot() {
         return new Snapshot(status, disbursedOn, disbursedAmount, principalOutstanding, List.copyOf(future), List.copyOf(demands),
                 List.copyOf(charges), accruedNotDemanded, carriedInterest, lastAccrualDate, excess, assetClass, npaSince, dpd,
-                suspense, provisionHeld, chargeSeq);
+                suspense, provisionHeld, chargeSeq, rate, capitalisedSuspense, restructure);
     }
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
@@ -130,7 +173,7 @@ public final class LoanAccount {
         List<Instalment> schedule = ScheduleBuilder.build(terms);
         LoanAccount a = new LoanAccount(p, new Snapshot(Status.ACTIVE, terms.disbursalDate(), terms.principal(), terms.principal(),
                 schedule, List.of(), List.of(), ZERO, ZERO, terms.disbursalDate().minusDays(1), ZERO, AssetClass.STANDARD,
-                null, 0, ZERO, ZERO, 0));
+                null, 0, ZERO, ZERO, 0, terms.ratePercent(), ZERO, null));
         LoanPostings post = a.postings(businessDate);
         List<FeeRule.Charge> deducted = new ArrayList<>();
         List<TransactionLot> lots = new ArrayList<>();
@@ -200,16 +243,18 @@ public final class LoanAccount {
         if (excess.signum() > 0 && !dues(day).isEmpty()) {
             Appropriation.Result split = Appropriation.allocate(dues(day), excess, p.sequence(), p.mode());
             if (!split.allocations().isEmpty()) {
+                BigDecimal principalBefore = principalOutstanding;
                 apply(split, npa);
                 lots.add(post.excessAdjustment(split));
                 if (npa) lots.addAll(realiseFromSuspense(post, split, day));
+                lots.addAll(releaseCapitalised(post, split.total(Component.PRINCIPAL), principalBefore));
                 excess = split.excess();
             }
         }
         // 3. accrue the night's interest on the scheduled balance ("schedule balance" method: delay is compensated by
         //    penal charges, not extra interest), until the last instalment is demanded
         if (!future.isEmpty() && principalOutstanding.signum() > 0) {
-            BigDecimal i = DailyCharges.interestForDay(future.get(0).openingBalance(), p.ratePercent(), day, p.dayCount());
+            BigDecimal i = DailyCharges.interestForDay(future.get(0).openingBalance(), rate, day, p.dayCount());
             if (i.signum() > 0) {
                 lots.add(post.accrual(i, npa, day));
                 accruedNotDemanded = accruedNotDemanded.add(i);
@@ -225,7 +270,12 @@ public final class LoanAccount {
             lots.add(post.penal(penal, npa, day));
             if (npa) suspense = suspense.add(penal);
         }
-        // 5. classification and income recognition
+        // 5. classification and income recognition; a restructured account under monitoring that misses an instalment
+        //    of its new schedule at day-end has not performed satisfactorily (RestructureStatus)
+        if (restructure != null && restructure.underMonitoring() && !restructure.defaulted()
+                && demands.stream().anyMatch(d -> d.unpaid() && d.dueDate().isAfter(restructure.restructuredOn()) && !d.dueDate().isAfter(day))) {
+            restructure = restructure.withDefaulted();
+        }
         lots.addAll(classify(day, post));
         // 6. provisioning
         if (rates != null) {
@@ -237,6 +287,20 @@ public final class LoanAccount {
             }
         }
         lastAccrualDate = day;
+        // 7. the last instalment was met from an advance: the loan is fully repaid
+        if (status == Status.ACTIVE && !demands.isEmpty() && future.isEmpty() && principalOutstanding.signum() == 0 && dues(day).isEmpty()) {
+            if (provisionHeld.signum() > 0) {
+                lots.add(post.provision(provisionHeld.negate()));
+                provisionHeld = ZERO;
+            }
+            if (suspense.signum() > 0) {
+                lots.add(post.suspenseToIncome(suspense));
+                suspense = ZERO;
+                capitalisedSuspense = ZERO;
+            }
+            status = Status.CLOSED;
+            return new Result(lots, "EOD " + day + " fully repaid; loan closed");
+        }
         return new Result(lots, "EOD " + day + " dpd " + dpd + " " + assetClass);
     }
 
@@ -260,15 +324,39 @@ public final class LoanAccount {
         dpd = Delinquency.dpd(day, oldest);
         boolean arrears = oldest != null && !oldest.isAfter(day);
         AssetClass before = assetClass;
-        Delinquency.Status st = Delinquency.classify(day, dpd, assetClass, npaSince, arrears);
+        boolean upgradeBlocked = restructure != null && !restructure.upgradeAllowed(day, principalOutstanding);
+        Delinquency.Status st = Delinquency.classify(day, dpd, assetClass, npaSince, arrears, upgradeBlocked);
         assetClass = st.assetClass();
         npaSince = st.npaSince();
         if (!before.isNpa() && assetClass.isNpa()) lots.addAll(onBecomingNpa(post));
-        if (before.isNpa() && !assetClass.isNpa() && suspense.signum() > 0) {
-            lots.add(post.suspenseToIncome(suspense));      // upgraded: remaining suspense (not-yet-due accrual) is income again
-            suspense = ZERO;
+        if (before.isNpa() && !assetClass.isNpa()) {
+            if (restructure != null && restructure.underMonitoring()) restructure = restructure.withUpgradedOn(day);
+            BigDecimal free = freeSuspense();
+            if (free.signum() > 0) {
+                lots.add(post.suspenseToIncome(free));      // upgraded: remaining suspense (not-yet-due accrual) is income again
+                suspense = suspense.subtract(free);
+            }
         }
         return lots;
+    }
+
+    /** Suspense other than interest capitalised on restructuring (which is realised only with principal). */
+    private BigDecimal freeSuspense() {
+        return suspense.subtract(capitalisedSuspense).max(ZERO);
+    }
+
+    /**
+     * Capitalised interest held in suspense becomes income in proportion to the principal repaid; all of it once the
+     * principal is fully repaid.
+     */
+    private List<TransactionLot> releaseCapitalised(LoanPostings post, BigDecimal principalPaid, BigDecimal principalBefore) {
+        if (capitalisedSuspense.signum() == 0 || principalPaid.signum() <= 0 || principalBefore.signum() <= 0) return List.of();
+        BigDecimal release = principalOutstanding.signum() == 0 ? capitalisedSuspense
+                : capitalisedSuspense.multiply(principalPaid).divide(principalBefore, 2, java.math.RoundingMode.HALF_UP).min(capitalisedSuspense);
+        if (release.signum() <= 0) return List.of();
+        capitalisedSuspense = capitalisedSuspense.subtract(release);
+        suspense = suspense.subtract(release);
+        return List.of(post.suspenseToIncome(release));
     }
 
     /** Borrower-level NPA (US-037): the service applies the worst class of the borrower's loans to each loan. */
@@ -282,7 +370,7 @@ public final class LoanAccount {
     private List<TransactionLot> onBecomingNpa(LoanPostings post) {
         BigDecimal unpaidInterest = demands.stream().map(DemandRow::interestUnpaid).reduce(ZERO, BigDecimal::add).add(accruedNotDemanded);
         BigDecimal unpaidPenal = charges.stream().filter(c -> c.kind() == Component.PENAL).map(ChargeRow::unpaid).reduce(ZERO, BigDecimal::add);
-        BigDecimal move = unpaidInterest.add(unpaidPenal).subtract(suspense);
+        BigDecimal move = unpaidInterest.add(unpaidPenal).subtract(freeSuspense());
         if (move.signum() <= 0) return List.of();
         suspense = suspense.add(move);
         BigDecimal interestPart = unpaidInterest.min(move);
@@ -311,9 +399,7 @@ public final class LoanAccount {
                 for (int i = 0; i < demands.size(); i++) {
                     DemandRow d = demands.get(i);
                     if (d.instalmentNo() != n) continue;
-                    demands.set(i, a.component() == Component.INTEREST
-                            ? new DemandRow(d.instalmentNo(), d.dueDate(), d.principalDue(), d.interestDue(), d.principalPaid(), d.interestPaid().add(a.amount()))
-                            : new DemandRow(d.instalmentNo(), d.dueDate(), d.principalDue(), d.interestDue(), d.principalPaid().add(a.amount()), d.interestPaid()));
+                    demands.set(i, d.paid(a.component(), a.amount()));
                 }
                 if (a.component() == Component.PRINCIPAL) principalOutstanding = principalOutstanding.subtract(a.amount());
             } else {
@@ -327,7 +413,7 @@ public final class LoanAccount {
     }
 
     private List<TransactionLot> realiseFromSuspense(LoanPostings post, Appropriation.Result split, LocalDate day) {
-        BigDecimal realised = split.total(Component.INTEREST).add(split.total(Component.PENAL)).min(suspense);
+        BigDecimal realised = split.total(Component.INTEREST).add(split.total(Component.PENAL)).min(freeSuspense());
         if (realised.signum() <= 0) return List.of();
         suspense = suspense.subtract(realised);
         return List.of(post.suspenseToIncome(realised));
@@ -337,20 +423,27 @@ public final class LoanAccount {
     public Result pay(BigDecimal amount, LocalDate valueDate, LocalDate businessDate, String narration) {
         requireActive();
         boolean npa = assetClass.isNpa();
+        BigDecimal principalBefore = principalOutstanding;
         Appropriation.Result split = Appropriation.allocate(dues(businessDate), amount, p.sequence(), p.mode());
         apply(split, npa);
         excess = excess.add(split.excess());
         LoanPostings post = postings(businessDate);
         List<TransactionLot> lots = new ArrayList<>();
-        BigDecimal realised = split.total(Component.INTEREST).add(split.total(Component.PENAL)).min(suspense);
+        BigDecimal realised = split.total(Component.INTEREST).add(split.total(Component.PENAL)).min(freeSuspense());
         // the repayment lot moves realised NPA interest/penal from suspense to income itself
         lots.add(post.repayment(amount, split, npa && realised.signum() > 0, valueDate, narration));
         if (npa) suspense = suspense.subtract(realised);
+        lots.addAll(releaseCapitalised(post, split.total(Component.PRINCIPAL), principalBefore));
         lots.addAll(classify(businessDate, post));
         if (principalOutstanding.signum() == 0 && future.isEmpty() && dues(businessDate).isEmpty()) {
             if (provisionHeld.signum() > 0) {
                 lots.add(post.provision(provisionHeld.negate()));
                 provisionHeld = ZERO;
+            }
+            if (suspense.signum() > 0) {          // closed while still NPA (e.g. restructured, upgrade not yet due): all realised
+                lots.add(post.suspenseToIncome(suspense));
+                suspense = ZERO;
+                capitalisedSuspense = ZERO;
             }
             status = Status.CLOSED;               // fully repaid; any advance stays payable to the borrower
         }
@@ -382,12 +475,15 @@ public final class LoanAccount {
             }
         }
         lots.add(post.principalPrepayment(amount, businessDate));
+        BigDecimal principalBefore = principalOutstanding;
         principalOutstanding = principalOutstanding.subtract(amount);
-        carriedInterest = carriedInterest.add(accruedNotDemanded);
-        BigDecimal emiBefore = future.get(0).instalment();
+        lots.addAll(releaseCapitalised(post, amount, principalBefore));
+        // accruedNotDemanded already contains any interest carried by an earlier event in this period: carry it once
+        carriedInterest = accruedNotDemanded;
+        BigDecimal emiBefore = currentEmi();     // not the next row: it may carry broken-period interest
         LocalDate nextDue = future.get(0).dueDate();
         int remaining = future.size();
-        LoanTerms t = new LoanTerms(principalOutstanding, p.ratePercent(), remaining, businessDate, nextDue,
+        LoanTerms t = new LoanTerms(principalOutstanding, rate, remaining, businessDate, nextDue,
                 RepaymentMethod.EQUATED, 0, ZERO, p.dayCount(), p.rounding(), false);
         List<Instalment> rebuilt = ScheduleBuilder.build(t);
         if (mode == PrepaymentMode.REDUCE_TENURE) rebuilt = keepEmi(rebuilt, emiBefore, t);
@@ -473,7 +569,7 @@ public final class LoanAccount {
             lots.add(post.excessAdjustment(adv));
             split = new Appropriation.Result(reduce(split, fromExcess), split.excess());
         }
-        BigDecimal realised = split.total(Component.INTEREST).add(split.total(Component.PENAL)).min(suspense);
+        BigDecimal realised = split.total(Component.INTEREST).add(split.total(Component.PENAL)).min(freeSuspense());
         lots.add(post.repayment(amount, split, npa && realised.signum() > 0, businessDate, "Pre-closure"));
         suspense = suspense.subtract(realised.max(ZERO));
         if (principalOutstanding.signum() != 0 || !dues(businessDate).isEmpty()) {
@@ -487,6 +583,7 @@ public final class LoanAccount {
             lots.add(post.suspenseToIncome(suspense));
             suspense = ZERO;
         }
+        capitalisedSuspense = ZERO;
         status = Status.CLOSED;
         return new Result(lots, "Pre-closed for " + amount);
     }
@@ -556,7 +653,7 @@ public final class LoanAccount {
             if (amount.signum() <= 0 || amount.compareTo(c.unpaid()) > 0) throw new IllegalArgumentException("waiver must be 0 < amount <= " + c.unpaid());
             charges.set(i, new ChargeRow(c.id(), c.code(), c.name(), c.kind(), c.date(), c.amount(), c.paid(), c.waived().add(amount)));
             boolean npa = assetClass.isNpa() && c.kind() == Component.PENAL;
-            if (npa) suspense = suspense.subtract(amount.min(suspense));
+            if (npa) suspense = suspense.subtract(amount.min(freeSuspense()));
             return new Result(List.of(postings(businessDate).waiver(c.kind(), amount, npa)), "Waived " + amount + " of " + c.name());
         }
         throw new IllegalArgumentException("charge " + chargeId + " not found");
@@ -572,8 +669,344 @@ public final class LoanAccount {
         status = Status.ACTIVE;
     }
 
+    // ------------------------------------------------------------------------------------------------ amendments (P2-3)
+    /** Engine limit on instalments over a loan's life (as {@link LoanTerms}). */
+    private static final int MAX_INSTALMENTS = 480;
+
+    /** Figures of the amendment on today's state, without changing it (the preview uses the code that applies). */
+    public Amendment.Effect previewAmendment(Amendment a, LocalDate businessDate) {
+        return computeAmendment(a, businessDate);
+    }
+
+    /**
+     * Amends rate, tenure, EMI or due day (see {@link Amendment}). The future schedule is rebuilt from the principal
+     * not yet demanded; demands already raised stay as they are. Interest accrued since the last due date (at the
+     * old terms) is folded into the next instalment's interest, and the day's accrual continues at the new rate, so
+     * the next demand equals what was accrued (no interest lost or counted twice). No money moves: no postings.
+     */
+    public Result amend(Amendment a, LocalDate businessDate) {
+        Amendment.Effect e = computeAmendment(a, businessDate);
+        future = new ArrayList<>(e.scheduleAfter());
+        rate = e.rateAfter();
+        carriedInterest = ZERO;              // now inside the next instalment's interest
+        return new Result(List.of(), describe(e));
+    }
+
+    private static String describe(Amendment.Effect e) {
+        StringBuilder s = new StringBuilder(e.kind().name().replace('_', ' ').toLowerCase(java.util.Locale.ROOT));
+        if (e.rateBefore().compareTo(e.rateAfter()) != 0) {
+            s.append(": rate ").append(e.rateBefore().stripTrailingZeros().toPlainString()).append("% → ")
+                    .append(e.rateAfter().stripTrailingZeros().toPlainString()).append('%');
+        }
+        s.append("; EMI ").append(e.emiBefore().toPlainString()).append(" → ").append(e.emiAfter().toPlainString())
+                .append("; instalments left ").append(e.remainingBefore()).append(" → ").append(e.remainingAfter())
+                .append("; maturity ").append(e.maturityAfter());
+        if (e.brokenPeriodInterest().signum() != 0) s.append("; broken-period interest ").append(e.brokenPeriodInterest().toPlainString());
+        return s.toString();
+    }
+
+    private Amendment.Effect computeAmendment(Amendment a, LocalDate businessDate) {
+        requireActive();
+        if (future.isEmpty()) throw new IllegalStateException("no instalments left to amend");
+        LocalDate start = lastAccrualDate.plusDays(1);
+        LocalDate nextDue = future.get(0).dueDate();
+        if (!nextDue.isAfter(start)) throw new IllegalStateException("an instalment falls due today; amend after end of day");
+        BigDecimal balance = future.stream().map(Instalment::principal).reduce(ZERO, BigDecimal::add);
+        if (balance.signum() <= 0) throw new IllegalStateException("no principal left to reschedule");
+        int moratorium = 0;
+        while (moratorium < future.size() - 1 && future.get(moratorium).principal().signum() == 0) moratorium++;
+        int remainingBefore = future.size();
+        BigDecimal emiBefore = currentEmi();
+        LocalDate maturityBefore = future.get(future.size() - 1).dueDate();
+        BigDecimal interestBefore = future.stream().map(Instalment::interest).reduce(ZERO, BigDecimal::add).add(carriedInterest);
+        int anchorDay = anchorDay();
+        BigDecimal newRate = rate;
+        BigDecimal emi = null;
+        Integer n = null;
+        LocalDate firstDue = nextDue;
+        LocalDate basisEnd = null;
+        switch (a.kind()) {
+            case RATE_CHANGE -> {
+                newRate = a.newRatePercent();
+                switch (a.rateOption()) {
+                    case KEEP_TENURE_CHANGE_EMI -> n = remainingBefore;
+                    case KEEP_EMI_CHANGE_TENURE -> emi = emiBefore;
+                    case CHANGE_BOTH -> {
+                        if (a.remainingInstalments() != null) n = a.remainingInstalments(); else emi = a.newEmi();
+                    }
+                }
+            }
+            case TENURE_CHANGE -> {
+                if (a.remainingInstalments() == remainingBefore) throw new IllegalArgumentException("the tenure is already " + remainingBefore + " instalments");
+                n = a.remainingInstalments();
+            }
+            case EMI_CHANGE -> {
+                if (a.newEmi().compareTo(emiBefore) == 0) throw new IllegalArgumentException("the EMI is already " + emiBefore.toPlainString());
+                emi = a.newEmi();
+            }
+            case DUE_DAY_CHANGE -> {
+                if (a.newDueDay() == anchorDay) {
+                    throw new IllegalArgumentException("instalments already fall due on day " + a.newDueDay());
+                }
+                anchorDay = a.newDueDay();
+                // the new date is the first one on the new day not before the old date: the borrower gets the extra
+                // days and pays their interest with the next instalment
+                firstDue = dueOn(nextDue, anchorDay);
+                if (firstDue.isBefore(nextDue)) firstDue = dueOn(nextDue.plusMonths(1), anchorDay);
+                n = remainingBefore;
+                emi = emiBefore;
+                basisEnd = nextDue;          // the principal repaid is what it would have been on the old date
+            }
+        }
+        if (n != null && n <= moratorium) {
+            throw new IllegalArgumentException("the new tenure must be longer than the " + moratorium + " moratorium instalment(s) left");
+        }
+        int maxTotal = a.maxTenureMonths() == null ? MAX_INSTALMENTS : a.maxTenureMonths();
+        if (n != null && n > remainingBefore && demands.size() + n > maxTotal) {
+            throw new IllegalArgumentException(n + " instalments take the loan to " + (demands.size() + n)
+                    + " months, beyond the maximum tenure of " + maxTotal + " months");
+        }
+        if (emi == null) emi = EmiCalculator.pmt(balance, newRate, n - moratorium, p.rounding());
+        requireNoNegativeAmortisation(emi, balance, newRate);
+        List<Instalment> rows = rows(balance, newRate, emi, n, moratorium, firstDue, anchorDay, start, accruedNotDemanded, basisEnd,
+                MAX_INSTALMENTS - demands.size());
+        int remainingAfter = rows.size();
+        if (remainingAfter > remainingBefore && demands.size() + remainingAfter > maxTotal) {
+            throw new IllegalArgumentException("the new schedule needs " + remainingAfter + " more instalments, which takes the loan to "
+                    + (demands.size() + remainingAfter) + " months, beyond the maximum tenure of " + maxTotal + " months");
+        }
+        LocalDate maturityAfter = rows.get(rows.size() - 1).dueDate();
+        BigDecimal overdue = demands.stream().filter(d -> !d.dueDate().isAfter(businessDate))
+                .map(d -> d.principalUnpaid().add(d.interestUnpaid())).reduce(ZERO, BigDecimal::add);
+        // a market rate reset may lower the EMI of a borrower in arrears; any other concession is a restructure
+        boolean concession = maturityAfter.isAfter(maturityBefore) || (a.kind() != Amendment.Kind.RATE_CHANGE && emi.compareTo(emiBefore) < 0);
+        if (overdue.signum() > 0 && concession) {
+            throw new IllegalStateException("the loan has " + overdue.toPlainString() + " overdue; extending the tenure or lowering the EMI"
+                    + " of a borrower in arrears is a restructure (RBI prudential framework): collect the dues first or restructure");
+        }
+        BigDecimal broken = ZERO;
+        if (basisEnd != null) {
+            broken = rows.get(0).interest().subtract(p.rounding().apply(periodInterest(balance, newRate, start, basisEnd).add(accruedNotDemanded)));
+        }
+        BigDecimal interestAfter = rows.stream().map(Instalment::interest).reduce(ZERO, BigDecimal::add);
+        return new Amendment.Effect(a.kind(), balance, accruedNotDemanded, rate, newRate, emiBefore, emi, remainingBefore, remainingAfter,
+                nextDue, rows.get(0).dueDate(), maturityBefore, maturityAfter, interestBefore, interestAfter, broken,
+                List.copyOf(future), List.copyOf(rows));
+    }
+
+    private void requireNoNegativeAmortisation(BigDecimal emi, BigDecimal balance, BigDecimal ratePercent) {
+        BigDecimal monthly = balance.multiply(ratePercent).divide(BigDecimal.valueOf(1200), 2, java.math.RoundingMode.HALF_UP);
+        if (emi.compareTo(monthly.add(new BigDecimal("0.01"))) < 0) {
+            throw new IllegalArgumentException("the EMI of " + emi.toPlainString() + " must be at least the monthly interest of "
+                    + monthly.toPlainString() + " plus 1 paisa of principal; otherwise the loan would negatively amortise");
+        }
+    }
+
+    /** The regular instalment: a middle row (the first can carry broken-period interest, the last absorbs rounding). */
+    public BigDecimal currentEmi() {
+        if (future.isEmpty()) return ZERO;
+        return future.size() >= 2 ? future.get(future.size() - 2).instalment() : future.get(0).instalment();
+    }
+
+    /**
+     * Day of month instalments fall due on (31 = month end), read from the next two due dates (two consecutive
+     * months are enough to see past February); the last demand stands in when fewer are left.
+     */
+    private int anchorDay() {
+        List<LocalDate> dates = new ArrayList<>();
+        for (int i = 0; i < Math.min(2, future.size()); i++) dates.add(future.get(i).dueDate());
+        if (dates.size() < 2 && !demands.isEmpty()) dates.add(demands.get(demands.size() - 1).dueDate());
+        if (dates.isEmpty()) dates.add(disbursedOn);
+        int day = 0;
+        for (LocalDate d : dates) day = Math.max(day, d.getDayOfMonth() == d.lengthOfMonth() ? 31 : d.getDayOfMonth());
+        return day;
+    }
+
+    /** {@code day} in the month of {@code month}, or the month's last day when it is shorter. */
+    private static LocalDate dueOn(LocalDate month, int day) {
+        return month.withDayOfMonth(Math.min(day, month.lengthOfMonth()));
+    }
+
+    private BigDecimal periodInterest(BigDecimal balance, BigDecimal ratePercent, LocalDate from, LocalDate to) {
+        return balance.multiply(ratePercent.divide(BigDecimal.valueOf(100), java.math.MathContext.DECIMAL128), java.math.MathContext.DECIMAL128)
+                .multiply(p.dayCount().yearFraction(from, to), java.math.MathContext.DECIMAL128);
+    }
+
+    /**
+     * Equated rows from {@code start}, numbered after the demands raised. The first row's interest includes
+     * {@code accrued} (interest accrued since the period began, at the old terms). With {@code n} null the number of
+     * instalments follows from the EMI. {@code basisEnd}: the first row repays the principal it would have repaid had
+     * it fallen due on that date (due-day change: the broken-period interest is added on top of the EMI).
+     */
+    private List<Instalment> rows(BigDecimal balance, BigDecimal ratePercent, BigDecimal emi, Integer n, int moratorium,
+                                  LocalDate firstDue, int anchorDay, LocalDate start, BigDecimal accrued, LocalDate basisEnd,
+                                  int cap) {
+        List<Instalment> rows = new ArrayList<>();
+        BigDecimal bal = balance;
+        LocalDate prev = start;
+        LocalDate periodStart = demands.isEmpty() ? disbursedOn : demands.get(demands.size() - 1).dueDate();
+        for (int k = 1; bal.signum() > 0; k++) {
+            if (k > cap) {
+                throw new IllegalArgumentException("an EMI of " + emi.toPlainString() + " would need more than " + cap
+                        + " instalments; choose a higher EMI or a tenure");
+            }
+            LocalDate due = k == 1 ? firstDue : dueOn(firstDue.plusMonths(k - 1L), anchorDay);
+            BigDecimal exact = periodInterest(bal, ratePercent, prev, due);
+            BigDecimal interest = p.rounding().apply(k == 1 ? exact.add(accrued) : exact);
+            BigDecimal principal;
+            if (k <= moratorium) {
+                principal = ZERO;
+            } else if (n != null && k == n) {
+                principal = bal;
+            } else {
+                BigDecimal basis = k == 1 && basisEnd != null
+                        ? p.rounding().apply(periodInterest(bal, ratePercent, prev, basisEnd).add(accrued)) : interest;
+                principal = emi.subtract(basis);
+                if (principal.signum() <= 0) {
+                    throw new IllegalArgumentException("the EMI of " + emi.toPlainString() + " does not cover the interest of "
+                            + basis.toPlainString() + " due on " + due + "; the loan would negatively amortise");
+                }
+                if (principal.compareTo(bal) >= 0 || (n == null && bal.subtract(principal).compareTo(BigDecimal.ONE) < 0)) principal = bal;
+            }
+            LocalDate from = k == 1 ? periodStart : prev;
+            rows.add(new Instalment(demands.size() + k, due, p.dayCount().days(from, due), bal, interest, principal,
+                    principal.add(interest), bal.subtract(principal)));
+            bal = bal.subtract(principal);
+            prev = due;
+        }
+        return rows;
+    }
+
+    // ------------------------------------------------------------------------------------------------ restructure (P2-3)
+    /**
+     * Figures of up to three restructuring options on today's state, without changing it. Each option is applied to
+     * a copy by the same code as {@link #restructure}, then the state is restored.
+     */
+    public List<RestructureSimulation> simulateRestructure(List<RestructureTerms> options, LocalDate day) {
+        if (options == null || options.isEmpty() || options.size() > 3) throw new IllegalArgumentException("give one to three options");
+        Snapshot s = snapshot();
+        List<RestructureSimulation> out = new ArrayList<>();
+        try {
+            for (RestructureTerms t : options) {
+                out.add(doRestructure(t, day).simulation());
+                restore(s);
+            }
+        } finally {
+            restore(s);
+        }
+        return List.copyOf(out);
+    }
+
+    public RestructureSimulation simulateRestructure(RestructureTerms t, LocalDate day) {
+        return simulateRestructure(List.of(t), day).get(0);
+    }
+
+    /**
+     * Restructures the loan (RBI Prudential Framework for Resolution of Stressed Assets, 7-Jun-2019): overdue
+     * principal is rescheduled, overdue interest capitalised or kept as arrears, a principal moratorium and a new rate
+     * and tenure set. A standard account is downgraded to sub-standard; an NPA keeps its class. The account is flagged
+     * restructured and can be upgraded only after the specified period (see {@link RestructureStatus}).
+     */
+    public Result restructure(RestructureTerms t, LocalDate day) {
+        return doRestructure(t, day).result();
+    }
+
+    private record Restructured(RestructureSimulation simulation, Result result) {}
+
+    private Restructured doRestructure(RestructureTerms t, LocalDate day) {
+        requireActive();
+        LocalDate start = lastAccrualDate.plusDays(1);
+        if (!future.isEmpty() && !future.get(0).dueDate().isAfter(start)) {
+            throw new IllegalStateException("an instalment falls due today; restructure after end of day");
+        }
+        if (principalOutstanding.signum() <= 0) throw new IllegalStateException("no principal left to restructure");
+        int maxTotal = t.maxTenureMonths() == null ? MAX_INSTALMENTS : t.maxTenureMonths();
+        if (demands.size() + t.remainingInstalments() > maxTotal) {
+            throw new IllegalArgumentException(t.remainingInstalments() + " new instalments take the loan to "
+                    + (demands.size() + t.remainingInstalments()) + " months, beyond the maximum tenure of " + maxTotal + " months");
+        }
+        AssetClass classBefore = assetClass;
+        BigDecimal principalBefore = principalOutstanding;
+        BigDecimal rateBefore = rate;
+        BigDecimal emiBefore = currentEmi();
+        int remainingBefore = future.size();
+        LocalDate maturityBefore = !future.isEmpty() ? future.get(future.size() - 1).dueDate()
+                : demands.isEmpty() ? disbursedOn : demands.get(demands.size() - 1).dueDate();
+        BigDecimal overduePrincipal = demands.stream().map(DemandRow::principalUnpaid).reduce(ZERO, BigDecimal::add);
+        BigDecimal overdueInterest = demands.stream().map(DemandRow::interestUnpaid).reduce(ZERO, BigDecimal::add);
+        BigDecimal interestBefore = future.stream().map(Instalment::interest).reduce(ZERO, BigDecimal::add)
+                .add(carriedInterest).add(overdueInterest);
+        List<BigDecimal> oldFlows = new ArrayList<>();
+        for (int i = 0; i < future.size(); i++) oldFlows.add(future.get(i).instalment().add(i == 0 ? carriedInterest : ZERO));
+        BigDecimal npvBefore = RestructureSimulation.npv(overduePrincipal.add(overdueInterest), oldFlows, rateBefore);
+
+        LoanPostings post = postings(day);
+        List<TransactionLot> lots = new ArrayList<>();
+        // 1. a standard account becomes sub-standard on restructuring; an NPA keeps its class
+        if (!assetClass.isNpa()) {
+            assetClass = AssetClass.SUBSTANDARD;
+            npaSince = day;
+            lots.addAll(onBecomingNpa(post));
+        }
+        // 2. overdue principal back into the schedule; overdue interest capitalised or kept as arrears
+        BigDecimal capitalised = ZERO;
+        boolean capitalise = t.overdueInterest() == RestructureTerms.OverdueInterest.CAPITALISE;
+        for (int i = 0; i < demands.size(); i++) {
+            DemandRow d = demands.get(i);
+            BigDecimal pr = d.principalUnpaid();
+            BigDecimal in = capitalise ? d.interestUnpaid() : ZERO;
+            if (pr.signum() > 0 || in.signum() > 0) demands.set(i, d.restructured(pr, in));
+            capitalised = capitalised.add(in);
+        }
+        if (capitalised.signum() > 0) {
+            lots.add(post.interestCapitalisation(capitalised));
+            capitalisedSuspense = capitalisedSuspense.add(capitalised.min(freeSuspense()));
+            principalOutstanding = principalOutstanding.add(capitalised);
+        }
+        // 3. the new schedule over all principal outstanding
+        BigDecimal balance = principalOutstanding;
+        BigDecimal newRate = t.newRatePercent() == null ? rate : t.newRatePercent();
+        int anchorDay = anchorDay();
+        LocalDate firstDue;
+        if (!future.isEmpty()) {
+            firstDue = future.get(0).dueDate();
+        } else {
+            firstDue = dueOn(start, anchorDay);
+            if (!firstDue.isAfter(start)) firstDue = dueOn(start.plusMonths(1), anchorDay);
+        }
+        int m = t.principalMoratoriumMonths();
+        BigDecimal emi = EmiCalculator.pmt(balance, newRate, t.remainingInstalments() - m, p.rounding());
+        List<Instalment> rows = rows(balance, newRate, emi, t.remainingInstalments(), m, firstDue, anchorDay, start, accruedNotDemanded,
+                null, MAX_INSTALMENTS - demands.size());
+        future = new ArrayList<>(rows);
+        rate = newRate;
+        carriedInterest = ZERO;
+        // 4. flag and specified period: one year from the later of the first interest and first principal payment
+        LocalDate firstPaymentDue = rows.get(Math.min(m, rows.size() - 1)).dueDate();
+        restructure = new RestructureStatus(day, restructure == null ? 1 : restructure.count() + 1, classBefore, balance,
+                firstPaymentDue, firstPaymentDue.plusYears(1), false, null);
+        lots.addAll(classify(day, post));      // DPD from any arrears kept; the upgrade is blocked
+
+        BigDecimal arrearsKept = overdueInterest.subtract(capitalised);
+        BigDecimal npvAfter = RestructureSimulation.npv(arrearsKept, rows.stream().map(Instalment::instalment).toList(), rateBefore);
+        BigDecimal interestAfter = rows.stream().map(Instalment::interest).reduce(ZERO, BigDecimal::add).add(arrearsKept);
+        RestructureSimulation sim = new RestructureSimulation(t, classBefore, assetClass, principalBefore, overduePrincipal,
+                overdueInterest, capitalised, arrearsKept, balance, rateBefore, newRate, emiBefore, emi, remainingBefore, rows.size(),
+                maturityBefore, rows.get(rows.size() - 1).dueDate(), interestBefore, interestAfter, npvBefore, npvAfter,
+                npvBefore.subtract(npvAfter), restructure.specifiedPeriodMinEnd(), List.copyOf(rows));
+        String summary = "Restructured: " + classBefore + " → " + assetClass + ", principal " + balance.toPlainString()
+                + (capitalised.signum() > 0 ? " (interest capitalised " + capitalised.toPlainString() + ")" : "")
+                + ", rate " + newRate.stripTrailingZeros().toPlainString() + "%, " + rows.size() + " instalments"
+                + (m > 0 ? " incl. " + m + " months' principal moratorium" : "") + ", EMI " + emi.toPlainString()
+                + "; upgrade not before " + restructure.specifiedPeriodMinEnd();
+        return new Restructured(sim, new Result(List.copyOf(lots), summary));
+    }
+
     // ------------------------------------------------------------------------------------------------ views
     public Status status() { return status; }
+    public BigDecimal ratePercent() { return rate; }
+    public RestructureStatus restructureStatus() { return restructure; }
+    public BigDecimal capitalisedSuspense() { return capitalisedSuspense; }
     public BigDecimal principalOutstanding() { return principalOutstanding; }
     public List<DemandRow> demands() { return List.copyOf(demands); }
     public List<ChargeRow> charges() { return List.copyOf(charges); }

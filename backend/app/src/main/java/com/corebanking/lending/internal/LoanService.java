@@ -5,12 +5,15 @@ import com.corebanking.calc.AprCalculator;
 import com.corebanking.calc.DayCount;
 import com.corebanking.calc.Rounding;
 import com.corebanking.calc.ScheduleGenerator.Instalment;
+import com.corebanking.lending.engine.Amendment;
 import com.corebanking.lending.engine.Delinquency.AssetClass;
 import com.corebanking.lending.engine.FeeRule;
 import com.corebanking.lending.engine.LoanAccount;
 import com.corebanking.lending.engine.LoanTerms;
 import com.corebanking.lending.engine.Provisioning;
 import com.corebanking.lending.engine.RepaymentMethod;
+import com.corebanking.lending.engine.RestructureSimulation;
+import com.corebanking.lending.engine.RestructureTerms;
 import com.corebanking.lending.engine.ScheduleBuilder;
 import com.corebanking.ledger.NumberSeries;
 import com.corebanking.ledger.NumberSeriesService;
@@ -391,6 +394,7 @@ public class LoanService {
         if (List.of("DISBURSEMENT", "REVERSAL", "EOD").contains(t.get("txn_type"))) {
             throw ApiException.conflict(t.get("txn_type") + " cannot be reversed; use cancellation for a disbursement");
         }
+        if (restructuredSince(jdbc, loanId, t.get("seq"))) throw ApiException.conflict(RESTRUCTURE_NOT_REVERSIBLE);
         Integer later = jdbc.queryForObject("""
                 SELECT count(*) FROM lending.loan_txn WHERE loan_id = ? AND seq > ? AND reversed_by IS NULL
                    AND txn_type NOT IN ('EOD','REVERSAL')
@@ -407,6 +411,382 @@ public class LoanService {
                 (BigDecimal) t.get("amount"), branchOf(loanId), null));
     }
 
+    // ------------------------------------------------------------------------------------------------ amendments (P2-3)
+    /** openapi.yaml#/components/schemas/AmendmentRequest. */
+    public record AmendmentRequest(String kind, BigDecimal newRatePercent, String rateOption, Integer remainingInstalments,
+                                   BigDecimal newEmi, Integer newDueDay, String reason) {}
+
+    /** openapi.yaml#/components/schemas/RestructureTerms. */
+    public record RestructureRequest(BigDecimal newRatePercent, Integer remainingInstalments, Integer principalMoratoriumMonths,
+                                     String overdueInterest, String reason) {}
+
+    static final String RESTRUCTURE_NOT_REVERSIBLE = "a restructure cannot be reversed, nor can any transaction before it"
+            + " (reversing that would undo the restructure too): the restructuring downgraded the account and may have"
+            + " capitalised interest under RBI's prudential framework, and must stand; propose a fresh amendment or"
+            + " restructure instead";
+
+    /** Product limits that bound an amendment (the product the loan was booked on). */
+    private record Limits(int maxTenorMonths, BigDecimal minRate, BigDecimal maxRate) {}
+
+    /** Amendments and restructures rebuild an equated schedule: other methods and balloon loans are refused. */
+    private Limits limits(UUID loanId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT l.repayment_method, coalesce((l.booked_terms->>'balloon')::numeric, 0) AS balloon,
+                       p.max_tenor_months, p.min_rate, p.max_rate
+                  FROM lending.loan_account l JOIN lending.loan_product p ON p.code = l.product_code
+                 WHERE l.id = ?
+                """, loanId);
+        if (rows.isEmpty()) throw ApiException.notFound("loan " + loanId);
+        Map<String, Object> r = rows.get(0);
+        if (!"EQUATED".equals(r.get("repayment_method"))) {
+            throw ApiException.conflict("amendments and restructures apply to equated (EMI) loans; this loan is " + r.get("repayment_method"));
+        }
+        if (((BigDecimal) r.get("balloon")).signum() > 0) throw ApiException.conflict("a loan with a balloon payment cannot be amended here");
+        return new Limits(((Number) r.get("max_tenor_months")).intValue(), (BigDecimal) r.get("min_rate"), (BigDecimal) r.get("max_rate"));
+    }
+
+    private static Amendment amendment(AmendmentRequest q, Limits lim) {
+        if (q == null || q.kind() == null) throw ApiException.invalid("kind is required");
+        if (q.newRatePercent() != null && (q.newRatePercent().compareTo(lim.minRate()) < 0 || q.newRatePercent().compareTo(lim.maxRate()) > 0)) {
+            throw ApiException.invalid("the new rate must be within the product band " + lim.minRate().stripTrailingZeros().toPlainString()
+                    + "% to " + lim.maxRate().stripTrailingZeros().toPlainString() + "%");
+        }
+        try {
+            Amendment.RateResetOption option = q.rateOption() == null ? null : Amendment.RateResetOption.valueOf(q.rateOption());
+            return new Amendment(Amendment.Kind.valueOf(q.kind()), q.newRatePercent(), option, q.remainingInstalments(), q.newEmi(),
+                    q.newDueDay(), lim.maxTenorMonths(), q.reason());
+        } catch (IllegalArgumentException e) {
+            throw ApiException.invalid(e.getMessage());
+        }
+    }
+
+    private static RestructureTerms restructureTerms(RestructureRequest q) {
+        if (q == null || q.remainingInstalments() == null) throw ApiException.invalid("remainingInstalments is required");
+        if (q.overdueInterest() == null) throw ApiException.invalid("overdueInterest is required: CAPITALISE or KEEP_AS_ARREARS");
+        try {
+            return new RestructureTerms(q.newRatePercent(), q.remainingInstalments(),
+                    q.principalMoratoriumMonths() == null ? 0 : q.principalMoratoriumMonths(),
+                    RestructureTerms.OverdueInterest.valueOf(q.overdueInterest()), null, q.reason());
+        } catch (IllegalArgumentException e) {
+            throw ApiException.invalid(e.getMessage());
+        }
+    }
+
+    /** A live restructure at or after transaction {@code seq}: reversing from there would undo it. */
+    static boolean restructuredSince(JdbcTemplate j, UUID loanId, Object seq) {
+        Integer n = j.queryForObject("""
+                SELECT count(*) FROM lending.loan_txn
+                 WHERE loan_id = ? AND seq >= ? AND reversed_by IS NULL AND txn_type = 'RESTRUCTURE'
+                """, Integer.class, loanId, seq);
+        return n != null && n > 0;
+    }
+
+    /** Engine refusals: bad parameters are 422, a loan state that does not allow the change is 409. */
+    private static <T> T engine(java.util.function.Supplier<T> call) {
+        try {
+            return call.get();
+        } catch (IllegalStateException e) {
+            throw ApiException.conflict(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            throw ApiException.invalid(e.getMessage());
+        }
+    }
+
+    private LoanStore.Loaded active(UUID loanId) {
+        LoanStore.Loaded l = store.lock(jdbc, loanId);
+        if (l.account() == null) throw ApiException.conflict("loan is " + l.status());
+        return l;
+    }
+
+    /** Before/after comparison and the new schedule (US: amendment preview; same engine as the posting). */
+    public Map<String, Object> previewAmendment(UUID loanId, AmendmentRequest req) {
+        LocalDate bd = days.current().businessDate();
+        Amendment a = amendment(req, limits(loanId));
+        LoanAccount acc = active(loanId).account();
+        Amendment.Effect e = engine(() -> acc.previewAmendment(a, bd));
+        Map<String, Object> m = figures(e);
+        m.put("asOf", bd.toString());
+        m.put("kind", e.kind().name());
+        m.put("principal", plain(e.principal()));
+        m.put("accruedInterest", plain(e.accruedCarried()));
+        m.put("schedule", e.scheduleAfter().stream().map(LoanService::row).toList());
+        m.put("currentSchedule", e.scheduleBefore().stream().map(LoanService::row).toList());
+        return m;
+    }
+
+    /** Maker: records the amendment for a checker, with the figures previewed today. */
+    @Transactional
+    public Map<String, Object> proposeAmendment(UUID loanId, AmendmentRequest req) {
+        if (req == null || req.reason() == null || req.reason().isBlank()) throw ApiException.invalid("a reason is required");
+        LocalDate bd = days.current().businessDate();
+        Amendment a = amendment(req, limits(loanId));
+        LoanStore.Loaded l = active(loanId);
+        Amendment.Effect e = engine(() -> l.account().previewAmendment(a, bd));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("loanId", loanId.toString());
+        payload.put("loanNo", l.loanNo());
+        payload.put("request", requestMap(req));
+        payload.put("proposedOn", bd.toString());
+        payload.put("preview", figures(e));
+        return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_AMENDMENT", "AMEND", l.loanNo(), payload,
+                currentTerms(l.account()), null, branchOf(loanId), null));
+    }
+
+    /**
+     * Checker approved: the engine runs again on the loan as it is now (it may have changed since the proposal). If the
+     * figures differ materially from those the checker saw, the current ones are applied and both are recorded.
+     */
+    String applyAmendment(ApprovalRequest r) {
+        LocalDate bd = days.requireOpen();
+        UUID loanId = UUID.fromString(String.valueOf(r.payload().get("loanId")));
+        Map<?, ?> q = r.payload().get("request") instanceof Map<?, ?> m ? m : Map.of();
+        AmendmentRequest req = new AmendmentRequest(str(q.get("kind")), dec(q.get("newRatePercent")), str(q.get("rateOption")),
+                integer(q.get("remainingInstalments")), dec(q.get("newEmi")), integer(q.get("newDueDay")), str(q.get("reason")));
+        Amendment a = amendment(req, limits(loanId));
+        LoanStore.Loaded l = active(loanId);
+        LoanAccount acc = l.account();
+        LoanAccount.Snapshot before = acc.snapshot();
+        Amendment.Effect e = engine(() -> acc.previewAmendment(a, bd));
+        LoanAccount.Result result = engine(() -> acc.amend(a, bd));
+        Map<?, ?> proposed = r.payload().get("preview") instanceof Map<?, ?> p ? p : Map.of();
+        Map<String, Object> applied = figures(e);
+        boolean differs = !same(proposed.get("emiAfter"), e.emiAfter()) || !same(proposed.get("rateAfter"), e.rateAfter())
+                || !String.valueOf(e.remainingAfter()).equals(str(proposed.get("remainingAfter")))
+                || !e.maturityAfter().toString().equals(str(proposed.get("maturityAfter")))
+                || !near(proposed.get("interestAfter"), e.interestAfter());
+        String summary = result.summary() + (differs ? " (figures differ from the proposal: applied on the loan as at approval)" : "");
+        for (TransactionLot lot : result.lots()) posting.post(lot, r.maker());
+        store.save(jdbc, loanId, acc, bd);
+        store.replaceSchedule(jdbc, loanId, acc.futureSchedule());
+        UUID txn = store.recordTxn(jdbc, loanId, "AMENDMENT", bd, bd, null, result.lots(), before, summary, null, r.maker());
+        recordHistory(new History(loanId, txn, a.kind().name(), requestMap(req), e.emiBefore(), e.emiAfter(), e.remainingBefore(),
+                e.remainingAfter(), e.rateBefore(), e.rateAfter(), e.maturityBefore(), e.maturityAfter(), e.interestBefore(),
+                e.interestAfter(), proposed, applied, differs, r, bd, req.reason()));
+        audit.record(CurrentUser.username(), "LOAN_AMENDMENT", "LOAN", l.loanNo(),
+                Map.of("summary", summary, "approvalId", r.id().toString()));
+        return l.loanNo();
+    }
+
+    /** Up to three restructuring options on today's state; nothing changes. */
+    public Map<String, Object> simulateRestructure(UUID loanId, List<RestructureRequest> options) {
+        if (options == null || options.isEmpty() || options.size() > 3) throw ApiException.invalid("give one to three options");
+        LocalDate bd = days.current().businessDate();
+        limits(loanId);
+        List<RestructureTerms> terms = options.stream().map(LoanService::restructureTerms).toList();
+        LoanAccount acc = active(loanId).account();
+        List<RestructureSimulation> sims = engine(() -> acc.simulateRestructure(terms, bd));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("asOf", bd.toString());
+        m.put("current", currentTerms(acc));
+        m.put("options", sims.stream().map(s -> {
+            Map<String, Object> o = simulationFigures(s);
+            o.put("schedule", s.schedule().stream().map(LoanService::row).toList());
+            return o;
+        }).toList());
+        return m;
+    }
+
+    /** Maker: records a restructure for two checkers (approval rule LOAN_RESTRUCTURE, V14). */
+    @Transactional
+    public Map<String, Object> proposeRestructure(UUID loanId, RestructureRequest req) {
+        if (req == null || req.reason() == null || req.reason().isBlank()) throw ApiException.invalid("a reason is required");
+        LocalDate bd = days.current().businessDate();
+        limits(loanId);
+        RestructureTerms t = restructureTerms(req);
+        LoanStore.Loaded l = active(loanId);
+        RestructureSimulation s = engine(() -> l.account().simulateRestructure(t, bd));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("loanId", loanId.toString());
+        payload.put("loanNo", l.loanNo());
+        payload.put("terms", termsMap(req));
+        payload.put("proposedOn", bd.toString());
+        payload.put("preview", simulationFigures(s));
+        return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_RESTRUCTURE", "RESTRUCTURE", l.loanNo(), payload,
+                currentTerms(l.account()), l.account().principalOutstanding(), branchOf(loanId), null));
+    }
+
+    /** Checkers approved: re-run on today's state, post, and record the restructure (not reversible). */
+    String applyRestructure(ApprovalRequest r) {
+        LocalDate bd = days.requireOpen();
+        UUID loanId = UUID.fromString(String.valueOf(r.payload().get("loanId")));
+        Map<?, ?> q = r.payload().get("terms") instanceof Map<?, ?> m ? m : Map.of();
+        RestructureRequest req = new RestructureRequest(dec(q.get("newRatePercent")), integer(q.get("remainingInstalments")),
+                integer(q.get("principalMoratoriumMonths")), str(q.get("overdueInterest")), str(q.get("reason")));
+        limits(loanId);
+        RestructureTerms t = restructureTerms(req);
+        LoanStore.Loaded l = active(loanId);
+        LoanAccount acc = l.account();
+        LoanAccount.Snapshot before = acc.snapshot();
+        RestructureSimulation s = engine(() -> acc.simulateRestructure(t, bd));
+        LoanAccount.Result result = engine(() -> acc.restructure(t, bd));
+        Map<?, ?> proposed = r.payload().get("preview") instanceof Map<?, ?> p ? p : Map.of();
+        Map<String, Object> applied = simulationFigures(s);
+        boolean differs = !same(proposed.get("emiAfter"), s.emiAfter()) || !same(proposed.get("principalAfter"), s.principalAfter())
+                || !same(proposed.get("interestCapitalised"), s.interestCapitalised())
+                || !s.maturityAfter().toString().equals(str(proposed.get("maturityAfter")));
+        String summary = result.summary() + (differs ? " (figures differ from the proposal: applied on the loan as at approval)" : "");
+        for (TransactionLot lot : result.lots()) posting.post(lot, r.maker());
+        store.save(jdbc, loanId, acc, bd);
+        store.replaceSchedule(jdbc, loanId, acc.futureSchedule());
+        UUID txn = store.recordTxn(jdbc, loanId, "RESTRUCTURE", bd, bd, null, result.lots(), before, summary, null, r.maker());
+        recordHistory(new History(loanId, txn, "RESTRUCTURE", termsMap(req), s.emiBefore(), s.emiAfter(), s.remainingBefore(),
+                s.remainingAfter(), s.rateBefore(), s.rateAfter(), s.maturityBefore(), s.maturityAfter(), s.interestBefore(),
+                s.interestAfter(), proposed, applied, differs, r, bd, req.reason()));
+        audit.record(CurrentUser.username(), "LOAN_RESTRUCTURE", "LOAN", l.loanNo(),
+                Map.of("summary", summary, "approvalId", r.id().toString()));
+        return l.loanNo();
+    }
+
+    /** Amendment and restructure history, newest first. */
+    public List<Map<String, Object>> amendments(UUID loanId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT a.id, a.seq, a.txn_id AS "txnId", a.kind, a.parameters::text AS parameters,
+                       a.emi_before::text AS "emiBefore", a.emi_after::text AS "emiAfter",
+                       a.tenure_before AS "tenureBefore", a.tenure_after AS "tenureAfter",
+                       a.rate_before::text AS "rateBefore", a.rate_after::text AS "rateAfter",
+                       a.maturity_before::text AS "maturityBefore", a.maturity_after::text AS "maturityAfter",
+                       a.interest_before::text AS "interestBefore", a.interest_after::text AS "interestAfter",
+                       a.proposed_figures::text AS "proposedFigures", a.applied_figures::text AS "appliedFigures",
+                       a.differs_from_proposal AS "differsFromProposal", a.approval_id AS "approvalId",
+                       a.made_by AS "madeBy", a.checked_by AS "checkedBy", a.business_date::text AS "businessDate",
+                       a.reason, a.reversed_by AS "reversedBy", a.created_at AS "createdAt"
+                  FROM lending.loan_amendment a WHERE a.loan_id = ? ORDER BY a.seq DESC
+                """, loanId);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> m = new LinkedHashMap<>(row);
+            m.put("parameters", json.readMap((String) row.get("parameters")));
+            m.put("proposedFigures", json.readMap((String) row.get("proposedFigures")));
+            m.put("appliedFigures", json.readMap((String) row.get("appliedFigures")));
+            out.add(m);
+        }
+        return out;
+    }
+
+    private record History(UUID loanId, UUID txnId, String kind, Map<String, Object> parameters, BigDecimal emiBefore,
+                           BigDecimal emiAfter, int tenureBefore, int tenureAfter, BigDecimal rateBefore, BigDecimal rateAfter,
+                           LocalDate maturityBefore, LocalDate maturityAfter, BigDecimal interestBefore, BigDecimal interestAfter,
+                           Map<?, ?> proposed, Map<String, Object> applied, boolean differs, ApprovalRequest approval,
+                           LocalDate businessDate, String reason) {}
+
+    private void recordHistory(History h) {
+        Integer seq = jdbc.queryForObject("SELECT coalesce(max(seq), 0) + 1 FROM lending.loan_amendment WHERE loan_id = ?",
+                Integer.class, h.loanId());
+        jdbc.update("""
+                INSERT INTO lending.loan_amendment (id, loan_id, seq, txn_id, kind, parameters, emi_before, emi_after, tenure_before,
+                    tenure_after, rate_before, rate_after, maturity_before, maturity_after, interest_before, interest_after,
+                    proposed_figures, applied_figures, differs_from_proposal, approval_id, made_by, checked_by, business_date, reason)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?)
+                """, UUID.randomUUID(), h.loanId(), seq, h.txnId(), h.kind(), json.write(h.parameters()), h.emiBefore(), h.emiAfter(),
+                h.tenureBefore(), h.tenureAfter(), h.rateBefore(), h.rateAfter(), h.maturityBefore(), h.maturityAfter(),
+                h.interestBefore(), h.interestAfter(), h.proposed().isEmpty() ? null : json.write(h.proposed()), json.write(h.applied()),
+                h.differs(), h.approval().id(), h.approval().maker(), CurrentUser.username(), h.businessDate(), h.reason());
+    }
+
+    private static Map<String, Object> figures(Amendment.Effect e) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("rateBefore", plain(e.rateBefore()));
+        m.put("rateAfter", plain(e.rateAfter()));
+        m.put("emiBefore", plain(e.emiBefore()));
+        m.put("emiAfter", plain(e.emiAfter()));
+        m.put("remainingBefore", e.remainingBefore());
+        m.put("remainingAfter", e.remainingAfter());
+        m.put("nextDueBefore", e.nextDueBefore().toString());
+        m.put("nextDueAfter", e.nextDueAfter().toString());
+        m.put("maturityBefore", e.maturityBefore().toString());
+        m.put("maturityAfter", e.maturityAfter().toString());
+        m.put("interestBefore", plain(e.interestBefore()));
+        m.put("interestAfter", plain(e.interestAfter()));
+        m.put("brokenPeriodInterest", plain(e.brokenPeriodInterest()));
+        return m;
+    }
+
+    private static Map<String, Object> simulationFigures(RestructureSimulation s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("newRatePercent", s.terms().newRatePercent() == null ? null : plain(s.terms().newRatePercent()));
+        m.put("remainingInstalments", s.terms().remainingInstalments());
+        m.put("principalMoratoriumMonths", s.terms().principalMoratoriumMonths());
+        m.put("overdueInterestTreatment", s.terms().overdueInterest().name());
+        m.put("classBefore", s.classBefore().name());
+        m.put("classAfter", s.classAfter().name());
+        m.put("principalBefore", plain(s.principalBefore()));
+        m.put("overduePrincipalRescheduled", plain(s.overduePrincipalRescheduled()));
+        m.put("overdueInterest", plain(s.overdueInterest()));
+        m.put("interestCapitalised", plain(s.interestCapitalised()));
+        m.put("arrearsKept", plain(s.arrearsKept()));
+        m.put("principalAfter", plain(s.principalAfter()));
+        m.put("rateBefore", plain(s.rateBefore()));
+        m.put("rateAfter", plain(s.rateAfter()));
+        m.put("emiBefore", plain(s.emiBefore()));
+        m.put("emiAfter", plain(s.emiAfter()));
+        m.put("remainingBefore", s.remainingBefore());
+        m.put("remainingAfter", s.remainingAfter());
+        m.put("maturityBefore", s.maturityBefore().toString());
+        m.put("maturityAfter", s.maturityAfter().toString());
+        m.put("interestBefore", plain(s.interestBefore()));
+        m.put("interestAfter", plain(s.interestAfter()));
+        m.put("npvBefore", plain(s.npvBefore()));
+        m.put("npvAfter", plain(s.npvAfter()));
+        m.put("npvLoss", plain(s.npvLoss()));
+        m.put("upgradeNotBefore", s.specifiedPeriodMinEnd().toString());
+        return m;
+    }
+
+    private static Map<String, Object> currentTerms(LoanAccount a) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("rate", plain(a.ratePercent()));
+        m.put("emi", plain(a.currentEmi()));
+        m.put("remainingInstalments", a.futureSchedule().size());
+        m.put("nextDueDate", a.nextDueDate() == null ? null : a.nextDueDate().toString());
+        m.put("principalOutstanding", plain(a.principalOutstanding()));
+        m.put("assetClass", a.assetClass().name());
+        m.put("dpd", a.dpd());
+        return m;
+    }
+
+    private static Map<String, Object> requestMap(AmendmentRequest q) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", q.kind());
+        m.put("newRatePercent", plain(q.newRatePercent()));
+        m.put("rateOption", q.rateOption());
+        m.put("remainingInstalments", q.remainingInstalments());
+        m.put("newEmi", plain(q.newEmi()));
+        m.put("newDueDay", q.newDueDay());
+        m.put("reason", q.reason());
+        return m;
+    }
+
+    private static Map<String, Object> termsMap(RestructureRequest q) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("newRatePercent", plain(q.newRatePercent()));
+        m.put("remainingInstalments", q.remainingInstalments());
+        m.put("principalMoratoriumMonths", q.principalMoratoriumMonths());
+        m.put("overdueInterest", q.overdueInterest());
+        m.put("reason", q.reason());
+        return m;
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+
+    private static BigDecimal dec(Object o) {
+        return o == null ? null : new BigDecimal(String.valueOf(o));
+    }
+
+    private static Integer integer(Object o) {
+        return o == null ? null : Integer.valueOf(String.valueOf(o));
+    }
+
+    private static boolean same(Object proposed, BigDecimal actual) {
+        return proposed != null && new BigDecimal(String.valueOf(proposed)).compareTo(actual) == 0;
+    }
+
+    /** Within a rupee (rounding of the interest total). */
+    private static boolean near(Object proposed, BigDecimal actual) {
+        return proposed != null && new BigDecimal(String.valueOf(proposed)).subtract(actual).abs().compareTo(BigDecimal.ONE) <= 0;
+    }
+
     // ------------------------------------------------------------------------------------------------ views
     public Map<String, Object> get(UUID id) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
@@ -418,7 +798,9 @@ public class LoanService {
                        l.net_disbursed::text AS "netDisbursed", l.principal_outstanding::text AS "principalOutstanding",
                        l.overdue_amount::text AS "overdueAmount", l.next_due_date::text AS "nextDueDate", l.dpd,
                        l.asset_class AS "assetClass", l.npa_since::text AS "npaSince", l.provision_held::text AS "provisionHeld",
-                       l.kfs_accepted_at AS "kfsAcceptedAt", l.external_ref AS "externalRef", l.closed_on::text AS "closedOn"
+                       l.kfs_accepted_at AS "kfsAcceptedAt", l.external_ref AS "externalRef", l.closed_on::text AS "closedOn",
+                       coalesce(l.current_rate, l.rate)::text AS "currentRate", l.restructured_on::text AS "restructuredOn",
+                       l.restructure_count AS "restructureCount", l.upgrade_not_before::text AS "upgradeNotBefore"
                   FROM lending.loan_account l JOIN customer.customer c ON c.id = l.customer_id
                  WHERE l.id = ?
                 """, id);
@@ -472,6 +854,8 @@ public class LoanService {
             r.put("interestDue", plain(d.interestDue()));
             r.put("principalPaid", plain(d.principalPaid()));
             r.put("interestPaid", plain(d.interestPaid()));
+            r.put("principalRescheduled", plain(d.principalRescheduled()));
+            r.put("interestCapitalised", plain(d.interestCapitalised()));
             return r;
         }).toList());
         m.put("charges", a.charges().stream().map(c -> {
@@ -605,6 +989,8 @@ public class LoanService {
             LoanStore.Loaded l = store.lock(jdbc, loanId);
             Map<String, Object> target = jdbc.queryForMap("SELECT seq, state_before::text AS sb, reversed_by FROM lending.loan_txn WHERE id = ?", txnId);
             if (target.get("reversed_by") != null) throw ApiException.conflict("already reversed");
+            // a restructure may have been applied after the reversal was proposed
+            if (restructuredSince(jdbc, loanId, target.get("seq"))) throw ApiException.conflict(RESTRUCTURE_NOT_REVERSIBLE);
             LoanAccount.Snapshot current = l.account().snapshot();
             List<Map<String, Object>> toReverse = jdbc.queryForList("""
                     SELECT id, array_to_string(lot_ids, ',') AS lots FROM lending.loan_txn
@@ -635,8 +1021,42 @@ public class LoanService {
                     "Reversed " + toReverse.size() + " transaction(s): " + reason, txnId, r.maker());
             for (Map<String, Object> t : toReverse) {
                 jdbc.update("UPDATE lending.loan_txn SET reversed_by = ? WHERE id = ?", reversalId, t.get("id"));
+                // an amendment undone by the state restore is marked reversed in its history
+                jdbc.update("UPDATE lending.loan_amendment SET reversed_by = ? WHERE txn_id = ? AND reversed_by IS NULL", reversalId, t.get("id"));
             }
             return String.valueOf(r.payload().get("loanNo"));
+        }
+    }
+
+    @Service
+    static class AmendmentApplier implements ApprovalApplier {
+        private final LoanService loans;
+
+        AmendmentApplier(@org.springframework.context.annotation.Lazy LoanService loans) {
+            this.loans = loans;
+        }
+
+        @Override public String entityType() { return "LOAN_AMENDMENT"; }
+
+        @Override
+        public String apply(ApprovalRequest r) {
+            return loans.applyAmendment(r);
+        }
+    }
+
+    @Service
+    static class RestructureApplier implements ApprovalApplier {
+        private final LoanService loans;
+
+        RestructureApplier(@org.springframework.context.annotation.Lazy LoanService loans) {
+            this.loans = loans;
+        }
+
+        @Override public String entityType() { return "LOAN_RESTRUCTURE"; }
+
+        @Override
+        public String apply(ApprovalRequest r) {
+            return loans.applyRestructure(r);
         }
     }
 }

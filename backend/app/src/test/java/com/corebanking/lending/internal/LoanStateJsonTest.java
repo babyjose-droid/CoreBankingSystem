@@ -1,12 +1,15 @@
 package com.corebanking.lending.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.corebanking.calc.FeeCalculator;
+import com.corebanking.lending.engine.Amendment;
 import com.corebanking.lending.engine.FeeRule;
 import com.corebanking.lending.engine.LoanAccount;
 import com.corebanking.lending.engine.LoanTerms;
 import com.corebanking.lending.engine.Provisioning;
+import com.corebanking.lending.engine.RestructureTerms;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -43,5 +46,48 @@ class LoanStateJsonTest {
         var r2 = b.endOfDay(LocalDate.of(2026, 8, 4), Provisioning.starter());
         assertEquals(r1.summary(), r2.summary());
         assertEquals(a.snapshot(), b.snapshot());
+    }
+
+    /** P2-3 fields: current rate, rescheduled/capitalised demand amounts, capitalised suspense, restructured flag. */
+    @Test
+    void amended_and_restructured_state_round_trips_exactly() {
+        LocalDate open = LocalDate.of(2026, 6, 30);
+        var params = new LoanAccount.Params("10010000000017", "HO", "32", "32", new BigDecimal("18"), new BigDecimal("24"),
+                null, null, null, null, 3, BigDecimal.ZERO, null, List.of());
+        LoanAccount a = LoanAccount.disburse(params, LoanTerms.equated(new BigDecimal("100000"), new BigDecimal("18"), 12, open), open).account();
+        for (LocalDate d = open; !d.isAfter(LocalDate.of(2026, 7, 31)); d = d.plusDays(1)) a.endOfDay(d, Provisioning.starter());
+        a.pay(new BigDecimal("9168"), LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 1), "EMI");
+        for (LocalDate d = LocalDate.of(2026, 8, 1); !d.isAfter(LocalDate.of(2026, 8, 9)); d = d.plusDays(1)) a.endOfDay(d, Provisioning.starter());
+        a.amend(Amendment.rate(new BigDecimal("20"), Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, 24), LocalDate.of(2026, 8, 10));
+        for (LocalDate d = LocalDate.of(2026, 8, 10); !d.isAfter(LocalDate.of(2026, 9, 9)); d = d.plusDays(1)) a.endOfDay(d, Provisioning.starter());
+        a.restructure(new RestructureTerms(null, 18, 2, RestructureTerms.OverdueInterest.CAPITALISE, 36, "hardship"), LocalDate.of(2026, 9, 10));
+
+        LoanAccount.Snapshot s2 = mapper.readValue(mapper.writeValueAsString(a.snapshot()), LoanAccount.Snapshot.class);
+        assertEquals(a.snapshot(), s2);
+        LoanAccount b = LoanAccount.restore(params, s2);
+        assertEquals(new BigDecimal("20"), b.ratePercent());
+        assertEquals(a.restructureStatus(), b.restructureStatus());
+        var r1 = a.endOfDay(LocalDate.of(2026, 9, 10), Provisioning.starter());
+        var r2 = b.endOfDay(LocalDate.of(2026, 9, 10), Provisioning.starter());
+        assertEquals(r1.summary(), r2.summary());
+        assertEquals(a.snapshot(), b.snapshot());
+    }
+
+    /** State stored before P2-3 has none of the new fields: it must still load, at the booked rate. */
+    @Test
+    void state_stored_before_amendments_still_loads() {
+        LocalDate open = LocalDate.of(2026, 6, 30);
+        var params = new LoanAccount.Params("10010000000017", "HO", "32", "32", new BigDecimal("18"), new BigDecimal("24"),
+                null, null, null, null, 3, BigDecimal.ZERO, null, List.of());
+        LoanAccount a = LoanAccount.disburse(params, LoanTerms.equated(new BigDecimal("100000"), new BigDecimal("18"), 12, open), open).account();
+        for (LocalDate d = open; !d.isAfter(LocalDate.of(2026, 8, 3)); d = d.plusDays(1)) a.endOfDay(d, Provisioning.starter());
+        String json = mapper.writeValueAsString(a.snapshot())
+                .replace(",\"ratePercent\":18", "").replace(",\"capitalisedSuspense\":0", "").replace(",\"restructure\":null", "")
+                .replace(",\"principalRescheduled\":0", "").replace(",\"interestCapitalised\":0", "");
+        assertTrue(!json.contains("ratePercent") && !json.contains("principalRescheduled") && !json.contains("restructure"), json);
+        LoanAccount b = LoanAccount.restore(params, mapper.readValue(json, LoanAccount.Snapshot.class));
+        assertEquals(new BigDecimal("18"), b.ratePercent());
+        assertEquals(a.demands(), b.demands());
+        assertEquals(a.principalOutstanding(), b.principalOutstanding());
     }
 }

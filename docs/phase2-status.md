@@ -112,11 +112,91 @@ Updated 29-Sep-2026. Source: product backlog v1.0, 51 Phase 2 stories. Built in 
 - **Database rules:** 21 SQL checks (`lending_rules_test.sql`).
 - **JSON:** a round-trip test for the stored loan state runs in CI.
 
+## P2-3 amendments and restructure
+
+### What was built
+**Amendments** (`LoanAccount.amend`, `Amendment`): the engine rebuilds the future schedule from the principal not yet demanded. Demands already raised are not changed.
+- **Rate change:** the borrower picks one of three options:
+  - keep the EMI and change the tenure;
+  - keep the tenure and change the EMI;
+  - change both, by giving a new tenure or a new EMI.
+- **Tenure change:** the EMI is recomputed.
+- **EMI change:** the tenure is recomputed.
+- **Due-day change:**
+  - The next due date moves forward to the new day.
+  - Interest for the extra days (the broken period) is added to the next instalment on top of the EMI.
+  - Day 31 means month end.
+- **Interest continuity:**
+  - Interest accrued since the last due date, at the old terms, goes into the next instalment's interest.
+  - Accrual continues at the new rate.
+  - As a result, the next demand equals what was accrued: no interest is lost or counted twice.
+- **Limits:**
+  - A tenure extension may not take the loan past the product's maximum tenure.
+  - The EMI must be at least the monthly interest plus 1 paisa of principal.
+  - An EMI that would not cover a 31-day month's interest is refused.
+  - A borrower in arrears cannot get a longer tenure or a lower EMI through an amendment; that is a restructure.
+  - A market rate reset that only lowers the EMI is still allowed for a borrower in arrears.
+- **Scope:** only equated (EMI) loans without a balloon can be amended.
+- **Preview:** `previewAmendment` uses the same code that applies the change.
+- **Maker-checker:** entity `LOAN_AMENDMENT`, one checker.
+  - The approval runs the engine again on the loan as it is at approval time.
+  - If the figures differ from the proposal, the current figures are applied and both sets are kept (`differs_from_proposal`).
+- **Reversal:** amendments move no money and are reversed through the normal reversal flow, which restores the state. The history row is marked reversed.
+
+**Restructure** (`LoanAccount.simulateRestructure`, `restructure`, `RestructureTerms`, `RestructureStatus`):
+- **Simulation:** compares up to three options without changing the loan. For each option it shows:
+  - the new schedule, EMI and tenure;
+  - interest before and after;
+  - interest capitalised or kept as arrears;
+  - NPV before and after at the contract rate (monthly periods) and the difference, which is the lender's sacrifice.
+- **Applying a restructure:**
+  - Overdue principal is rescheduled.
+  - Overdue interest is either capitalised into principal (Dr principal, Cr interest receivable) or kept as arrears.
+  - A principal moratorium can be set, along with a new rate and tenure.
+  - A separate funded-interest term loan (FITL) is **not** built; capitalisation covers the same economics on one schedule.
+- **Maker-checker:** entity `LOAN_RESTRUCTURE`, **two checkers** (approval rule in V14).
+- **Reversal:** a restructure cannot be reversed, and neither can any transaction before it. The API returns 409 with the reason, because reversing would undo the downgrade.
+
+### RBI basis and the interpretation encoded
+- **Rate reset:** follows RBI's circular on reset of floating interest rates on EMI-based personal loans (18-Aug-2023). The borrower chooses between a higher EMI, a longer tenure, or both, within the product's maximum tenure and without negative amortisation.
+- **Asset class on restructuring:** follows RBI's Prudential Framework for Resolution of Stressed Assets (7-Jun-2019) and the IRACP norms. A STANDARD account (including SMA) is downgraded to SUBSTANDARD on the restructuring date. An NPA keeps its class and NPA date.
+- **Specified period:** runs until both of these are true:
+  - at least 10% of the principal under the plan (capitalised interest included) has been repaid;
+  - at least one year has passed since the later of the first interest payment and the first principal payment under the new schedule.
+- **Satisfactory performance:** no instalment of the new schedule is unpaid at the day-end of its due date during the specified period.
+  - One default ends eligibility for upgrade. The account stays NPA until it closes or is restructured again.
+  - An instalment paid on the due date (received as an advance) counts as on time.
+- **Upgrade:** only after the specified period, with satisfactory performance and zero arrears.
+  - The flag and dates are kept in the loan state (`RestructureStatus`) and copied to `loan_account`: `restructured_on`, `restructure_count`, `upgrade_not_before` and `restructure_defaulted`.
+  - The view `lending.restructured_loan` lists these accounts.
+- **Conservative choices:**
+  - NPA ageing (sub-standard to doubtful) continues during the specified period.
+  - Capitalised interest stays in interest suspense and becomes income only as principal is repaid, in proportion. At closure it is all income.
+  - The NPV loss is reported but no diminution-in-fair-value provision is posted yet.
+
+### Fixes found on the way
+- **Second prepayment in a period:** the interest accrued before the first prepayment was counted twice in the next demand.
+- **Last instalment paid in advance:** the loan never closed. The day-end now closes it.
+- **Reduce-tenure prepayment:** now keeps the regular EMI rather than the next row's amount.
+
+### Tests
+- **Engine:** 40 tests (25 before this increment), including 15 new in `LoanAmendmentTest`.
+  - Whole-life scenarios for every amendment kind and for restructuring (standard to NPA to upgrade, default during the specified period, NPA kept as arrears), each checked against a general ledger.
+  - At closure, principal, interest receivable, suspense and provision are zero, and interest income equals the interest in the demands raised.
+- **Database rules:** 23 SQL checks in `amendments_test.sql`, covering the approval rules, history constraints, immutability, the fact that a restructure is never marked reversed, the restructured flag and the view.
+- **JSON:** the stored loan state round-trips with the new fields, and state stored before this increment still loads at the booked rate (`LoanStateJsonTest`).
+
+### Not yet built in P2-3
+- Console screens (P2-1d).
+- FITL as a separate facility.
+- Diminution-in-fair-value provisioning from the NPV loss.
+- Borrower communication of a rate reset (letter or SMS, P2-2/P2-4).
+
 ### Not yet built in P2-1
 - **P2-1d:** the console's loan screens. The partial work is parked and continues next.
 - **P2-2:** payout gateway, NACH presentation and responses, collection webhooks, SMS and email, signed webhooks, OAuth clients, LOS integration.
   - These need decision D-09 and sandbox credentials from the partners.
-- **P2-3:** amendments (rate, tenure, EMI, dates) and restructure simulations.
+- **P2-3:** amendments and restructure — built, see the P2-3 section above.
 - **P2-4:** documents and reports: KFS, statement of account and NOC as PDFs; bureau files; GST invoices; report catalogue; dashboard.
 - **Other stories:**
   - usage metering and support access (US-004, US-007);

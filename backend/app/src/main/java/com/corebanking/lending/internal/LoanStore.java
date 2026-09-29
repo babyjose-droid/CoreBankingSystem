@@ -2,6 +2,7 @@ package com.corebanking.lending.internal;
 
 import com.corebanking.calc.ScheduleGenerator.Instalment;
 import com.corebanking.lending.engine.LoanAccount;
+import com.corebanking.lending.engine.RestructureStatus;
 import com.corebanking.ledger.TransactionLot;
 import com.corebanking.platform.ApiException;
 import com.corebanking.platform.Json;
@@ -65,15 +66,19 @@ public class LoanStore {
             case CANCELLED -> "CANCELLED";
             case WRITTEN_OFF -> "WRITTEN_OFF";
         };
+        RestructureStatus rs = a.restructureStatus();
         jdbc.update("""
                 UPDATE lending.loan_account
                    SET state = ?::jsonb, status = ?, principal_outstanding = ?, overdue_amount = ?, next_due_date = ?,
                        dpd = ?, asset_class = ?, npa_since = ?, suspense = ?, provision_held = ?,
                        closed_on = CASE WHEN ? IN ('CLOSED','CANCELLED') AND closed_on IS NULL THEN ?::date ELSE closed_on END,
-                       version = version + 1
+                       current_rate = ?, restructured_on = ?, restructure_count = ?, upgrade_not_before = ?,
+                       restructure_defaulted = ?, version = version + 1
                  WHERE id = ?
                 """, json.write(a.snapshot()), status, a.principalOutstanding(), a.overdueAmount(asOf), a.nextDueDate(),
-                a.dpd(), a.assetClass().name(), a.npaSince(), a.suspense(), a.provisionHeld(), status, Date.valueOf(asOf), loanId);
+                a.dpd(), a.assetClass().name(), a.npaSince(), a.suspense(), a.provisionHeld(), status, Date.valueOf(asOf),
+                a.ratePercent(), rs == null ? null : rs.restructuredOn(), rs == null ? 0 : rs.count(),
+                rs == null || !rs.underMonitoring() ? null : rs.specifiedPeriodMinEnd(), rs != null && rs.defaulted(), loanId);
     }
 
     /** Records a financial event with the state before it (for reversal) and the lots it posted. */

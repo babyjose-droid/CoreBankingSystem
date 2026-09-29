@@ -149,6 +149,17 @@ public final class LoanPostings {
         return b.build();
     }
 
+    /**
+     * Restructuring: overdue interest capitalised into principal. The receivable becomes principal; the income side
+     * stays in interest suspense (the account is NPA on restructuring) until the principal is repaid.
+     */
+    public TransactionLot interestCapitalisation(BigDecimal amount) {
+        var b = lot("INTEREST_CAPITALISATION", businessDate);
+        dr(b, branch, gl.principal(), loanNo, amount, "Interest capitalised on restructuring");
+        cr(b, branch, gl.interestReceivable(), loanNo, amount, "Interest capitalised on restructuring");
+        return b.build();
+    }
+
     /** Principal prepayment straight from the bank (part-prepayment / pre-closure principal). */
     public TransactionLot principalPrepayment(BigDecimal amount, LocalDate valueDate) {
         var b = lot("PREPAYMENT", valueDate);

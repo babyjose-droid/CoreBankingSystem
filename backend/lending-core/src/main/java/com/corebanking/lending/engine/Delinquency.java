@@ -44,9 +44,18 @@ public final class Delinquency {
      */
     public static Status classify(LocalDate asOf, int dpd, AssetClass previous, LocalDate previousNpaSince,
                                   boolean arrearsOutstanding) {
+        return classify(asOf, dpd, previous, previousNpaSince, arrearsOutstanding, false);
+    }
+
+    /**
+     * As {@link #classify(LocalDate, int, AssetClass, LocalDate, boolean)}; {@code upgradeBlocked} keeps an NPA an NPA
+     * even at zero arrears — a restructured account inside its specified period (see {@link RestructureStatus}).
+     */
+    public static Status classify(LocalDate asOf, int dpd, AssetClass previous, LocalDate previousNpaSince,
+                                  boolean arrearsOutstanding, boolean upgradeBlocked) {
         if (previous == AssetClass.LOSS) return new Status(dpd, AssetClass.LOSS, previousNpaSince);
         if (previous != null && previous.isNpa()) {
-            if (!arrearsOutstanding) return new Status(dpd, AssetClass.STANDARD, null);    // upgrade only at zero arrears
+            if (!arrearsOutstanding && !upgradeBlocked) return new Status(dpd, AssetClass.STANDARD, null);    // upgrade only at zero arrears
             return new Status(dpd, npaAge(previousNpaSince, asOf), previousNpaSince);
         }
         if (dpd > 90) return new Status(dpd, AssetClass.SUBSTANDARD, asOf);
