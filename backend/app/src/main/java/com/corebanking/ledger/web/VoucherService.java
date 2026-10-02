@@ -7,6 +7,7 @@ import com.corebanking.ledger.NumberSeriesService;
 import com.corebanking.ledger.PostingLine;
 import com.corebanking.ledger.PostingService;
 import com.corebanking.ledger.TransactionLot;
+import com.corebanking.platform.AmountLimitService;
 import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
@@ -37,8 +38,11 @@ class VoucherService {
     private final BusinessDays days;
     private final Json json;
     private final BranchScope scope;
+    private final AmountLimitService limits;
 
-    VoucherService(JdbcTemplate jdbc, ApprovalService approvals, BusinessDays days, Json json, BranchScope scope) {
+    VoucherService(JdbcTemplate jdbc, ApprovalService approvals, BusinessDays days, Json json, BranchScope scope,
+                   AmountLimitService limits) {
+        this.limits = limits;
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.days = days;
@@ -64,6 +68,7 @@ class VoucherService {
         BigDecimal amount = preview.lines().stream()
                 .filter(l -> l.side() == PostingLine.Side.DR && !l.glCode().equals("IBR-CHECK"))
                 .map(PostingLine::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        limits.require("VOUCHER", AmountLimitService.MAKE, amount, in.reference());       // maker's role amount limit (US-021)
         Map<String, Object> payload = json.toMap(new Input(in.voucherType(), valueDate, in.reference(), in.description(), in.lines()));
         return approvals.propose("VOUCHER", "CREATE", null, payload, null, amount, in.lines().get(0).branch(), idempotencyKey);
     }
@@ -142,6 +147,7 @@ class VoucherService {
                 """, String.class, voucherId);
         for (String b : branches) scope.requireRecord(b, "voucher " + voucherId);
         if (!"POSTED".equals(v.get(0).get("status"))) throw ApiException.conflict("voucher is already reversed");
+        limits.require("VOUCHER", AmountLimitService.MAKE, (BigDecimal) v.get(0).get("amount"), String.valueOf(v.get(0).get("voucher_no")));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("voucherId", voucherId.toString());
         payload.put("voucherNo", v.get(0).get("voucher_no"));

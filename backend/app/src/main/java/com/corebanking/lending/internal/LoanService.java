@@ -19,6 +19,7 @@ import com.corebanking.ledger.NumberSeries;
 import com.corebanking.ledger.NumberSeriesService;
 import com.corebanking.ledger.PostingService;
 import com.corebanking.ledger.TransactionLot;
+import com.corebanking.platform.AmountLimitService;
 import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
@@ -47,9 +48,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class LoanService {
 
+    /** A co-applicant or guarantor of the loan (US-034); the borrower is {@link Application#customerId()}. */
+    public record Party(UUID customerId, String role) {}
+
     public record Application(String productCode, UUID customerId, String branch, BigDecimal amount, Integer tenorMonths,
                               BigDecimal rate, LocalDate disbursalDate, LocalDate firstDueDate, Integer moratoriumMonths,
-                              BigDecimal balloon, BigDecimal securedPortion, String externalRef) {}
+                              BigDecimal balloon, BigDecimal securedPortion, String externalRef, List<Party> parties) {}
 
     private final JdbcTemplate jdbc;
     private final ProductService products;
@@ -61,11 +65,13 @@ public class LoanService {
     private final AuditLog audit;
     private final Json json;
     private final BranchScope scope;
+    private final AmountLimitService limits;
 
     public LoanService(JdbcTemplate jdbc, ProductService products, LoanStore store, PostingService posting,
                        NumberSeriesService numbers, BusinessDays days, ApprovalService approvals, AuditLog audit, Json json,
-                       BranchScope scope) {
+                       BranchScope scope, AmountLimitService limits) {
         this.scope = scope;
+        this.limits = limits;
         this.jdbc = jdbc;
         this.products = products;
         this.store = store;
@@ -134,7 +140,34 @@ public class LoanService {
     /** Preview and KFS figures from the same engine that will post (US-044, US-048, US-049). */
     public Map<String, Object> preview(Application a) {
         Resolved r = resolve(a, "PREVIEW");
+        checkParties(a);
         return kfs(r, ScheduleBuilder.build(r.terms()));
+    }
+
+    /**
+     * Co-applicants and guarantors (US-034): ACTIVE customers, each named once, and never the borrower. The
+     * database enforces the same rules on lending.loan_party (V17); this gives the caller a 422 before booking.
+     */
+    private void checkParties(Application a) {
+        if (a.parties() == null) return;
+        if (a.parties().size() > 10) throw ApiException.invalid("at most 10 co-applicants and guarantors");
+        java.util.Set<UUID> seen = new java.util.HashSet<>();
+        for (Party p : a.parties()) {
+            if (p == null || p.customerId() == null) throw ApiException.invalid("each party needs a customerId");
+            if (p.role() == null || !p.role().matches("CO_APPLICANT|GUARANTOR")) {
+                throw ApiException.invalid("party role must be CO_APPLICANT or GUARANTOR (the borrower is the loan's customer)");
+            }
+            if (p.customerId().equals(a.customerId())) {
+                throw ApiException.invalid("a customer cannot be both borrower and "
+                        + p.role().toLowerCase(java.util.Locale.ROOT).replace('_', '-') + " on the same loan");
+            }
+            if (!seen.add(p.customerId())) throw ApiException.invalid("a customer can hold only one role on a loan");
+            List<String> status = jdbc.queryForList("SELECT status FROM customer.customer WHERE id = ?", String.class, p.customerId());
+            if (status.isEmpty()) throw ApiException.invalid("party customer " + p.customerId() + " not found");
+            if (!"ACTIVE".equals(status.get(0))) {
+                throw ApiException.invalid("guarantors and co-applicants must be ACTIVE customers; " + p.customerId() + " is " + status.get(0));
+            }
+        }
     }
 
     private Map<String, Object> kfs(Resolved r, List<Instalment> schedule) {
@@ -207,9 +240,11 @@ public class LoanService {
         }
         String loanNo = numbers.next(NumberSeries.Family.LOAN);
         Resolved r = resolve(a, loanNo);
+        checkParties(a);
         List<Instalment> schedule = ScheduleBuilder.build(r.terms());
         Map<String, Object> k = kfs(r, schedule);
         UUID id = UUID.randomUUID();
+        // The insert also checks the borrower's exposure limit and records the borrower as a party (V17 triggers).
         jdbc.update("""
                 INSERT INTO lending.loan_account (id, loan_no, customer_id, product_code, branch_code, sanctioned_amount, rate,
                     tenor_months, open_date, first_due_date, emi, status, product_version, product_snapshot, repayment_method,
@@ -223,6 +258,12 @@ public class LoanService {
                 a.externalRef(), CurrentUser.username());
         jdbc.update("INSERT INTO lending.loan_kfs (loan_id, kfs) VALUES (?, ?::jsonb)", id, json.write(k));
         jdbc.update("UPDATE lending.loan_account SET booked_terms = ?::jsonb WHERE id = ?", json.write(r.terms()), id);
+        if (a.parties() != null) {
+            for (Party p : a.parties()) {
+                jdbc.update("INSERT INTO lending.loan_party (loan_id, customer_id, role, added_by) VALUES (?, ?, ?, ?)",
+                        id, p.customerId(), p.role(), CurrentUser.username());
+            }
+        }
         audit.record(CurrentUser.username(), "LOAN_CREATE", "LOAN", loanNo, Map.of("amount", plain(a.amount()), "product", r.product().code()));
         return get(id);
     }
@@ -251,6 +292,8 @@ public class LoanService {
         Map<String, Object> payload = new LinkedHashMap<>(instruction == null ? Map.of() : instruction);
         payload.put("loanId", loanId.toString());
         payload.put("loanNo", loan.get("loan_no"));
+        // maker's role amount limit (US-021); the checker's is applied when the request is approved
+        limits.require("LOAN_DISBURSEMENT", AmountLimitService.MAKE, (BigDecimal) loan.get("sanctioned_amount"), (String) loan.get("loan_no"));
         if (CurrentUser.get().has("loan:stp")) {
             return disburse(loanId, CurrentUser.username());
         }
@@ -309,6 +352,7 @@ public class LoanService {
     @Transactional
     public Map<String, Object> repay(UUID loanId, BigDecimal amount, LocalDate valueDate, String mode, String reference) {
         if (amount == null || amount.signum() <= 0) throw ApiException.invalid("amount must be positive");
+        limits.require("LOAN_REPAYMENT", AmountLimitService.MAKE, amount, loanId.toString());
         return apply(loanId, "REPAYMENT", amount, valueDate, (a, bd) -> a.pay(amount, valueDate == null ? bd : valueDate, bd,
                 (mode == null ? "Receipt" : mode) + (reference == null ? "" : " " + reference)));
     }
@@ -316,6 +360,7 @@ public class LoanService {
     @Transactional
     public Map<String, Object> prepay(UUID loanId, BigDecimal amount, String mode) {
         LoanAccount.PrepaymentMode m = mode == null ? null : LoanAccount.PrepaymentMode.valueOf(mode);
+        limits.require("LOAN_REPAYMENT", AmountLimitService.MAKE, amount, loanId.toString());
         return apply(loanId, "PREPAYMENT", amount, null, (a, bd) -> a.prepay(amount,
                 m == null ? LoanAccount.PrepaymentMode.valueOf(productPrepaymentMode(loanId)) : m, bd));
     }
@@ -345,6 +390,7 @@ public class LoanService {
 
     @Transactional
     public Map<String, Object> preclose(UUID loanId, BigDecimal amount) {
+        limits.require("LOAN_PRECLOSURE", AmountLimitService.MAKE, amount, loanId.toString());
         return apply(loanId, "PRECLOSURE", amount, null, (a, bd) -> a.preclose(amount, bd));
     }
 
@@ -356,6 +402,7 @@ public class LoanService {
 
     @Transactional
     public Map<String, Object> cancel(UUID loanId, BigDecimal amount) {
+        limits.require("LOAN_PRECLOSURE", AmountLimitService.MAKE, amount, loanId.toString());   // closes the loan like a pre-closure
         return apply(loanId, "CANCELLATION", amount, null, (a, bd) -> a.cancel(amount, bd));
     }
 
@@ -375,13 +422,21 @@ public class LoanService {
     @Transactional
     public Map<String, Object> proposeWaiver(UUID loanId, String chargeId, BigDecimal amount, String reason) {
         if (reason == null || reason.isBlank()) throw ApiException.invalid("a reason is required");
+        if (amount == null || amount.signum() <= 0) throw ApiException.invalid("amount must be positive");
         String loanNo = jdbc.queryForObject("SELECT loan_no FROM lending.loan_account WHERE id = ?", String.class, loanId);
+        // Role amount limit (US-021): waiving a fee is FEE_WAIVER, waiving penal charges or anything else LOAN_WAIVER.
+        LoanAccount account = store.lock(jdbc, loanId).account();
+        boolean fee = account != null && account.charges().stream()
+                .anyMatch(c -> c.id().equals(chargeId) && c.kind() == com.corebanking.lending.engine.Appropriation.Component.FEE);
+        String limitType = fee ? "FEE_WAIVER" : "LOAN_WAIVER";
+        limits.require(limitType, AmountLimitService.MAKE, amount, loanNo);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("loanId", loanId.toString());
         payload.put("loanNo", loanNo);
         payload.put("chargeId", chargeId);
         payload.put("amount", plain(amount));
         payload.put("reason", reason);
+        payload.put("limitType", limitType);
         return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_WAIVER", "WAIVE", loanNo, payload, null, amount, branchOf(loanId), null));
     }
 
@@ -806,6 +861,17 @@ public class LoanService {
                 """, id);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + id);
         return rows.get(0);
+    }
+
+    /** Borrower, co-applicants and guarantors of the loan (US-034). */
+    public List<Map<String, Object>> parties(UUID id) {
+        return jdbc.queryForList("""
+                SELECT p.customer_id AS "customerId", c.customer_no AS "customerNo", c.display_name AS "customerName", p.role,
+                       c.status AS "customerStatus", p.added_by AS "addedBy", p.added_at AS "addedAt"
+                  FROM lending.loan_party p JOIN customer.customer c ON c.id = p.customer_id
+                 WHERE p.loan_id = ?
+                 ORDER BY array_position(ARRAY['BORROWER','CO_APPLICANT','GUARANTOR'], p.role), c.customer_no
+                """, id);
     }
 
     /** The loan's branch, for the branch-scope check (US-020). */

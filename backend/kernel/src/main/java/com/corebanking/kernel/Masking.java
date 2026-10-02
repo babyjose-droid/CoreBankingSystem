@@ -46,4 +46,25 @@ public final class Masking {
         if (account.length() <= 4) return account;
         return "X".repeat(account.length() - 4) + account.substring(account.length() - 4);
     }
+
+    /** 682001 → 682XXX: the first three digits name the sorting district, not the delivery office. */
+    public static String pincode(String pincode) {
+        if (pincode == null) return null;
+        return pincode.matches("[0-9]{6}") ? pincode.substring(0, 3) + "XXX" : "XXXXXX";
+    }
+
+    /**
+     * Age band for a checker who must see that a customer is an adult without seeing the date of birth:
+     * under 18, 18-25, 26-35, 36-45, 46-60, over 60.
+     */
+    public static String ageBand(java.time.LocalDate dateOfBirth, java.time.LocalDate today) {
+        if (dateOfBirth == null) return null;
+        int age = java.time.Period.between(dateOfBirth, today).getYears();
+        if (age < 18) return "under 18";
+        if (age <= 25) return "18-25";
+        if (age <= 35) return "26-35";
+        if (age <= 45) return "36-45";
+        if (age <= 60) return "46-60";
+        return "over 60";
+    }
 }

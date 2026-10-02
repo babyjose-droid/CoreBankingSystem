@@ -31,6 +31,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Customer creation with dedupe and maker-checker (US-028, US-029, US-030). Personal data is sealed (encrypted)
  * inside the approval payload so it is never stored in clear, and the checker sees only masked values.
+ * <p>
+ * SEC-03: date of birth, city and pincode are sealed too; the checker sees an age band, the state and a masked
+ * pincode. The display name stays readable (see docs/security/sec-03-display-name.md). Requests raised before
+ * this change carry those three values in clear; the applier reads both shapes.
  */
 @Service
 class CustomerService {
@@ -119,20 +123,22 @@ class CustomerService {
         sealed.put("email", in.email());
         sealed.put("addressLine1", in.address() == null ? null : in.address().line1());
         sealed.put("addressLine2", in.address() == null ? null : in.address().line2());
+        sealed.put("dateOfBirth", in.dateOfBirth().toString());
+        sealed.put("city", in.address() == null ? null : in.address().city());
+        sealed.put("pincode", in.address() == null ? null : in.address().pincode());
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("customerType", in.customerType());
         payload.put("displayName", displayName(in));
-        payload.put("dateOfBirth", in.dateOfBirth().toString());
+        payload.put("ageBand", Masking.ageBand(in.dateOfBirth(), LocalDate.now()));
         payload.put("gender", in.gender());
         payload.put("homeBranch", in.homeBranch());
         payload.put("panMasked", in.pan() == null ? null : Masking.pan(in.pan()));
         payload.put("mobileMasked", Masking.mobile(in.mobile()));
         payload.put("emailMasked", Masking.email(in.email()));
         if (in.address() != null) {
-            payload.put("city", in.address().city());
             payload.put("stateCode", in.address().stateCode());
-            payload.put("pincode", in.address().pincode());
+            payload.put("pincodeMasked", Masking.pincode(in.address().pincode()));
         }
         List<Map<String, Object>> overrides = new ArrayList<>();
         for (Match m : matches) {
@@ -163,6 +169,14 @@ class CustomerService {
         }
         return jdbc.query(SCOPED + " AND display_name ILIKE ? ORDER BY display_name LIMIT ? OFFSET ?", this::row, u,
                 t.replace("%", "").replace("_", "") + "%", limit, offset);
+    }
+
+    /** The customer's home branch; 404 when the customer is outside the caller's branch scope (US-020). */
+    String visibleBranch(UUID id) {
+        List<String> b = jdbc.queryForList("SELECT home_branch FROM customer.customer WHERE id = ? AND home_branch" + BranchScope.SQL_VISIBLE,
+                String.class, id, scope.user());
+        if (b.isEmpty()) throw ApiException.notFound("customer " + id);
+        return b.get(0);
     }
 
     Map<String, Object> summary(UUID id) {
@@ -235,7 +249,7 @@ class CustomerService {
             String pan = (String) s.get("pan");
             String mobile = (String) s.get("mobile");
             Input in = new Input((String) p.get("customerType"), (String) s.get("firstName"), (String) s.get("middleName"),
-                    (String) s.get("lastName"), LocalDate.parse((String) p.get("dateOfBirth")), (String) p.get("gender"),
+                    (String) s.get("lastName"), LocalDate.parse(sealedFirst(s, p, "dateOfBirth")), (String) p.get("gender"),
                     pan, mobile, (String) s.get("email"), (String) p.get("homeBranch"), null, null, null);
             Hashes h = hashes(c, in);
             if (h.pan() != null && !jdbc.queryForList("SELECT 1 FROM customer.customer WHERE pan_hash = ? AND status <> 'ERASED'", h.pan()).isEmpty()) {
@@ -257,12 +271,13 @@ class CustomerService {
                     normPan == null ? null : normPan.substring(5, 9),
                     c.encrypt(normMobile, "customer.mobile"), h.mobile(), normMobile.substring(6),
                     c.encrypt(in.email(), "customer.email"), h.nameDob(), p.get("homeBranch"), r.id(), r.maker());
-            if (p.get("pincode") != null) {
+            String pincode = sealedFirst(s, p, "pincode");
+            if (pincode != null) {
                 String line = String.join(", ", nonNull((String) s.get("addressLine1")), nonNull((String) s.get("addressLine2")));
                 jdbc.update("""
                         INSERT INTO customer.address (customer_id, address_type, line_cipher, city, state_code, pincode)
                         VALUES (?, 'COMMUNICATION', ?, ?, ?, ?)
-                        """, id, c.encrypt(line, "customer.address"), p.get("city"), p.get("stateCode"), p.get("pincode"));
+                        """, id, c.encrypt(line, "customer.address"), sealedFirst(s, p, "city"), p.get("stateCode"), pincode);
             }
             Object overrides = p.get("dedupeOverrides");
             if (overrides instanceof List<?> list) {
@@ -273,6 +288,15 @@ class CustomerService {
                 }
             }
             return no;
+        }
+
+        /**
+         * Date of birth, city and pincode are in the sealed part of requests raised since SEC-03 and in the clear
+         * part of requests raised before it (still pending at the upgrade).
+         */
+        static String sealedFirst(Map<String, Object> sealed, Map<String, Object> clear, String key) {
+            Object v = sealed.get(key) != null ? sealed.get(key) : clear.get(key);
+            return v == null ? null : String.valueOf(v);
         }
 
         private static String nonNull(String s) {

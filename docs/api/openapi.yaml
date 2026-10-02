@@ -148,6 +148,43 @@ paths:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /api/v1/amount-limits:
+    get:
+      tags: [Platform]
+      operationId: listAmountLimits
+      summary: Role amount limits per transaction type (permission limit:view)
+      description: |
+        What each role may put through in one transaction and in one business day (US-021). The most permissive of
+        a user's roles applies. A role without a limit for a transaction type is not limited, unless the tenant
+        property `limits.default-deny` is `true`. Makers above their limit get 403; an approval above the checker's
+        limit is refused with 403, so a checker with a higher limit must approve.
+      parameters:
+        - { name: roleName, in: query, schema: { type: string } }
+        - { name: txnType, in: query, schema: { $ref: '#/components/schemas/LimitTxnType' } }
+        - { name: currentOnly, in: query, description: Only limits in force on the business date, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: Limits, newest period first within a role and transaction type
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AmountLimit' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeAmountLimit
+      summary: Propose a role amount limit (maker-checker, permission limit:propose)
+      description: The new limit takes over from its effective date; the limit then in force ends the day before.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmountLimitInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /api/v1/enumerations/{type}:
     get:
       tags: [Platform]
@@ -509,6 +546,280 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CustomerSummary' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/customers/{id}/relationships:
+    get:
+      tags: [Customers]
+      operationId: listCustomerRelationships
+      summary: Relationships of a customer (permission customer:view)
+      description: |
+        Co-applicants, guarantors, nominees and authorised signatories the customer has (`OUTGOING`) and the customers
+        they are related to in turn (`INCOMING`). The other party's name is shown only inside the caller's branch scope.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CustomerRelationship' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Customers]
+      operationId: proposeCustomerRelationships
+      summary: Propose relationships (maker-checker, permission customer:create)
+      description: |
+        The related party must be an ACTIVE customer. Nominees are sent as the complete set for an account (`loanId`)
+        or for the customer: their shares must total 100, and on approval the set replaces the current nominees.
+        An authorised signatory is an individual acting for a non-individual customer.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [relationships]
+              properties:
+                relationships:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items: { $ref: '#/components/schemas/RelationshipInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/exposure:
+    get:
+      tags: [Customers]
+      operationId: getCustomerExposure
+      summary: Exposure as borrower, co-applicant and guarantor, with the limit (permission customer:view)
+      description: |
+        A loan counts at its sanctioned amount until it is disbursed and at its principal outstanding afterwards.
+        The exposure limit applies to the borrower's own loans only; exposure as guarantor or co-applicant is shown
+        for information, and a borrower's NPA does not downgrade a guarantor's own accounts.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerExposure' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/exposure-limit:
+    post:
+      tags: [Customers]
+      operationId: proposeCustomerExposureLimit
+      summary: Set, change or remove the exposure limit (maker-checker, permission limit:propose)
+      description: |
+        The limit is checked by the database when a loan is booked and again when it is disbursed (409 when it would
+        be exceeded). Loans already booked are not affected.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                exposureLimit: { type: [number, string, 'null'], description: 'null removes the limit' }
+                reason: { type: string }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/consents:
+    get:
+      tags: [Customers]
+      operationId: listCustomerConsents
+      summary: Consent and purpose records (DPDP Act 2023; permission consent:view)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: Every record, newest first; withdrawn and expired records stay in the list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Consent' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Customers]
+      operationId: recordCustomerConsent
+      summary: Record a consent or a legitimate-use record (permission consent:record)
+      description: One record can be in force per customer and purpose; 409 when one already is.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsentInput' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consent' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/consents/{consentId}/withdraw:
+    post:
+      tags: [Customers]
+      operationId: withdrawCustomerConsent
+      summary: Record the withdrawal of a consent (permission consent:record)
+      description: |
+        Takes effect at once; the grant is kept. When the purpose is needed to service a loan the customer is party
+        to, the withdrawal is recorded with `retainedForLegalObligation: true`: the consent is gone, the data is kept
+        and used only as far as law requires. A legitimate-use record cannot be withdrawn (409).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: consentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: The record after withdrawal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consent' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/kyc-documents:
+    get:
+      tags: [Customers]
+      operationId: listKycDocuments
+      summary: KYC document metadata (permission customer:view)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: Newest first. Document numbers are masked.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/KycDocument' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Customers]
+      operationId: uploadKycDocument
+      summary: Upload a KYC document (permission kyc:upload)
+      description: |
+        The file is the request body (no multipart): PDF, JPEG or PNG up to 5 MB, and its leading bytes must match
+        the `Content-Type`. The document number travels in the `X-Document-Number` header and is never stored: only
+        its last four characters and a keyed hash are kept. For `AADHAAR_MASKED` send only the last four digits; a
+        full Aadhaar number is refused (422) for every document type.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - name: docType
+          in: query
+          required: true
+          description: A value of the enumeration `kyc-document-type`; `address-proof` and `ADDRESS_PROOF` are the same
+          schema: { type: string, examples: ['PAN', 'AADHAAR_MASKED', 'ADDRESS_PROOF', 'PHOTO'] }
+        - { name: issueDate, in: query, schema: { type: string, format: date } }
+        - { name: expiryDate, in: query, schema: { type: string, format: date } }
+        - name: X-Document-Number
+          in: header
+          description: The document number as printed; for Aadhaar only its last four digits
+          schema: { type: string, maxLength: 40 }
+      requestBody:
+        required: true
+        content:
+          application/pdf:
+            schema: { type: string, format: binary, maxLength: 5242880 }
+          image/jpeg:
+            schema: { type: string, format: binary, maxLength: 5242880 }
+          image/png:
+            schema: { type: string, format: binary, maxLength: 5242880 }
+      responses:
+        '201':
+          description: Stored as PENDING
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KycDocument' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/kyc-documents/{docId}/content:
+    get:
+      tags: [Customers]
+      operationId: downloadKycDocument
+      summary: Download a KYC document (permission kyc:view-document; every download is audited)
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/DocId' }
+      responses:
+        '200':
+          description: 'The file, as an attachment and never cached (Cache-Control no-store)'
+          headers:
+            Content-Disposition:
+              schema: { type: string, examples: ['attachment; filename="kyc-pan-0b0e.pdf"'] }
+            Cache-Control:
+              schema: { type: string, examples: ['no-store'] }
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/kyc-documents/{docId}/verify:
+    post:
+      tags: [Customers]
+      operationId: verifyKycDocument
+      summary: Verify a KYC document (permission kyc:verify; not by the uploader)
+      description: |
+        The customer's `kycStatus` becomes VERIFIED when every required document (tenant property
+        `kyc.required-documents`, default `pan,address-proof,photo`) is verified and unexpired. For Aadhaar the
+        verifier must confirm that the copy shows only the last four digits (`maskingConfirmed`).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/DocId' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                maskingConfirmed: { type: boolean, description: Required and true for AADHAAR_MASKED }
+                note: { type: string }
+      responses:
+        '200':
+          description: The document after verification, with the customer's KYC status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KycDocument' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/customers/{id}/kyc-documents/{docId}/reject:
+    post:
+      tags: [Customers]
+      operationId: rejectKycDocument
+      summary: Reject a KYC document with a reason (permission kyc:verify; not by the uploader)
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/DocId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: The document after rejection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KycDocument' }
         default: { $ref: '#/components/responses/Problem' }
 
   /api/v1/gl/heads:
@@ -913,6 +1224,21 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/LoanTxn' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/parties:
+    get:
+      tags: [Lending]
+      operationId: listLoanParties
+      summary: Borrower, co-applicants and guarantors of the loan
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: The borrower first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LoanParty' }
         default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans/{id}/kfs:
     get:
@@ -1591,6 +1917,11 @@ components:
       name: Idempotency-Key
       in: header
       schema: { type: string, maxLength: 100 }
+    DocId:
+      name: docId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     Accepted:
       description: Change recorded as an approval request; applied when a checker approves it
@@ -1839,6 +2170,134 @@ components:
         displayName: { type: string }
         rule: { type: string, enum: [PAN, MOBILE, NAME_DOB] }
         strength: { type: string, enum: [EXACT, STRONG, POSSIBLE] }
+    LimitTxnType:
+      type: string
+      enum: [LOAN_DISBURSEMENT, LOAN_REPAYMENT, LOAN_WAIVER, VOUCHER, LOAN_PRECLOSURE, FEE_WAIVER]
+    AmountLimitInput:
+      type: object
+      required: [roleName, txnType, perTransactionMax, effectiveFrom]
+      properties:
+        roleName: { type: string, description: 'A realm role as it appears in the access token, e.g. MAKER', pattern: '^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$' }
+        txnType: { $ref: '#/components/schemas/LimitTxnType' }
+        perTransactionMax: { type: [number, string] }
+        perDayMax: { type: [number, string, 'null'], description: 'Cumulative per business day; null = no day limit' }
+        effectiveFrom: { type: string, format: date }
+        effectiveTo: { type: [string, 'null'], format: date }
+    AmountLimit:
+      type: object
+      required: [id, roleName, txnType, perTransactionMax, effectiveFrom, inForce]
+      properties:
+        id: { type: string, format: uuid }
+        roleName: { type: string }
+        txnType: { $ref: '#/components/schemas/LimitTxnType' }
+        perTransactionMax: { $ref: '#/components/schemas/Money' }
+        perDayMax: { oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ] }
+        effectiveFrom: { type: string, format: date }
+        effectiveTo: { type: [string, 'null'], format: date }
+        createdBy: { type: string }
+        createdAt: { type: string }
+        inForce: { type: boolean, description: In force on the current business date }
+    RelationshipInput:
+      type: object
+      required: [relatedCustomerId, relationType]
+      properties:
+        relatedCustomerId: { type: string, format: uuid }
+        relationType: { type: string, enum: [CO_APPLICANT, GUARANTOR, NOMINEE, AUTHORISED_SIGNATORY] }
+        loanId: { type: [string, 'null'], format: uuid, description: 'Nominee only: the account the nomination applies to' }
+        sharePercent: { type: [number, string, 'null'], description: 'Nominee only; the shares of a set total 100' }
+    CustomerRelationship:
+      type: object
+      required: [id, direction, relationType, relatedCustomerId, relatedCustomerNo, status]
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [OUTGOING, INCOMING] }
+        relationType: { type: string, enum: [CO_APPLICANT, GUARANTOR, NOMINEE, AUTHORISED_SIGNATORY] }
+        relatedCustomerId: { type: string, format: uuid }
+        relatedCustomerNo: { type: string }
+        relatedCustomerName: { type: [string, 'null'], description: 'null when the other customer is outside the branch scope of the caller' }
+        loanId: { type: [string, 'null'], format: uuid }
+        sharePercent: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, ENDED] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        endedAt: { type: [string, 'null'], format: date-time }
+    CustomerExposure:
+      type: object
+      required: [customerId, asBorrower, asCoApplicant, asGuarantor]
+      properties:
+        customerId: { type: string, format: uuid }
+        exposureLimit: { oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ] }
+        asBorrower: { $ref: '#/components/schemas/Money' }
+        asCoApplicant: { $ref: '#/components/schemas/Money' }
+        asGuarantor: { $ref: '#/components/schemas/Money' }
+        loansAsBorrower: { type: integer }
+        loansAsCoApplicant: { type: integer }
+        loansAsGuarantor: { type: integer }
+        available: { oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ], description: 'Room left under the limit; null when no limit is set' }
+    LoanParty:
+      type: object
+      required: [customerId, customerNo, role]
+      properties:
+        customerId: { type: string, format: uuid }
+        customerNo: { type: string }
+        customerName: { type: string }
+        role: { type: string, enum: [BORROWER, CO_APPLICANT, GUARANTOR] }
+        customerStatus: { type: string }
+        addedBy: { type: string }
+        addedAt: { type: string, format: date-time }
+    ConsentInput:
+      type: object
+      required: [purpose, lawfulBasis, noticeVersion, channel]
+      properties:
+        purpose: { type: string, description: 'A value of the enumeration `consent-purpose`', examples: ['LOAN_PROCESSING', 'CREDIT_BUREAU_REPORTING', 'MARKETING', 'KYC_VERIFICATION', 'ACCOUNT_AGGREGATOR'] }
+        lawfulBasis: { type: string, enum: [CONSENT, LEGITIMATE_USE], description: 'DPDP Act 2023: consent (s.6) or a legitimate use (s.7)' }
+        noticeVersion: { type: string, description: Version of the privacy notice shown to the customer }
+        channel: { type: string, enum: [BRANCH, WEB, MOBILE_APP, API, PAPER, CALL_CENTRE] }
+        evidenceRef: { type: string, description: 'Proof that it was given (OTP or e-sign transaction, form scan); required for CONSENT' }
+        grantedAt: { type: string, format: date-time, description: 'Defaults to now; never in the future' }
+        expiresAt: { type: [string, 'null'], format: date-time }
+    Consent:
+      type: object
+      required: [id, customerId, purpose, lawfulBasis, noticeVersion, channel, grantedAt, status, retainedForLegalObligation]
+      properties:
+        id: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        purpose: { type: string }
+        lawfulBasis: { type: string, enum: [CONSENT, LEGITIMATE_USE] }
+        noticeVersion: { type: string }
+        channel: { type: string }
+        evidenceRef: { type: [string, 'null'] }
+        grantedAt: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        status: { type: string, enum: [ACTIVE, EXPIRED, WITHDRAWN] }
+        withdrawnAt: { type: [string, 'null'], format: date-time }
+        withdrawalReason: { type: [string, 'null'] }
+        withdrawnBy: { type: [string, 'null'] }
+        retainedForLegalObligation: { type: boolean, description: 'Withdrawn, but the data is kept and used as far as law requires while a loan exists' }
+        recordedBy: { type: string }
+        recordedAt: { type: string, format: date-time }
+    KycDocument:
+      type: object
+      required: [id, customerId, docType, status, contentType, sizeBytes, sha256, uploadedBy, uploadedAt]
+      properties:
+        id: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        docType: { type: string }
+        numberMasked: { type: [string, 'null'], examples: ['XXXXXX234F', 'XXXX XXXX 0000'] }
+        issueDate: { type: [string, 'null'], format: date }
+        expiryDate: { type: [string, 'null'], format: date }
+        expired: { type: boolean }
+        status: { type: string, enum: [PENDING, VERIFIED, REJECTED] }
+        statusReason: { type: [string, 'null'] }
+        verifiedBy: { type: [string, 'null'] }
+        verifiedAt: { type: [string, 'null'], format: date-time }
+        maskingConfirmed: { type: boolean }
+        contentType: { type: string, enum: [application/pdf, image/jpeg, image/png] }
+        sizeBytes: { type: integer }
+        sha256: { type: string }
+        uploadedBy: { type: string }
+        uploadedAt: { type: string, format: date-time }
+        customerKycStatus: { type: string, description: 'KYC status of the customer after this change (not in list responses)' }
     GlHead:
       type: object
       required: [code, name, category, posting]
@@ -2085,6 +2544,18 @@ components:
         balloon: { type: [number, string, 'null'] }
         securedPortion: { type: [number, string, 'null'] }
         externalRef: { type: string, description: 'LOS application id; repeating it returns the existing loan' }
+        parties:
+          type: array
+          maxItems: 10
+          description: |
+            Co-applicants and guarantors (the borrower is `customerId`). Each must be an ACTIVE customer, named once,
+            and never the borrower.
+          items:
+            type: object
+            required: [customerId, role]
+            properties:
+              customerId: { type: string, format: uuid }
+              role: { type: string, enum: [CO_APPLICANT, GUARANTOR] }
     ScheduleRow:
       type: object
       properties:

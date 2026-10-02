@@ -22,7 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Generic maker-checker (US-022, US-023). Modules call {@link #propose}; a checker calls {@link #approve}, which
  * replays the change through the module's {@link ApprovalApplier} in the same transaction. The database
- * enforces maker ≠ checker, one decision per checker and no decisions on closed requests (V8).
+ * enforces maker ≠ checker, one decision per checker and no decisions on closed requests (V8). An approval of a
+ * disbursement, waiver or voucher is refused when its amount is above the checker's role amount limit (US-021).
  */
 @Service
 public class ApprovalService {
@@ -31,11 +32,14 @@ public class ApprovalService {
     private final Json json;
     private final AuditLog audit;
     private final Map<String, ApprovalApplier> appliers;
+    private final AmountLimitService limits;
 
-    public ApprovalService(JdbcTemplate jdbc, Json json, AuditLog audit, List<ApprovalApplier> appliers) {
+    public ApprovalService(JdbcTemplate jdbc, Json json, AuditLog audit, List<ApprovalApplier> appliers,
+                           AmountLimitService limits) {
         this.jdbc = jdbc;
         this.json = json;
         this.audit = audit;
+        this.limits = limits;
         this.appliers = appliers.stream().collect(Collectors.toMap(ApprovalApplier::entityType, Function.identity()));
     }
 
@@ -84,6 +88,9 @@ public class ApprovalService {
         } catch (ApprovalPolicy.ApprovalException e) {
             throw ApiException.conflict(e.getMessage());
         }
+        // Role amount limit of the checker (US-021): every approval counts, also the first of two.
+        String limitType = AmountLimitService.typeOf(r);
+        if (limitType != null) limits.require(limitType, AmountLimitService.APPROVE, r.amount(), id.toString());
         jdbc.update("INSERT INTO platform.approval_decision (request_id, checker, decision, note) VALUES (?, ?, 'APPROVE', ?)",
                 id, checker, note);
         if (outcome == ApprovalPolicy.Outcome.NEED_MORE_APPROVALS) {

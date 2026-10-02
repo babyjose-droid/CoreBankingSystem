@@ -109,6 +109,12 @@ class LendingController {
         return loans.transactions(visible(id));
     }
 
+    @GetMapping("/loans/{id}/parties")
+    @PreAuthorize("hasAuthority('loan:view')")
+    List<Map<String, Object>> parties(@PathVariable UUID id) {
+        return loans.parties(visible(id));
+    }
+
     @GetMapping("/loans/{id}/kfs")
     @PreAuthorize("hasAuthority('loan:view')")
     Map<String, Object> kfs(@PathVariable UUID id) {

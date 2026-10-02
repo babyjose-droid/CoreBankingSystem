@@ -312,8 +312,121 @@ Built 02-Oct-2026. Stories: US-048 (KFS as PDF), US-106 (invoices and reports), 
 - **P2-4:** documents and reports — built, see the P2-4 section above.
 - **Other stories:**
   - usage metering and support access (US-004, US-007);
-  - custom fields (US-014) and role amount limits (US-021);
-  - sessions (US-027) and KYC documents (US-032);
-  - associates (US-034) and consent (US-036);
+  - custom fields (US-014) and sessions (US-027);
+  - role amount limits (US-021), KYC documents (US-032), associates (US-034) and consent (US-036) — built, see the P2-5 section below;
   - 24x7 posting (US-111) and the job catalogue (US-112);
   - the developer portal (US-119).
+
+## P2-5 customer, consent, KYC documents and limits
+
+Built 02-Oct-2026. Stories: US-021, US-032, US-034, US-036 and the rest of US-047 (loan parties), plus the approval-payload part of SEC-03. Migration `V17`.
+
+### What was built
+
+**Role amount limits (US-021)**
+- **Table:** `platform.amount_limit` holds, per role and transaction type, a maximum per transaction and an optional cumulative maximum per business day, with effective dates.
+  - Transaction types: `LOAN_DISBURSEMENT`, `LOAN_REPAYMENT`, `LOAN_WAIVER`, `VOUCHER`, `LOAN_PRECLOSURE`, `FEE_WAIVER`.
+  - Limits change only through maker-checker (entity `AMOUNT_LIMIT`). A new limit takes over from its effective date and the earlier one ends the day before. Periods cannot overlap, and a limit row is never edited or deleted.
+- **Rule:** the pure class `AmountLimits` (kernel).
+  - A user with several roles gets the most permissive one. Each role is judged as a whole: one role's day limit is not combined with another role's transaction limit.
+  - No limit row for any of the user's roles means no limit, unless the tenant property `limits.default-deny` is `true`.
+- **Where it is enforced:**
+  - Makers: disbursement request (also for straight-through clients), repayment and part-prepayment (`LOAN_REPAYMENT`), pre-closure and cooling-off cancellation (`LOAN_PRECLOSURE`), waiver proposal, voucher proposal, voucher upload and voucher reversal. Above the limit the API returns 403 with the limit in the message.
+  - Checkers: `ApprovalService.approve` checks the checker's limit for disbursements, waivers and vouchers before the decision is recorded, including the first of two approvals. Above the limit it returns 403, so a checker with a higher limit must approve.
+  - A waiver of a fee counts as `FEE_WAIVER`; a waiver of a penal charge counts as `LOAN_WAIVER`.
+- **Daily totals:** `platform.amount_limit_usage` is append-only. `platform.limit_used` takes a lock per user, type, stage and day, so two concurrent transactions of one user cannot both pass.
+  - Makers and checkers have separate totals.
+  - Usage is counted when the request is proposed, and is not given back if the request is later rejected.
+  - Usage is recorded only while a limit applies to the user. A limit introduced during the day counts from then on.
+- **Roles in the token:** `CurrentUser` now exposes `roles`, read from a `roles` claim and from Keycloak's `realm_access.roles`. See "Needs action" for the realm mapper.
+- **API:** `GET` and `POST /api/v1/amount-limits`.
+
+**Associates and customer limits (US-034)**
+- **Customer-level relationships** (`customer.relationship`): co-applicant, guarantor, nominee and authorised signatory.
+  - The related party must be an ACTIVE customer and cannot be the customer themselves.
+  - An authorised signatory is an individual acting for a non-individual customer.
+  - Nominees carry a share. The shares of the active nominees of one account (or of the customer, when no account is named) must total 100; this is checked at commit so a set can be replaced in one transaction. A new set replaces the old one, which stays as history.
+  - Relationships are ended, never edited or deleted.
+- **Loan parties** (`lending.loan_party`): BORROWER, CO_APPLICANT, GUARANTOR.
+  - The database writes the borrower row when a loan is booked; existing loans were backfilled.
+  - Loan creation and preview accept `parties` (customer id and role).
+  - A customer holds one role per loan, so a borrower cannot also be guarantor or co-applicant. Guarantors and co-applicants must be ACTIVE customers.
+  - Parties cannot be changed or removed (release of a guarantor is not built).
+- **Exposure view** (`customer.exposure`): totals as borrower, as co-applicant and as guarantor, with loan counts.
+  - A loan counts at its sanctioned amount until disbursed and at its principal outstanding afterwards. Closed, cancelled and written-off loans count as zero.
+  - Borrower-level NPA is unchanged: it looks only at the borrower's own accounts and does not reach guarantors or co-applicants.
+- **Exposure limit** (`customer.exposure_limit`): set, changed or removed through maker-checker (entity `CUSTOMER_EXPOSURE_LIMIT`).
+  - A database trigger checks it when a loan is booked and again when it is disbursed, with the customer row locked, and refuses with 409.
+  - It covers exposure as borrower only.
+- **API:** `GET` and `POST /api/v1/customers/{id}/relationships`, `GET /api/v1/customers/{id}/exposure`, `POST /api/v1/customers/{id}/exposure-limit`, `GET /api/v1/loans/{id}/parties`.
+
+**Consent and purpose records (US-036)**
+- **Record** (`customer.consent`, completed from the V4 stub): purpose, lawful basis (`CONSENT` or `LEGITIMATE_USE`), notice version shown, channel, evidence reference, granted and expiry times, withdrawal time, reason and user.
+  - Purposes are the enumeration `consent-purpose`: `LOAN_PROCESSING`, `KYC_VERIFICATION`, `CREDIT_BUREAU_REPORTING`, `ACCOUNT_AGGREGATOR`, `MARKETING`.
+  - One record can be in force per customer and purpose.
+- **Immutability:** a trigger allows only one later change to a record, its withdrawal. Records cannot be edited, deleted or truncated. Every grant and withdrawal is also written to the append-only `customer.consent_event`.
+- **Functions:**
+  - `customer.has_consent(customer, purpose, at)`: true when a record is granted, not withdrawn and not expired at that moment. History can be queried for any past moment.
+  - `customer.bureau_reportable(customer)`: the hook for the reporting module.
+  - `customer.has_retention_obligation(customer, at)`: true while the customer is party to a loan that is sanctioned, live or written off, or that closed within the retention period.
+- **API:** `GET` and `POST /api/v1/customers/{id}/consents`, `POST /api/v1/customers/{id}/consents/{consentId}/withdraw`. Both writes are audited.
+
+**KYC documents (US-032)**
+- **Metadata** (`customer.kyc_document`): document type (enumeration `kyc-document-type`), last four characters and keyed hash of the number, issue and expiry dates, status, file key, content type, size, SHA-256, uploader and time.
+- **Files:** stored through `DocumentStore` (`put`, `get`, `delete`, `exists`) under `tenants/<code>/kyc/<customer>/<uuid>`.
+  - `FileDocumentStore` writes under `corebanking.documents.dir` with owner-only permissions and refuses keys with `..`, a leading `/` or a backslash.
+  - **The S3 implementation is not built.** It needs the AWS SDK dependency. Until then the directory must be an encrypted volume.
+- **Upload:** `POST /api/v1/customers/{id}/kyc-documents` with the file as the request body.
+  - PDF, JPEG or PNG, at most 5 MB; the leading bytes must match the declared type.
+  - Metadata is in the query string. The document number is in the `X-Document-Number` header so it does not reach access logs.
+- **Verification:** `POST …/{docId}/verify` and `…/reject`, by someone other than the uploader (also a database constraint). A decided document cannot be decided again.
+- **Download:** `GET …/{docId}/content` needs `kyc:view-document`, is audited, checks the stored SHA-256, and is served as an attachment with `Cache-Control: no-store`.
+- **KYC status:** `customer.kyc_complete` is true when every required document is verified and unexpired. The required set is the tenant property `kyc.required-documents` (default `pan,address-proof,photo`).
+  - A trigger moves the customer to VERIFIED when the last required document is verified, and refuses any other attempt to set VERIFIED.
+  - `customer.expire_kyc(date)` moves customers whose documents have run out to EXPIRED. It is not yet wired into end of day.
+- **Branch scope:** every endpoint above reports a customer outside the caller's branch scope as not found.
+
+**Approval payloads (SEC-03, part)**
+- Date of birth, city and pincode are now sealed inside customer-create requests. The checker sees an age band, the state and a masked pincode.
+- The applier still reads requests raised before the change.
+- Name storage is unchanged. Options and a recommendation are in `docs/security/sec-03-display-name.md`.
+
+### Regulatory interpretations encoded
+These are the product's reading and need confirmation by the lender's compliance or counsel.
+
+- **DPDP Act 2023, consent and withdrawal:**
+  - Each record holds the notice version shown (s.5) and an evidence reference, because the lender must be able to prove that consent was given (s.6(10)). The evidence reference is mandatory for `CONSENT`.
+  - `LEGITIMATE_USE` (s.7) is recorded as a basis without consent. Such a record cannot be withdrawn; it ends through its expiry.
+  - A withdrawal (s.6(4)) takes effect immediately and never removes the grant. Processing before the withdrawal stays lawful (s.6(5)), which is why `has_consent` can be asked for a past moment.
+  - **Marketing** and account-aggregator consent simply end on withdrawal.
+  - **Servicing purposes** (`LOAN_PROCESSING`, `KYC_VERIFICATION`, `CREDIT_BUREAU_REPORTING`; tenant property `consent.servicing-purposes`): when the customer is party to a loan, the withdrawal is recorded and flagged `retained_for_legal_obligation`. The consent is no longer in force, but the data is kept and used as far as law requires (s.6(6) and s.8(7)): RBI and PMLA record-keeping and servicing the existing contract. The database sets the flag; the caller cannot.
+  - The retention period after closure is the tenant property `consent.retention-years`, default 5.
+- **Credit-bureau reporting:** `bureau_reportable` is true with a current consent or legitimate-use record. It is also true after a withdrawal flagged `retained_for_legal_obligation`, for as long as the retention obligation lasts, on the reading that the duty to furnish credit information on an existing loan (Credit Information Companies (Regulation) Act 2005) continues. **This second case is the least certain interpretation here** and is listed as a decision below.
+- **Aadhaar (UIDAI masked Aadhaar; RBI Master Direction on KYC):**
+  - A full Aadhaar number is never accepted, hashed or stored. A value shaped like one is refused for every document type.
+  - Only the last four digits are kept, and no hash (a database constraint).
+  - The verifier must confirm that the uploaded copy is masked before an Aadhaar document can be VERIFIED (a database constraint). The system does not inspect the image itself.
+- **Other document numbers:** only the last four characters and a keyed hash are stored, never the number.
+- **Guarantors and NPA:** a borrower's NPA does not classify the guarantor's own accounts. Guarantor exposure is shown, not limited.
+
+### Tests
+- **Kernel:** 22 new tests in `CustomerRulesTest` (42 in the module): amount limits, file signatures, document numbers and Aadhaar refusal, age band and pincode masking.
+- **Database rules:** 110 SQL checks in `customer_p25_test.sql`: limits (14), loan parties (9), relationships (15), exposure (12), consent (33), KYC documents (27). The other five SQL suites still pass.
+- **App unit tests:** `FileDocumentStoreTest` (4, including role-claim parsing) and one new case in `CustomerValidationTest` for both payload shapes.
+- **OpenAPI:** lint clean.
+- **Not verified here:** the Spring module is compiled only in CI. In the build sandbox the changed files were type-checked against hand-written API stubs, and every SQL statement they send was checked with `PREPARE` on a migrated database. No endpoint has been called end to end.
+
+### Needs action
+- **Console API types:** `frontend/console/src/api/schema.d.ts` must be regenerated (`npm run gen:api`), otherwise the console CI job fails.
+- **New permissions** to add to the realm template and the console list: `limit:view`, `limit:propose`, `consent:view`, `consent:record`, `kyc:upload`, `kyc:verify`, `kyc:view-document`.
+- **Keycloak mapper for roles:** the `console` client has `fullScopeAllowed: false`, so realm roles are probably not in the access token today. Add a "User Realm Role" mapper (claim `roles`, multivalued, in the access token) to the `console` client and to API clients, and include the realm roles in the client's scope. Without it every user has no roles: limits never apply, or with `limits.default-deny` everything limited is refused.
+- **Documents directory:** set `COREBANKING_DOCUMENTS_DIR` to an encrypted, backed-up volume. The default is a temporary directory.
+
+### Not yet built in P2-5
+- S3 document store.
+- Console screens for limits, relationships, exposure, consent and KYC documents.
+- Ending a relationship and releasing a guarantor through the API.
+- Daily KYC expiry step in end of day.
+- Erasure of documents and consent records under a DPDP erasure request.
+- Virus scanning of uploads.
+- Role amount limits on loan reversals and restructures.
