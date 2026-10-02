@@ -29,6 +29,8 @@ tags:
   - name: EOD
   - name: Audit
   - name: Lending
+  - name: Documents
+  - name: Reporting
   - name: Control plane
 paths:
   /api/v1/me:
@@ -1279,6 +1281,232 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Loan' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/documents/kfs.pdf:
+    get:
+      tags: [Documents]
+      operationId: getLoanKfsPdf
+      summary: Key Facts Statement as PDF
+      description: |
+        The KFS stored at booking, laid out as in RBI's circular "Key Facts Statement (KFS) for Loans & Advances"
+        (15-Apr-2024): Part 1 (interest rate and fees/charges), Part 2 (other qualitative information), the
+        illustration of the APR computation and the repayment schedule. The APR is the one computed by the product
+        at booking. Grievance officer and clause references come from the system properties `lender.*`; one that
+        is not set prints as "[not configured]".
+        Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+        written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: 'The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/documents/statement.pdf:
+    get:
+      tags: [Documents]
+      operationId: getLoanStatementPdf
+      summary: Statement of account as PDF
+      description: |
+        Opening and closing balance, every transaction with its principal / interest / charges split and the
+        running outstanding, and the overdue summary with days past due. Built from the ledger entries on the
+        loan account; day-end interest accruals between two transactions are shown as one line per month.
+        Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+        written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: from, in: query, schema: { type: string, format: date }, description: 'Default: the disbursement date' }
+        - { name: to, in: query, schema: { type: string, format: date }, description: 'Default: the business date; cannot be later' }
+      responses:
+        '200':
+          description: 'The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '409':
+          description: The loan has not been disbursed yet
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/documents/schedule.pdf:
+    get:
+      tags: [Documents]
+      operationId: getLoanSchedulePdf
+      summary: Repayment schedule as PDF
+      description: |
+        Instalments fallen due with what was paid against each, and the instalments to come.
+        Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+        written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: 'The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/documents/noc.pdf:
+    get:
+      tags: [Documents]
+      operationId: getLoanNocPdf
+      summary: No-objection (closure) letter as PDF
+      description: |
+        Issued only for a loan whose status is CLOSED.
+        Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+        written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: 'The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '409':
+          description: The loan is not closed
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/charges/{chargeId}/invoice.pdf:
+    get:
+      tags: [Documents]
+      operationId: getFeeInvoicePdf
+      summary: GST tax invoice for a fee as PDF
+      description: |
+        Supplier and recipient state, SAC 9971, taxable value, CGST + SGST (intra-state) or IGST (inter-state), and
+        the invoice number from the GST_INVOICE number series. The invoice of a reversed fee is returned marked
+        CANCELLED.
+        Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+        written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - name: chargeId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[CD][0-9]{1,6}$' }
+          description: The charge id shown on the loan (C1, C2 …), or D1, D2 … for the fees deducted from the disbursement
+      responses:
+        '200':
+          description: 'The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '409':
+          description: 'A penal charge (P…): penal charges carry no GST, so there is no invoice'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/reports:
+    get:
+      tags: [Reporting]
+      operationId: listReports
+      summary: Report catalogue
+      description: |
+        The reports the caller may run: those whose permission they hold (`report:run`; `bureau:export` for the
+        credit bureau file).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ReportDefinition' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/reports/{code}/runs:
+    post:
+      tags: [Reporting]
+      operationId: runReport
+      summary: Run a report now and store its file
+      description: |
+        Runs synchronously (for now), writes the rows as CSV (cells that start with `=`, `+`, `-` or `@` are
+        neutralised) and stores the file; fetch it with the download call. The rows are limited to the caller's
+        branch scope. A run that fails is returned with status `FAILED` and its error.
+
+        `BUREAU_CONSUMER` produces the UCRF-style consumer bureau file instead of CSV. It needs `bureau:export`
+        and all-branch access, and is the only report that contains unmasked personal data. Its layout has **not**
+        been certified by any bureau: validate it against each bureau's format specification before submitting.
+
+        Every run is written to the audit log (`REPORT_RUN`, or `BUREAU_EXPORT`).
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Z][A-Z0-9_]{2,40}$' } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportRunRequest' }
+      responses:
+        '201':
+          description: The run (COMPLETED or FAILED)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportRun' }
+        '409':
+          description: The bureau member code is not configured (system property `bureau.member-code`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/reports/runs:
+    get:
+      tags: [Reporting]
+      operationId: listReportRuns
+      summary: Report runs, newest first
+      description: The caller's own runs; every user's runs with `report:admin`. The file itself is never part of this list.
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ReportRun' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/reports/runs/{id}/download:
+    get:
+      tags: [Reporting]
+      operationId: downloadReportRun
+      summary: The file of a completed run
+      description: |
+        Only for the user who ran the report, or a user with `report:admin`, and only while they hold the report's
+        own permission (so `report:admin` alone never opens a bureau file). Every download is written to the audit
+        log (`REPORT_DOWNLOAD`, or `BUREAU_DOWNLOAD`).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - name: part
+          in: query
+          schema: { type: string, enum: [rejections] }
+          description: '`rejections`: the accounts left out of a bureau file, with the reason (CSV, no personal data)'
+      responses:
+        '200':
+          description: 'The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            text/csv:
+              schema: { type: string }
+            text/plain:
+              schema: { type: string, description: The UCRF-style bureau file (pipe-delimited) }
+        '409':
+          description: The run did not complete, or the stored file no longer matches its record
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/dashboard:
+    get:
+      tags: [Reporting]
+      operationId: getDashboard
+      summary: Dashboard figures for the caller's branches
+      description: Permission `dashboard:view`. Every figure is limited to the caller's branch scope.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dashboard' }
+        default: { $ref: '#/components/responses/Problem' }
   /platform/v1/tenants:
     get:
       tags: [Control plane]
@@ -2126,3 +2354,81 @@ components:
         foreclosureFee: { type: string }
         advanceAdjusted: { type: string }
         total: { type: string }
+    ReportDefinition:
+      type: object
+      required: [code, name, parameters, permission, outputFormat]
+      properties:
+        code: { type: string, examples: [LOAN_BOOK] }
+        name: { type: string }
+        description: { type: string }
+        parameters:
+          type: object
+          additionalProperties: true
+          description: 'JSON Schema of the run parameters: `{"type":"object","properties":{…},"required":[…]}`; dates are `format: date`'
+        permission: { type: string, examples: ['report:run', 'bureau:export'] }
+        outputFormat: { type: string, enum: [CSV, UCRF] }
+        containsPersonalData: { type: boolean, description: Unmasked personal data (the bureau file) }
+        allBranchesOnly: { type: boolean, description: Needs all-branch access }
+        schedule: { type: [string, 'null'], description: 'Cron expression recorded for the scheduler, which is not built yet' }
+    ReportRunRequest:
+      type: object
+      properties:
+        parameters:
+          type: object
+          additionalProperties: { type: string }
+          examples: [ { from: '2026-09-01', to: '2026-09-30' } ]
+    ReportRun:
+      type: object
+      required: [id, reportCode, requestedBy, requestedAt, businessDate, status]
+      properties:
+        id: { type: string, format: uuid }
+        reportCode: { type: string }
+        requestedBy: { type: string }
+        requestedAt: { type: string, format: date-time }
+        businessDate: { type: string, format: date }
+        parameters: { type: object, additionalProperties: { type: string } }
+        status: { type: string, enum: [RUNNING, COMPLETED, FAILED] }
+        rowCount: { type: [integer, 'null'], description: 'Data rows in the file (accounts, for the bureau file)' }
+        rejectedCount: { type: integer, description: 'Accounts left out of a bureau file; listed by the download call with part=rejections' }
+        fileName: { type: [string, 'null'] }
+        contentType: { type: [string, 'null'] }
+        bytes: { type: [integer, 'null'], format: int64 }
+        error: { type: [string, 'null'] }
+        finishedAt: { type: [string, 'null'], format: date-time }
+    DpdBucket:
+      type: object
+      required: [bucket, loans, amount]
+      properties:
+        bucket: { type: string, enum: ['0', '1-30', '31-60', '61-90', '91-180', '181-365', '>365'] }
+        loans: { type: integer }
+        amount: { type: string, description: Principal outstanding }
+    Dashboard:
+      type: object
+      description: Money is a decimal string. A percentage is null when it has no base (no advances, nothing due).
+      required: [activeLoans, portfolioOutstanding, dpdBuckets, pendingApprovals]
+      properties:
+        businessDate: { type: [string, 'null'], format: date }
+        activeLoans: { type: integer }
+        portfolioOutstanding: { type: string, description: Principal outstanding of live loans (gross advances) }
+        overdueAmount: { type: string }
+        grossNpa: { type: string, description: Principal outstanding of non-performing loans }
+        npaLoans: { type: integer }
+        npaPercent: { type: [string, 'null'], description: 'Gross NPA / gross advances, in percent' }
+        disbursedToday: { type: string }
+        disbursedMtd: { type: string }
+        disbursementsToday: { type: integer }
+        disbursementsMtd: { type: integer }
+        collectedToday: { type: string }
+        collectedMtd: { type: string }
+        demandMtd: { type: string, description: Instalments that fell due this month }
+        collectedAgainstDemandMtd: { type: string }
+        collectionEfficiencyMtd: { type: [string, 'null'], description: 'Collected against this month''s instalments / their amount, in percent' }
+        dpdBuckets: { type: array, items: { $ref: '#/components/schemas/DpdBucket' } }
+        pendingApprovals: { type: integer }
+        lastEod:
+          type: [object, 'null']
+          properties:
+            businessDate: { type: string, format: date }
+            status: { type: string, enum: [RUNNING, COMPLETED, COMPLETED_WITH_EXCEPTIONS, FAILED] }
+            finishedAt: { type: [string, 'null'], format: date-time }
+        openEodExceptions: { type: integer, description: Shown to all-branch users; 0 for others }

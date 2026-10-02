@@ -13,7 +13,8 @@ import java.util.Objects;
  */
 public final class NumberSeries {
 
-    public enum Family { LOAN, CASA, TERM_DEPOSIT, CUSTOMER, VOUCHER }
+    /** GST_INVOICE numbers are issued in SQL (V16 platform.next_number) with this same format. */
+    public enum Family { LOAN, CASA, TERM_DEPOSIT, CUSTOMER, VOUCHER, GST_INVOICE }
 
     /** Default prefixes; a tenant may override, but the platform rejects overlapping prefixes. */
     public static final Map<Family, String> DEFAULT_PREFIX = Map.of(
@@ -21,7 +22,8 @@ public final class NumberSeries {
             Family.CASA, "2001",
             Family.TERM_DEPOSIT, "3001",
             Family.CUSTOMER, "9001",
-            Family.VOUCHER, "8001");
+            Family.VOUCHER, "8001",
+            Family.GST_INVOICE, "7001");
 
     private final String prefix;
     private final int width;

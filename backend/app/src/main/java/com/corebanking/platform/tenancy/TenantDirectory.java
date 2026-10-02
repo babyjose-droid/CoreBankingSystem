@@ -29,7 +29,8 @@ public class TenantDirectory {
             "/api/v1/loan-products/", "LENDING",
             "/api/v1/casa/", "CASA",
             "/api/v1/deposits/", "TD",
-            "/api/v1/collections/", "COLLECTIONS");
+            "/api/v1/collections/", "COLLECTIONS",
+            "/api/v1/reports/", "REPORTS");
 
     private final JdbcTemplate control;
     private final Map<String, Entry> cache = new ConcurrentHashMap<>();

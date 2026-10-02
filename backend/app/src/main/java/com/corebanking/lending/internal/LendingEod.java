@@ -24,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       charge penal on overdue amounts, classify (SMA/NPA, suspense), provision. One failing loan is an EOD
  *       exception, not a failed EOD; above 5% failures the step fails (something systemic).</li>
  *   <li><b>Borrower-level NPA</b> — every loan of a borrower with an NPA loan becomes NPA.</li>
+ *   <li><b>GST fee invoices</b> — a tax invoice for each fee charged in the day (P2-4).</li>
  * </ol>
  * Re-running a day is safe: the engine ignores a day it has already processed for a loan.
  */
@@ -46,7 +47,30 @@ class LendingEod implements EodStepProvider {
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         DataSource ds = jdbc.getDataSource();
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
-        return List.of(loanDayEnd(jdbc, tx), borrowerNpa(jdbc, tx));
+        return List.of(loanDayEnd(jdbc, tx), borrowerNpa(jdbc, tx), feeInvoices(jdbc));
+    }
+
+    /**
+     * GST tax invoices for the fees charged today (and cancellation of those reversed today), from the ledger
+     * (V16 lending.issue_fee_invoices). Per loan, so a loan whose invoice cannot be issued becomes an EOD exception
+     * and never stops the day from closing. The invoice PDF and the GST reports also issue what is missing.
+     */
+    private EodEngine.ItemStep feeInvoices(JdbcTemplate jdbc) {
+        return new EodEngine.ItemStep() {
+            @Override public String name() { return "GST fee invoices"; }
+
+            @Override public List<String> items(EodEngine.Context ctx) {
+                return jdbc.queryForList("""
+                        SELECT DISTINCT loan_id::text FROM lending.loan_txn
+                         WHERE business_date = ? AND txn_type IN ('DISBURSEMENT','FEE_CHARGE','PREPAYMENT','PRECLOSURE','REVERSAL')
+                         ORDER BY 1
+                        """, String.class, ctx.businessDate());
+            }
+
+            @Override public void process(EodEngine.Context ctx, String loanId) {
+                jdbc.queryForObject("SELECT lending.issue_fee_invoices(?)", Integer.class, UUID.fromString(loanId));
+            }
+        };
     }
 
     private EodEngine.ItemStep loanDayEnd(JdbcTemplate jdbc, TransactionTemplate tx) {

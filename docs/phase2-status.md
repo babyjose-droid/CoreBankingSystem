@@ -122,6 +122,109 @@ Updated 29-Sep-2026. Source: product backlog v1.0, 51 Phase 2 stories. Built in 
 - **Contract fixes made with it:** enumeration types are kebab-case (V15); enumeration values return `sortOrder`; validation problems carry `errors[{field, message}]`; the Approval schema documents `checkersRequired`, `approvalsSoFar`, `appliedRef`.
 - **Open:** the queue cannot yet tell a checker that they already approved a two-checker request (the second click gets 409); a floating-rate reset above the product's rate band is refused — decide whether resets may exceed the band (D-14).
 
+## P2-4 documents and reports
+
+Built 02-Oct-2026. Stories: US-048 (KFS as PDF), US-106 (invoices and reports), US-113, US-114, US-115. Migration `V16`.
+
+### What was built
+
+**PDF writer** (`SimplePdf`, `Inr` in `backend/kernel`)
+- A small PDF 1.4 writer with no dependency: A4 pages, Helvetica and Helvetica-Bold (not embedded), headings, wrapped paragraphs, label-value blocks, tables.
+  - A table's header row repeats after a page break, a row never splits across pages, and numbers are right-aligned.
+  - Every page has a header line, a footer line and "Page x of y". Page content is Flate-compressed.
+  - The same input gives the same bytes.
+- Amounts print as "Rs. 1,23,45,678.90" (Indian grouping) because the standard fonts have no rupee sign. `Inr.words` gives the amount in words with lakh and crore.
+- **Limit:** text must be in Windows-1252. Accents outside it are dropped, the rupee sign becomes "Rs." and other scripts (for example Devanagari) print as "?". Documents in Indian languages need an embedded font, which is not built.
+
+**Borrower documents** (`LoanDocuments` in `backend/lending-core`, `LoanDocumentService` in the app)
+- **Key Facts Statement:** laid out as in RBI's circular "Key Facts Statement (KFS) for Loans & Advances" (15-Apr-2024).
+  - Part 1 (interest rate and fees/charges), Part 2 (other qualitative information), the illustration of the APR computation and the repayment schedule.
+  - Figures come from the KFS stored at booking. The APR is the one the product computed; it is not recomputed.
+  - Contingent charges come from the product's fee rules and the penal charge rate.
+- **Statement of account:** opening and closing balance, every transaction with its principal, interest and charges split, running outstanding, and the overdue summary with days past due.
+  - It is built from the ledger entries on the loan account (`lending.loan_statement`, `lending.loan_balance`), so it always agrees with the books.
+  - Day-end interest accruals between two transactions are shown as one line per month.
+  - Interest includes interest accrued but not yet due. Money held as an advance is shown apart.
+  - A statement whose lines do not add up to the closing balance is refused, not printed.
+- **Repayment schedule:** instalments fallen due with what was paid, and instalments to come.
+- **No-objection letter:** only for a loan whose status is CLOSED (the API returns 409 otherwise).
+- **GST tax invoice** for a fee: supplier and recipient state, SAC 9971, CGST + SGST or IGST, total in words.
+- Name and address are printed in full; PAN and mobile only masked.
+- **Tenant settings used** (system properties; a missing one prints as "[not configured]"):
+  - `lender.registered-address`, `lender.grievance.officer-name`, `lender.grievance.officer-phone`, `lender.grievance.officer-email`;
+  - `lender.kfs.recovery-agent-clause`, `lender.kfs.grievance-clause`, `lender.kfs.transferable`, `lender.kfs.collaborative-lending`, `lender.kfs.lsp-recovery-agent`, `lender.kfs.validity-days` (default 3);
+  - for floating-rate loans: `lender.kfs.benchmark`, `lender.kfs.reset-periodicity`, `lender.kfs.reset-impact`.
+- **API** (permission `loan:view`, branch scope, `Cache-Control: no-store`, download): `/api/v1/loans/{id}/documents/kfs.pdf`, `statement.pdf?from&to`, `schedule.pdf`, `noc.pdf`, and `/api/v1/loans/{id}/charges/{chargeId}/invoice.pdf`.
+  - Every generation is written to the audit log (`DOCUMENT_GENERATED`: who, which loan, which document).
+
+**GST fee invoices** (`lending.fee_invoice`, `lending.issue_fee_invoices`)
+- One invoice per fee charged, built from the fee's ledger entries, so an invoice always equals what was posted.
+- Numbers come from a new number series `GST_INVOICE` (14 characters, same check digit as the other series), issued in SQL.
+- Invoices are issued at day-end (a new step "GST fee invoices"), and on demand by the invoice PDF and the GST reports.
+- An invoice is never edited or deleted. When the fee's transaction is reversed, the invoice is marked CANCELLED and keeps its number.
+- `chargeId` is the charge id on the loan (C1, C2 …), or D1, D2 … for fees deducted from the disbursement.
+
+**Report catalogue** (`reporting.report_definition`, `reporting.report_run`, `ReportService`)
+- A report is a SQL function `reporting.<name>(user, parameters)` returning rows. Every function filters by `platform.visible_branches(user)`.
+- A run is synchronous. The rows are written as CSV with the kernel `Csv` writer (formula cells neutralised) and stored in the document store under `tenants/<code>/reports/…`.
+- A finished run cannot be changed or deleted: it is the record of who exported what.
+- **Reports** (permission `report:run`):
+  - `LOAN_BOOK`: portfolio outstanding by branch and product;
+  - `DPD_AGEING`: buckets 0, 1-30, 31-60, 61-90, 91-180, 181-365, above 365;
+  - `COLLECTIONS_VS_DEMAND`: instalments due in a period against what was collected;
+  - `DISBURSEMENT_REGISTER`;
+  - `NPA_REGISTER`: with provision required, held and shortfall;
+  - `GST_OUTPUT_REGISTER` and `GST_OUTPUT_SUMMARY`: fee invoices, and tax by state and rate (this closes the reports part of US-106);
+  - `INTEREST_ACCRUAL_SUSPENSE`: opening balance, movement and closing balance of interest income, suspense and receivable.
+- `LOAN_BOOK` and `DPD_AGEING` accept an earlier date and then use the day-end history (`lending.dpd_history`).
+- **API:** `GET /api/v1/reports`, `POST /api/v1/reports/{code}/runs`, `GET /api/v1/reports/runs` (own runs; all runs with `report:admin`), `GET /api/v1/reports/runs/{id}/download`.
+  - These calls need the tenant's `REPORTS` module, which every plan includes.
+
+**Credit bureau file** (report `BUREAU_CONSUMER`, `UcrfConsumerFile` in `backend/kernel`)
+- A monthly consumer file in a UCRF-style layout: pipe-delimited text with a header record, one record per loan and a trailer record.
+- Fields, in order: record type, member code, account number, account type, ownership, date opened, date of last payment, date closed, date reported, sanctioned amount, current balance, amount overdue, days past due, asset classification (STD, SMA, SUB, DBT, LSS), written-off or settled status, EMI, tenure, rate, name, date of birth, gender, PAN, mobile, address, state code, pincode.
+- Reported: live and written-off loans, and loans closed in the reporting month.
+- An account that fails a check (for example no PAN and no mobile) is left out and listed with the reason in a second file. That file has no personal data.
+- It needs the permission `bureau:export` and all-branch access. PAN, mobile and address are decrypted only to write the file. Every run and every download is audited (`BUREAU_EXPORT`, `BUREAU_DOWNLOAD`).
+- **Tenant settings:** `bureau.member-code` (required), `bureau.member-name`, and the account type code per product (`bureau.account-type.<product code in lower case>`, or `bureau.account-type.default`).
+
+**Dashboard** (`GET /api/v1/dashboard`, permission `dashboard:view`)
+- Portfolio outstanding, active loans, overdue, gross NPA and NPA % (gross NPA / gross advances).
+- Disbursed and collected today and month to date; collection efficiency for instalments due this month.
+- DPD bucket distribution (count and amount), pending approvals, last end-of-day status.
+- One SQL function per group (`reporting.dashboard_*`), each limited to the caller's branches.
+
+**Document store** (`DocumentStore`, `FileDocumentStore`; `DocumentKey` in the kernel)
+- Put, get and delete by key on a directory (`corebanking.documents.dir`, by default under the temporary directory).
+- Keys are always `tenants/<code>/…` and are checked in one place; a key of another tenant is refused.
+- These two classes are the same files as in increment P2-5, so the two increments share one store.
+
+### Bureau format caveat
+- **The bureau file is not certified by any bureau.** TransUnion CIBIL, Equifax, Experian and CRIF High Mark accept the Uniform Credit Reporting Format, but each gives its exact field positions, lengths and code lists to members only.
+- Before the first submission, check the layout field by field against each bureau's current specification and run a file through that bureau's validation utility. This needs the tenant's membership documents.
+- Codes that must be confirmed: account type, ownership, gender, written-off or settled status, and state codes (the file uses GST state codes).
+
+### Permissions to add
+- `report:run`, `report:admin`, `bureau:export`, `dashboard:view`.
+- They are not yet in the Keycloak realm or in the console's permission list.
+
+### Tests
+- **PDF writer and file formats (kernel):** 24 new tests: file structure (xref offsets, stream lengths, page count), wrapping, right alignment, page breaks with repeated headers, compression, character replacement, amounts in figures and words, the bureau file layout and its rejections, document keys.
+- **Documents (lending-core):** 13 tests with golden text checks for the five documents, including a statement that does not balance and an invoice with the wrong tax for its place of supply.
+- **Database:** 66 checks in `documents_reports_test.sql` on a fixture of two branches and six loans: balance and statement lines, invoice issue and cancellation, every report with branch scope, the bureau extract and the dashboard.
+- **Real readers:** the generated PDFs were checked outside Java with `qpdf --check` (no errors or warnings), `pdftotext` and `pypdf`.
+- **App:** 3 tests for report parameters. The Spring code could not be compiled here (no access to Maven Central); it was type-checked against stand-in classes for the Spring API with the CI lint options.
+
+### Not yet built in P2-4
+- **S3 document store:** pending. It needs the AWS SDK dependency, to be added when a build with Maven Central access is available. Until then the store is a directory, which must be an encrypted volume: report files and the bureau file hold personal data.
+- **Scheduler and e-mail delivery of reports:** pending. `schedule` and `email_to` are recorded on the report definition and not acted on. They wait for the notification provider decision (OI-06).
+- **Background runs:** a run is synchronous and limited to 500,000 rows.
+- **Credit notes:** a fee waived after its invoice was issued needs a GST credit note. Only reversal (cancellation) is handled.
+- **Console screens** for documents, reports and the dashboard, and the regenerated API types for the console.
+- **Bureau:** commercial borrowers, guarantors and joint holders, payment history by month, and settled status.
+- **Earlier reporting dates:** the bureau file for a past date uses that day's DPD and class but today's loan status.
+- **KFS:** benchmark details for floating-rate loans are text settings; third-party fees are always shown as nil.
+
 ## P2-3 amendments and restructure
 
 ### What was built
@@ -206,7 +309,7 @@ Updated 29-Sep-2026. Source: product backlog v1.0, 51 Phase 2 stories. Built in 
 - **P2-2:** payout gateway, NACH presentation and responses, collection webhooks, SMS and email, signed webhooks, OAuth clients, LOS integration.
   - These need decision D-09 and sandbox credentials from the partners.
 - **P2-3:** amendments and restructure — built, see the P2-3 section above.
-- **P2-4:** documents and reports: KFS, statement of account and NOC as PDFs; bureau files; GST invoices; report catalogue; dashboard.
+- **P2-4:** documents and reports — built, see the P2-4 section above.
 - **Other stories:**
   - usage metering and support access (US-004, US-007);
   - custom fields (US-014) and role amount limits (US-021);

@@ -2,4 +2,5 @@
 dependencies {
     "api"(project(":backend:calc"))
     "api"(project(":backend:ledger-core"))
+    "implementation"(project(":backend:kernel"))   // SimplePdf for the document builders (P2-4)
 }

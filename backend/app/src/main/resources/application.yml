@@ -25,6 +25,9 @@ corebanking:
       username: ${COREBANKING_CONTROL_USER:control}
       password: ${COREBANKING_CONTROL_PASSWORD:}
       maximum-pool-size: 5
+  documents:
+    # Root of the file document store (KYC documents). Use an encrypted volume; the S3 store is pending.
+    dir: ${COREBANKING_DOCUMENTS_DIR:${java.io.tmpdir}/corebanking-documents}
   eod:
     partitions: 4
     scheduler-enabled: true
