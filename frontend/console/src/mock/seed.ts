@@ -4,6 +4,7 @@ import { customerNumber } from '../lib/luhn';
 import { maskMobile, maskPan } from '../lib/mask';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb, type StoredCustomer } from './db';
 import { postVoucher } from './ledger';
+import { seedCustomerExtras } from './customerExtras';
 import { seedLending } from './lending';
 import { seedPlatform } from './platform';
 
@@ -231,6 +232,11 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     enumerations: {},
     states: [],
     pincodes: [],
+    amountLimits: [],
+    relationships: [],
+    consents: [],
+    kycDocuments: [],
+    reportRuns: [],
     idempotency: new Map(),
     eodFailAtStep: null,
   };
@@ -255,6 +261,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
 
   seedPlatform(db, seedAt);
   seedLending(db);
+  seedCustomerExtras(db, seedAt);
 
   db.eodRuns.push(
     completedRun(101, '2026-06-26', '2026-06-27', '2026-06-26T18:00:00.000Z', false),

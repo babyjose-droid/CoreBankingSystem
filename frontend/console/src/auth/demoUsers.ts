@@ -7,6 +7,8 @@ export interface DemoUser {
   description: string;
   homeBranch: string;
   permissions: string[];
+  /** Realm roles as they appear in the access token; role amount limits are set per role. */
+  roles: string[];
 }
 
 export const DEMO_TENANT = 'demo-nbfc';
@@ -19,7 +21,8 @@ export const DEMO_USERS: DemoUser[] = [
     role: 'Maker',
     description: 'Views everything, proposes and creates changes',
     homeBranch: 'HO',
-    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS],
+    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose],
+    roles: ['MAKER'],
   },
   {
     username: 'checker',
@@ -27,7 +30,8 @@ export const DEMO_USERS: DemoUser[] = [
     role: 'Checker',
     description: 'Views everything, approves or rejects requests',
     homeBranch: 'HO',
-    permissions: [...VIEW_PERMISSIONS, P.approvalApprove],
+    permissions: [...VIEW_PERMISSIONS, P.approvalApprove, P.kycVerify],
+    roles: ['CHECKER'],
   },
   {
     username: 'ops',
@@ -36,6 +40,7 @@ export const DEMO_USERS: DemoUser[] = [
     description: 'Runs end-of-day; views the ledger',
     homeBranch: 'HO',
     permissions: [P.eodView, P.eodRun, P.glView],
+    roles: ['OPERATIONS'],
   },
   {
     username: 'auditor',
@@ -44,6 +49,7 @@ export const DEMO_USERS: DemoUser[] = [
     description: 'Read-only access plus the audit trail',
     homeBranch: 'MUM',
     permissions: [...VIEW_PERMISSIONS, P.auditView],
+    roles: ['AUDITOR'],
   },
   {
     username: 'admin',
@@ -52,6 +58,7 @@ export const DEMO_USERS: DemoUser[] = [
     description: 'All permissions (still cannot approve own requests)',
     homeBranch: 'HO',
     permissions: [...ALL_PERMISSIONS],
+    roles: ['TENANT_ADMIN'],
   },
 ];
 

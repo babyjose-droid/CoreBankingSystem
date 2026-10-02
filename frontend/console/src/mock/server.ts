@@ -23,6 +23,9 @@ import { balanceSheet, headByCode, postVoucher, profitAndLoss, reverseVoucher, t
 import { createSeedDb, customerRecord, EOD_STEPS } from './seed';
 
 import { applyAmendmentApproval, registerAmendmentRoutes } from './amendments';
+import { applyExtrasApproval, registerCustomerExtraRoutes } from './customerExtras';
+import { registerDocumentRoutes } from './documents';
+import { assertWithinLimit } from './limits';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
@@ -38,7 +41,14 @@ interface Ctx {
   request: Request;
 }
 
-type Handler = (ctx: Ctx) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>;
+/** `raw` sends a file (PDF, CSV …) instead of JSON. */
+export interface RawBody {
+  contentType: string;
+  data: Uint8Array | string;
+  fileName: string;
+}
+type HandlerResult = { status: number; body: unknown; raw?: RawBody };
+type Handler = (ctx: Ctx) => HandlerResult | Promise<HandlerResult>;
 interface Route {
   method: string;
   pattern: RegExp;
@@ -269,7 +279,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -285,6 +295,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     }
     if (!approve && !note?.trim()) throw bad('A note is required to reject', [{ field: 'note', message: 'Required' }]);
     if (note && note.length > 500) throw bad('Note must be at most 500 characters', [{ field: 'note', message: 'Too long' }]);
+    const limitType = ({ LOAN_DISBURSEMENT: 'LOAN_DISBURSEMENT', VOUCHER: 'VOUCHER', LOAN_WAIVER: 'FEE_WAIVER' } as const)[s.approval.entityType as 'VOUCHER'];
+    if (approve && limitType && s.approval.amount) assertWithinLimit(db, user, limitType, s.approval.amount, { approving: true, record: false });
     const required = s.approval.checkersRequired ?? 1;
     const prior = (s.approvedBy ??= []);
     if (approve && required > 1) {
@@ -640,6 +652,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     const input = body as VoucherInput;
     validateVoucher(input);
     const { dr } = voucherTotals(input.lines);
+    assertWithinLimit(db, user, 'VOUCHER', fromUnits(dr));
     const clean: VoucherInput = { ...input, lines: input.lines.map((l) => ({ ...l, amount: fromUnits(toUnits(l.amount)) })) };
     return propose(user, 'VOUCHER', 'CREATE', { kind: 'VOUCHER', input: clean }, { ...clean }, null, null, fromUnits(dr));
   });
@@ -822,9 +835,17 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   registerLendingRoutes(db, { on, require, propose, nowIso });
   registerPlatformRoutes(db, { on, require, propose });
   registerAmendmentRoutes(db, { on, require, propose, nowIso });
+  registerCustomerExtraRoutes(db, { on, require, propose, nowIso });
+  registerDocumentRoutes(db, { on, require, nowIso });
 
   // ---------- dispatcher ----------
-  function respond(status: number, body: unknown): Response {
+  function respond(status: number, body: unknown, raw?: RawBody): Response {
+    if (raw && status < 400) {
+      return new Response(raw.data as BodyInit, {
+        status,
+        headers: { 'Content-Type': raw.contentType, 'Content-Disposition': `attachment; filename="${raw.fileName}"`, 'Cache-Control': 'no-store' },
+      });
+    }
     const isProblem = status >= 400;
     return new Response(JSON.stringify(body), {
       status,
@@ -849,12 +870,15 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       const m = url.pathname.match(route.pattern)!;
       const params: Record<string, string> = {};
       route.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
-      const text = request.method === 'GET' ? '' : await request.text();
+      const contentType = request.headers.get('Content-Type') ?? '';
+      const binary = request.method !== 'GET' && /^(application\/pdf|image\/)/i.test(contentType);
+      const bytes = binary ? new Uint8Array(await request.arrayBuffer()) : null;
+      const text = request.method === 'GET' || binary ? '' : await request.text();
       if (text.length > MAX_BODY_CHARS) {
         throw new HttpProblem(413, 'File too large', `The request body is ${text.length.toLocaleString('en-IN')} characters; the limit is ${MAX_BODY_CHARS.toLocaleString('en-IN')}`, {}, PROBLEM_BASE + 'payload-too-large');
       }
-      let body: unknown = null;
-      if (text && /^text\/csv/i.test(request.headers.get('Content-Type') ?? '')) body = text;
+      let body: unknown = bytes;
+      if (text && /^text\/csv/i.test(contentType)) body = text;
       else if (text) {
         try {
           body = JSON.parse(text);
@@ -870,8 +894,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         return respond(hit.status, hit.body);
       }
       const result = await route.handler({ user, url, body, params, request });
-      if (cacheKey) db.idempotency.set(cacheKey, result);
-      return respond(result.status, result.body);
+      if (cacheKey && !result.raw) db.idempotency.set(cacheKey, result);
+      return respond(result.status, result.body, result.raw);
     } catch (e) {
       if (e instanceof HttpProblem) {
         return respond(e.status, { type: e.type, title: e.title, status: e.status, detail: e.detail, instance, ...e.extra });

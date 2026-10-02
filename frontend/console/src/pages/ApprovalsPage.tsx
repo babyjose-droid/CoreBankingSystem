@@ -47,6 +47,9 @@ const ENTITY_TYPES = [
   'SYSTEM_PROPERTY',
   'ENUMERATION',
   'TERRITORY',
+  'AMOUNT_LIMIT',
+  'CUSTOMER_RELATIONSHIP',
+  'EXPOSURE_LIMIT',
 ];
 
 export function slaClass(a: Pick<Approval, 'status' | 'ageHours'>): string | undefined {
@@ -94,6 +97,8 @@ function summaryOf(a: Approval): string {
   }
   if (a.entityType === 'EOD_SCHEDULE') return `Mode ${String(p.mode ?? '')}`;
   if (a.entityType.startsWith('LOAN_') && p.loanNo) return [p.loanNo, p.customer ?? p.charge ?? p.transaction ?? p.kind ?? p.reason].filter(Boolean).join(' — ');
+  if (a.entityType === 'AMOUNT_LIMIT') return `${String(p.roleName ?? '')} · ${humanize(String(p.txnType ?? ''))}`;
+  if (a.entityType === 'CUSTOMER_RELATIONSHIP' || a.entityType === 'EXPOSURE_LIMIT') return [p.customerNo, p.name].filter(Boolean).join(' — ');
   if (a.entityType === 'STAFF') return [p.username, p.displayName].filter(Boolean).join(' — ');
   if (a.entityType === 'SYSTEM_PROPERTY') return `${String(p.key ?? '')} = ${String(p.value ?? '')}`;
   if (a.entityType === 'ENUMERATION') return `${String(p.type ?? '')} (${((p.values as unknown[] | undefined) ?? []).length} value(s))`;

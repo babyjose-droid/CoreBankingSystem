@@ -3,6 +3,7 @@ import { useBusinessDay, useEodRuns, useMe } from '../api/hooks';
 import { P, hasPermission } from '../auth/permissions';
 import { formatDateTime } from '../lib/dates';
 import { branchScopeText } from '../layout/branchScope';
+import { Dashboard } from './Dashboard';
 import { usePendingForMe } from '../layout/usePendingForMe';
 import { Badge, Card, DateText, EmptyState, PageHeader, Spinner, StatusBadge, humanize } from '../ui';
 
@@ -26,13 +27,16 @@ export function HomePage() {
     can(P.voucherCreate) && { to: '/ledger/vouchers/new', label: 'New voucher' },
     can(P.eodRun) && { to: '/eod/runs', label: 'Run end-of-day' },
     can(P.glView) && { to: '/ledger/trial-balance', label: 'Trial balance' },
+    can(P.reportRun) && { to: '/reports', label: 'Reports' },
     can(P.auditView) && { to: '/audit', label: 'Audit trail' },
   ].filter(Boolean) as Array<{ to: string; label: string }>;
 
   return (
     <div className="stack">
       <PageHeader title={`Welcome, ${me.displayName.split(' ')[0]}`} subtitle={`${me.tenantName ?? me.tenant} · home branch ${me.homeBranch ?? '—'} · ${branchScopeText(me).replace('Branch scope: ', 'sees ')}`} />
+      {can(P.dashboardView) && <Dashboard />}
       <div className="grid-cards">
+        {can(P.dashboardView) ? null : (
         <Card title="Business date">
           <div className="big-date">
             <DateText value={day.data?.businessDate ?? me.businessDate} weekday />
@@ -45,8 +49,9 @@ export function HomePage() {
             {day.data ? <StatusBadge status={day.data.status} /> : <Spinner />}
           </div>
         </Card>
+        )}
 
-        {pending.canView && (
+        {pending.canView && !can(P.dashboardView) && (
           <Card title="Pending approvals" actions={<Link to="/approvals?status=PENDING">Open queue</Link>}>
             {pending.isLoading ? (
               <Spinner />
@@ -74,7 +79,7 @@ export function HomePage() {
           </Card>
         )}
 
-        {can(P.eodView) && (
+        {can(P.eodView) && !can(P.dashboardView) && (
           <Card title="Last end-of-day" actions={last && <Link to={`/eod/runs/${last.id}`}>Details</Link>}>
             {runs.isLoading ? (
               <Spinner />

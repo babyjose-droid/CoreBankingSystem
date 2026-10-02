@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useCustomers, useMe } from '../../api/hooks';
 import { useCreateLoan, useLoanProducts, usePreviewLoan } from '../../api/lendingHooks';
-import type { CustomerSummary, LoanApplication, LoanProduct } from '../../api/types';
+import type { CustomerSummary, LoanApplication, LoanPartyInput, LoanProduct } from '../../api/types';
 import { formatINR } from '../../lib/money';
 import { Banner, Button, Card, EmptyState, ErrorBanner, Input, Masked, PageHeader, Select, Spinner, StatusBadge, Table, useToast } from '../../ui';
 import { KfsView } from './KfsView';
@@ -58,6 +58,7 @@ export function NewLoanPage() {
   const [customer, setCustomer] = useState<CustomerSummary | null>(null);
   const [f, setF] = useState<Form>({ productCode: '', amount: '', tenorMonths: '', rate: '', disbursalDate: me.businessDate, firstDueDate: '', moratoriumMonths: '', balloon: '', externalRef: '' });
   const [touched, setTouched] = useState(false);
+  const [parties, setParties] = useState<Array<{ customer: CustomerSummary; role: LoanPartyInput['role'] }>>([]);
   const preview = usePreviewLoan();
   const create = useCreateLoan();
   const active = (products.data ?? []).filter((p) => (p.status ?? 'ACTIVE') === 'ACTIVE');
@@ -78,8 +79,9 @@ export function NewLoanPage() {
       ...(f.moratoriumMonths ? { moratoriumMonths: Number(f.moratoriumMonths) } : {}),
       ...(f.balloon ? { balloon: moneyInput(f.balloon) ?? f.balloon } : {}),
       ...(f.externalRef.trim() ? { externalRef: f.externalRef.trim() } : {}),
+      ...(parties.length ? { parties: parties.map((p) => ({ customerId: p.customer.id, role: p.role })) } : {}),
     };
-  }, [customer, product, f]);
+  }, [customer, product, f, parties]);
   const appKey = JSON.stringify(app);
   const [previewedKey, setPreviewedKey] = useState<string | null>(null);
   const previewFresh = !!preview.data && previewedKey === appKey;
@@ -97,7 +99,13 @@ export function NewLoanPage() {
             <span className="mono">{customer.customerNo}</span>
             <span>Home branch {customer.homeBranch}</span>
             <StatusBadge status={customer.kycStatus} />
-            <Button size="sm" onClick={() => setCustomer(null)}>
+            <Button
+              size="sm"
+              onClick={() => {
+                setCustomer(null);
+                setParties([]);
+              }}
+            >
               Change
             </Button>
           </div>
@@ -140,7 +148,11 @@ export function NewLoanPage() {
         {customer && customer.kycStatus !== 'VERIFIED' && <Banner tone="warn">KYC is {customer.kycStatus?.toLowerCase()}: a loan can be previewed but not sanctioned until KYC is verified.</Banner>}
       </Card>
 
-      <Card title="2. Terms">
+      <Card title="2. Co-applicants and guarantors">
+        <PartyPicker borrowerId={customer?.id ?? null} parties={parties} onChange={setParties} />
+      </Card>
+
+      <Card title="3. Terms">
         <div className="form-grid">
           <Select
             label="Product"
@@ -215,6 +227,85 @@ export function NewLoanPage() {
         </div>
       </Card>
       {preview.data && (previewFresh ? <KfsView kfs={preview.data} title="Preview: Key Fact Statement" /> : <Banner tone="info">Terms changed since the last preview. Preview again to see the figures.</Banner>)}
+    </div>
+  );
+}
+
+type Party = { customer: CustomerSummary; role: LoanPartyInput['role'] };
+
+/** Co-applicants and guarantors picked by customer search: each an existing customer, named once, never the borrower. */
+function PartyPicker({ borrowerId, parties, onChange }: { borrowerId: string | null; parties: Party[]; onChange: (p: Party[]) => void }) {
+  const [search, setSearch] = useState('');
+  const [q, setQ] = useState<string | null>(null);
+  const res = useCustomers(q ?? '', 0, 10, q !== null);
+  const taken = new Set([borrowerId, ...parties.map((p) => p.customer.id)]);
+  const add = (customer: CustomerSummary, role: Party['role']) => onChange([...parties, { customer, role }]);
+  return (
+    <div className="stack">
+      {parties.length === 0 ? (
+        <p className="muted" style={{ margin: 0 }}>None. Optional: add up to 10 existing customers.</p>
+      ) : (
+        <ul className="doc-list" aria-label="Parties added">
+          {parties.map((p) => (
+            <li key={p.customer.id}>
+              <span>
+                <strong>{p.customer.displayName}</strong> <span className="mono">{p.customer.customerNo}</span> · {p.role === 'GUARANTOR' ? 'Guarantor' : 'Co-applicant'}
+              </span>
+              <Button size="sm" variant="ghost" aria-label={`Remove ${p.customer.displayName}`} onClick={() => onChange(parties.filter((x) => x.customer.id !== p.customer.id))}>
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        role="search"
+        className="filters"
+        style={{ marginBottom: 0 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          setQ(search.trim());
+        }}
+      >
+        <Input label="Find a co-applicant or guarantor" placeholder="Customer no. / PAN / mobile" value={search} onChange={(e) => setSearch(e.target.value)} fieldClassName="grow" />
+        <Button type="submit" disabled={parties.length >= 10}>
+          Search parties
+        </Button>
+      </form>
+      {q !== null &&
+        (res.isLoading ? (
+          <Spinner />
+        ) : (
+          <Table
+            caption="Customers to add as a party"
+            captionHidden
+            columns={[
+              { key: 'no', header: 'Customer no.', render: (c) => <span className="mono">{c.customerNo}</span> },
+              { key: 'name', header: 'Name', render: (c) => c.displayName },
+              { key: 'status', header: 'Status', render: (c) => <StatusBadge status={c.status} /> },
+              {
+                key: 'add',
+                header: <span className="sr-only">Add</span>,
+                render: (c) =>
+                  taken.has(c.id) ? (
+                    <span className="muted">{c.id === borrowerId ? 'Borrower' : 'Added'}</span>
+                  ) : (
+                    <span className="row" style={{ gap: 4 }}>
+                      <Button size="sm" aria-label={`Add ${c.displayName} as co-applicant`} disabled={parties.length >= 10} onClick={() => add(c, 'CO_APPLICANT')}>
+                        Co-applicant
+                      </Button>
+                      <Button size="sm" aria-label={`Add ${c.displayName} as guarantor`} disabled={parties.length >= 10} onClick={() => add(c, 'GUARANTOR')}>
+                        Guarantor
+                      </Button>
+                    </span>
+                  ),
+              },
+            ]}
+            rows={res.data ?? []}
+            rowKey={(c) => c.id}
+            empty={<EmptyState title={q ? `No customer matches “${q}”` : 'No customers'} />}
+          />
+        ))}
     </div>
   );
 }

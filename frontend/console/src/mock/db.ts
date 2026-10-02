@@ -1,5 +1,11 @@
 import type {
   AmendmentRequest,
+  AmountLimit,
+  Consent,
+  KycDocument,
+  LoanPartyInput,
+  RelationshipInput,
+  ReportRun,
   Approval,
   AssetClass,
   AuditEvent,
@@ -33,6 +39,39 @@ export interface StoredCustomer {
   kycStatus: 'PENDING' | 'VERIFIED';
   status: 'ACTIVE' | 'INACTIVE';
   createdAt: string;
+  /** Paise; absent or null = no exposure limit. */
+  exposureLimit?: number | null;
+}
+
+export interface StoredRelationship {
+  id: string;
+  customerId: string;
+  relatedCustomerId: string;
+  relationType: RelationshipInput['relationType'];
+  loanId: string | null;
+  sharePercent: string | null;
+  status: 'ACTIVE' | 'ENDED';
+  createdBy: string;
+  createdAt: string;
+  endedAt: string | null;
+}
+
+/** Metadata as returned by the API plus the file itself (never part of a list response). */
+export interface StoredKycDocument {
+  meta: KycDocument;
+  content: Uint8Array;
+}
+
+export interface StoredReportRun {
+  run: ReportRun;
+  content: string;
+  rejections: string | null;
+  permission: string;
+}
+
+export interface StoredLoanParty extends LoanPartyInput {
+  addedBy: string;
+  addedAt: string;
 }
 
 export type StoredEntry = Required<Omit<LedgerEntry, 'narration'>> & { narration: string; voucherId: string | null };
@@ -57,7 +96,10 @@ export type ApprovalPayload =
   | { kind: 'BRANCH_SET'; set: BranchSet }
   | { kind: 'SYSTEM_PROPERTY'; key: string; value: string; description: string | null }
   | { kind: 'ENUMERATION'; type: string; values: StoredEnumValue[] }
-  | { kind: 'TERRITORY'; places: PincodePlace[] };
+  | { kind: 'TERRITORY'; places: PincodePlace[] }
+  | { kind: 'AMOUNT_LIMIT'; limit: AmountLimit }
+  | { kind: 'CUSTOMER_RELATIONSHIPS'; customerId: string; relationships: RelationshipInput[] }
+  | { kind: 'EXPOSURE_LIMIT'; customerId: string; limit: number | null; reason: string };
 
 export type StoredStaff = Required<Omit<Staff, 'userId'>> & { userId: string };
 
@@ -184,6 +226,8 @@ export interface StoredLoan {
   frozen: boolean;
   events: StoredLoanEvent[];
   amendments: StoredAmendment[];
+  /** Co-applicants and guarantors (the borrower is customerId). */
+  parties: StoredLoanParty[];
   /** Derived state as of the last refresh (after every change and every day-end). */
   state: LoanState;
 }
@@ -233,6 +277,11 @@ export interface MockDb {
   enumerations: Record<string, StoredEnumValue[]>;
   states: State[];
   pincodes: PincodePlace[];
+  amountLimits: AmountLimit[];
+  relationships: StoredRelationship[];
+  consents: Consent[];
+  kycDocuments: StoredKycDocument[];
+  reportRuns: StoredReportRun[];
   idempotency: Map<string, { status: number; body: unknown }>;
   /** Fault injection for demos/tests: the named EOD step fails once. */
   eodFailAtStep: string | null;

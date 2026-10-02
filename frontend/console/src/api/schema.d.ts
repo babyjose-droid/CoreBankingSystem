@@ -1630,6 +1630,8 @@ export interface components {
             /** Format: date */
             businessDate: string;
             permissions: string[];
+            /** @description Realm roles (MAKER, CHECKER …); role amount limits apply by role */
+            roles?: string[];
             modules: string[];
         };
         BusinessDay: {

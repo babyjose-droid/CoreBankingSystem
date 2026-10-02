@@ -1,20 +1,24 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useAuditEvents, useCustomer, useMe } from '../../api/hooks';
 import { P, hasPermission } from '../../auth/permissions';
-import { Card, DateText, DateTimeText, ErrorBanner, Masked, PageHeader, Spinner, StatusBadge, Table } from '../../ui';
+import { Card, DateText, DateTimeText, ErrorBanner, Masked, PageHeader, Spinner, StatusBadge, Table, Tabs } from '../../ui';
+import { ConsentsTab } from './ConsentsTab';
+import { KycTab } from './KycTab';
+import { RelationshipsTab } from './RelationshipsTab';
 
 export function CustomerDetailPage() {
   const { id } = useParams();
   const me = useMe().data!;
   const q = useCustomer(id);
   const canAudit = hasPermission(me.permissions, P.auditView);
+  const [tab, setTab] = useState('overview');
   const audit = useAuditEvents({ entityType: 'CUSTOMER', entityId: q.data?.id, limit: 20 }, canAudit && !!q.data);
   if (q.isLoading) return <Spinner />;
   if (q.error || !q.data) return <ErrorBanner error={q.error ?? new Error('Customer not found')} />;
   const c = q.data;
-  return (
+  const overview = (
     <div className="stack">
-      <PageHeader title={c.displayName} subtitle={<span className="mono">{c.customerNo}</span>} actions={<Link to="/customers">Back to search</Link>} />
       <div className="grid-cards">
         <Card title="Profile">
           <dl className="kv">
@@ -69,6 +73,22 @@ export function CustomerDetailPage() {
           />
         </Card>
       )}
+    </div>
+  );
+  return (
+    <div className="stack">
+      <PageHeader title={c.displayName} subtitle={<span className="mono">{c.customerNo}</span>} actions={<Link to="/customers">Back to search</Link>} />
+      <Tabs
+        label="Customer details"
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { id: 'overview', label: 'Overview', content: overview },
+          { id: 'kyc', label: 'KYC documents', content: <KycTab customer={c} /> },
+          ...(hasPermission(me.permissions, P.consentView) ? [{ id: 'consents', label: 'Consents', content: <ConsentsTab customer={c} /> }] : []),
+          { id: 'relationships', label: 'Relationships & exposure', content: <RelationshipsTab customer={c} /> },
+        ]}
+      />
     </div>
   );
 }

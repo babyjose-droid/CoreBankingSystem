@@ -1973,6 +1973,10 @@ components:
         permissions:
           type: array
           items: { type: string, examples: ['customer:create', 'approval:approve'] }
+        roles:
+          type: array
+          description: Realm roles (MAKER, CHECKER …); role amount limits apply by role
+          items: { type: string }
         modules:
           type: array
           items: { type: string, examples: ['LENDING', 'GL'] }

@@ -51,8 +51,10 @@ export const NAV: NavGroup[] = [
       { to: '/masters/territory', label: 'Territory', perm: P.masterView },
       { to: '/masters/system-properties', label: 'System properties', perm: P.masterView },
       { to: '/masters/enumerations', label: 'Enumerations', perm: P.masterView },
+      { to: '/masters/amount-limits', label: 'Amount limits', perm: P.limitView },
     ],
   },
+  { label: null, items: [{ to: '/reports', label: 'Reports', perm: P.reportRun }] },
   { label: null, items: [{ to: '/audit', label: 'Audit', perm: P.auditView }] },
 ];
 

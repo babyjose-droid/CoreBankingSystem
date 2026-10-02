@@ -430,3 +430,20 @@ These are the product's reading and need confirmation by the lender's compliance
 - Erasure of documents and consent records under a DPDP erasure request.
 - Virus scanning of uploads.
 - Role amount limits on loan reversals and restructures.
+
+## Console for P2-4 and P2-5
+
+- **Dashboard** on the home page (portfolio, disbursed and collected today / month to date, collection efficiency, NPA %, DPD buckets, pending approvals, last EOD).
+- **Reports:** catalogue, run form built from each report's parameters, run list and CSV download; the bureau file needs `bureau:export` and an acknowledgement of the personal-data and layout warning.
+- **Loan detail:** Documents tab (KFS, statement, schedule, NOC, GST invoices) and Parties tab; new loans accept co-applicants and guarantors.
+- **Customer detail:** KYC documents (upload, verify/reject, open), consents (grant, withdraw), relationships and exposure with limit.
+- **Masters:** role amount limits.
+- **Tests:** 162 console tests in mock mode. The pages have not been checked by eye in a browser yet.
+
+### API gaps noted while building the console (to settle in the next increment)
+- Reports: no mine/all filter on the run list; bureau `rowCount` counts accounts.
+- Limits: refusals are a plain 403 (no distinct problem type); no endpoint listing valid role names; `LOAN_WAIVER` vs `FEE_WAIVER` for the charge-waiver endpoint is not stated in the contract.
+- KYC: error statuses for too-large / wrong-type uploads and for uploader-verifies-own-upload are not declared; the document number header is optional for every type.
+- Consent: no "can be withdrawn" flag; `expiresAt` is a date-time though staff enter a date.
+- Relationships and loan parties cannot be ended or changed after creation.
+- Dashboard: `lastEod` has no run id; `pendingApprovals` scope is not stated.

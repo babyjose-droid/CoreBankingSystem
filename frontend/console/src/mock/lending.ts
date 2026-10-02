@@ -6,7 +6,7 @@
  * consistent and makes reversals exact: a reversed transaction (and every later one) is dropped and the days since
  * are replayed, which is what the backend does.
  */
-import type { FeeRule, Loan, LoanApplication, LoanKfs, LoanProduct, LoanSchedule, LoanSummary, LoanTxn, PreclosureQuote, ScheduleRow } from '../api/types';
+import type { FeeRule, Loan, LoanApplication, LoanKfs, LoanParty, LoanPartyInput, LoanProduct, LoanSchedule, LoanSummary, LoanTxn, PreclosureQuote, ScheduleRow } from '../api/types';
 import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { addDays, formatDate, ISO_DATE } from '../lib/dates';
@@ -14,6 +14,7 @@ import { customerNumber } from '../lib/luhn';
 import { formatINR, isMoney } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type ChargeState, type LoanState, type MockDb, type StoredCustomer, type StoredLoan, type StoredLoanEvent } from './db';
 import { amendState, restructureState } from './amendCalc';
+import { assertWithinLimit } from './limits';
 import * as C from './lendingCalc';
 import { bad, conflict, notFound, type FieldProblem } from './problems';
 
@@ -162,6 +163,7 @@ interface Resolved {
   balloon: number;
   disbursal: string;
   firstDue: string | null;
+  parties: LoanPartyInput[];
 }
 
 function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: boolean } = {}): Resolved {
@@ -227,6 +229,19 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
   const branch = db.branches.find((b) => b.code === branchCode && b.status === 'ACTIVE');
   if (customer && !branch) errors.push({ field: 'branch', message: 'Unknown or inactive branch' });
 
+  const parties: LoanPartyInput[] = [];
+  if (a.parties !== undefined && !Array.isArray(a.parties)) errors.push({ field: 'parties', message: 'Parties must be a list' });
+  (Array.isArray(a.parties) ? a.parties : []).forEach((p, i) => {
+    const pc = db.customers.find((c) => c.id === p?.customerId);
+    if (p?.role !== 'CO_APPLICANT' && p?.role !== 'GUARANTOR') errors.push({ field: `parties[${i}].role`, message: `Party ${i + 1}: role must be CO_APPLICANT or GUARANTOR` });
+    else if (!pc) errors.push({ field: `parties[${i}].customerId`, message: `Party ${i + 1}: customer not found` });
+    else if (pc.status !== 'ACTIVE') errors.push({ field: `parties[${i}].customerId`, message: `Party ${i + 1}: customer is ${pc.status}` });
+    else if (pc.id === a.customerId) errors.push({ field: `parties[${i}].customerId`, message: `Party ${i + 1}: the borrower cannot also be a co-applicant or guarantor` });
+    else if (parties.some((x) => x.customerId === pc.id)) errors.push({ field: `parties[${i}].customerId`, message: `Party ${i + 1}: each customer can be named once` });
+    else parties.push({ customerId: pc.id, role: p.role });
+  });
+  if ((a.parties?.length ?? 0) > 10) errors.push({ field: 'parties', message: 'At most 10 parties' });
+
   if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
   const supplierState = branch!.stateCode;
   return {
@@ -243,6 +258,7 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
     balloon: balloonIn && !Number.isNaN(balloonIn) ? balloonIn : 0,
     disbursal,
     firstDue,
+    parties,
   };
 }
 
@@ -356,7 +372,7 @@ function advanceTo(loan: StoredLoan, st: LoanState, date: string) {
     const arrears = arrearsOf(st);
     if (arrears > 0 && penalRate > 0) {
       const amt = C.roundRupee((arrears * penalRate) / 1200);
-      if (amt > 0) st.charges.push({ id: `PEN-${row.dueDate}`, code: 'PENAL', name: `Penal charge on overdue ${inr(arrears)}`, kind: 'PENAL', date: row.dueDate, amount: amt, paid: 0, waived: 0 });
+      if (amt > 0) st.charges.push({ id: `P${st.charges.filter((c) => c.kind === 'PENAL').length + 1}`, code: 'PENAL', name: `Penal charge on overdue ${inr(arrears)}`, kind: 'PENAL', date: row.dueDate, amount: amt, paid: 0, waived: 0 });
     }
     st.demands.push({ no: row.no, dueDate: row.dueDate, principalDue: row.principal, interestDue: row.interest, principalPaid: 0, interestPaid: 0, principalRescheduled: 0, interestCapitalised: 0 });
     st.raised += 1;
@@ -407,8 +423,8 @@ function initialState(loan: StoredLoan, asOf: string): LoanState {
   };
   if (!loan.disbursedOn) return { ...base, rows: (loan.kfs.schedule ?? []).map(fromScheduleRow) };
   const { rows, emi } = planRows(loan.product, loan.amount, loan.rate, loan.tenorMonths, loan.moratoriumMonths, loan.disbursedOn, loan.firstDueDate, loan.balloon);
-  const charges: ChargeState[] = upfrontFees(loan.product, loan.amount, loan.supplierState, loan.recipientState).map(({ rule, charge }) => ({
-    id: `DISB-${charge.code}`,
+  const charges: ChargeState[] = upfrontFees(loan.product, loan.amount, loan.supplierState, loan.recipientState).map(({ rule, charge }, i) => ({
+    id: `D${i + 1}`,
     code: charge.code,
     name: charge.name,
     kind: 'FEE',
@@ -448,7 +464,7 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
     }
     case 'PRECLOSURE': {
       const q = quoteFrom(loan, st, e.valueDate);
-      if (q.fc) st.charges.push({ id: `FC-${e.id}`, code: q.fc.code, name: q.fc.name, kind: 'FEE', date: e.valueDate, amount: q.fc.total, paid: 0, waived: 0 });
+      if (q.fc) st.charges.push({ id: e.data.chargeId ?? `C${900 + e.seq}`, code: q.fc.code, name: q.fc.name, kind: 'FEE', date: e.valueDate, amount: q.fc.total, paid: 0, waived: 0 });
       settleAll(st, e.valueDate, 'CLOSED');
       break;
     }
@@ -496,7 +512,7 @@ export function replay(loan: StoredLoan, asOf: string): LoanState {
 }
 
 // ------------------------------------------------------------------ quotes
-function quoteFrom(loan: StoredLoan, st: LoanState, asOf: string) {
+export function quoteFrom(loan: StoredLoan, st: LoanState, asOf: string) {
   const principal = futurePrincipal(st);
   const overdue = arrearsOf(st);
   const from = st.lastInterestDate ?? asOf;
@@ -540,7 +556,7 @@ export function customerOf(db: MockDb, loan: StoredLoan) {
   return db.customers.find((c) => c.id === loan.customerId);
 }
 
-function principalOutstanding(loan: StoredLoan): number {
+export function principalOutstanding(loan: StoredLoan): number {
   const st = loan.state;
   if (!loan.disbursedOn || st.closedOn) return 0;
   return loan.amount + st.capitalised - st.principalPaid;
@@ -659,11 +675,30 @@ export function addEvent(db: MockDb, loan: StoredLoan, by: string, at: string, e
   return ev;
 }
 
+/** Charge ids as the contract shows them: C1, C2 … (D1 … for fees deducted at disbursement, P1 … for penal charges). */
+export function nextChargeId(loan: StoredLoan): string {
+  return `C${loan.events.filter((e) => e.data.chargeId?.startsWith('C')).length + 1}`;
+}
+
 export function refreshLoan(db: MockDb, loan: StoredLoan) {
   loan.state = replay(loan, db.businessDate);
 }
 
-function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate: string): StoredLoan {
+/** What a loan counts for in exposure: the sanctioned amount until disbursed, principal outstanding afterwards. */
+export function exposureOf(loan: StoredLoan): number {
+  const st = loan.state;
+  if (st.status === 'CLOSED' || st.status === 'CANCELLED' || st.status === 'WRITTEN_OFF') return 0;
+  return loan.disbursedOn ? principalOutstanding(loan) : loan.amount;
+}
+
+function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate: string, by = 'maker'): StoredLoan {
+  const limit = r.customer.exposureLimit;
+  if (limit !== null && limit !== undefined) {
+    const current = db.loans.filter((l) => l.customerId === r.customer.id).reduce((s, l) => s + exposureOf(l), 0);
+    if (current + r.amount > limit) {
+      throw conflict('Exposure limit exceeded', `This loan would take the borrower's exposure to ${inr(current + r.amount)}, above the limit of ${inr(limit)}`);
+    }
+  }
   db.loanSeq += 1;
   const kfs = buildKfs(r);
   const loan: StoredLoan = {
@@ -690,6 +725,7 @@ function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate:
     frozen: false,
     events: [],
     amendments: [],
+    parties: r.parties.map((p) => ({ ...p, addedBy: by, addedAt: `${openDate}T10:00:00.000Z` })),
     state: undefined as unknown as LoanState,
   };
   loan.state = replay(loan, db.businessDate);
@@ -980,7 +1016,8 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     }
     const resolved = resolve(db, a);
     if (resolved.customer.kycStatus !== 'VERIFIED') throw bad('Customer KYC is not verified', [{ field: 'customerId', message: 'KYC must be verified before a loan is sanctioned' }]);
-    const loan = bookLoan(db, resolved, ref, db.businessDate);
+    const loan = bookLoan(db, resolved, ref, db.businessDate, user.username);
+    for (const p of loan.parties) p.addedAt = nowIso();
     appendAudit(db, nowIso(), user.username, 'LOAN_CREATED', 'LOAN', loan.id, { loanNo: loan.loanNo, amount: C.fromPaise(loan.amount) });
     return { status: 201, body: view(loan) };
   });
@@ -995,6 +1032,15 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   on('GET', '/api/v1/loans/{id}/transactions', ({ user, params }) => {
     require(user, P.loanView);
     return ok([...findLoan(params.id).events].sort((a, b) => b.seq - a.seq).map(txnView));
+  });
+  on('GET', '/api/v1/loans/{id}/parties', ({ user, params }) => {
+    require(user, P.loanView);
+    const loan = findLoan(params.id);
+    const party = (customerId: string, role: LoanParty['role'], addedBy: string, addedAt: string): LoanParty => {
+      const c = db.customers.find((x) => x.id === customerId);
+      return { customerId, customerNo: c?.customerNo ?? '', customerName: c ? displayName(c) : undefined, role, customerStatus: c?.status, addedBy, addedAt };
+    };
+    return ok([party(loan.customerId, 'BORROWER', loan.parties[0]?.addedBy ?? 'maker', `${loan.openDate}T10:00:00.000Z`), ...loan.parties.map((p) => party(p.customerId, p.role, p.addedBy, p.addedAt))]);
   });
   on('GET', '/api/v1/loans/{id}/kfs', ({ user, params }) => {
     require(user, P.loanView);
@@ -1019,6 +1065,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     const pending = hasPending('LOAN_DISBURSEMENT', (p) => p.kind === 'LOAN_DISBURSEMENT' && p.loanId === loan.id);
     if (pending) throw conflict('Disbursement already pending', `Loan ${loan.loanNo} already has a disbursement awaiting approval`, { approvalId: pending.approval.id });
     const b = (body ?? {}) as { beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string };
+    assertWithinLimit(db, user, 'LOAN_DISBURSEMENT', C.fromPaise(loan.amount));
     const mode = b.mode?.trim() || 'IMPS';
     if (b.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(b.ifsc)) throw bad('IFSC must look like HDFC0001234', [{ field: 'ifsc', message: 'Invalid IFSC' }]);
     if (can(user, LOAN_STP)) {
@@ -1061,6 +1108,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (valueDate > db.businessDate) throw bad('Value date cannot be after the business date', [{ field: 'valueDate', message: 'After business date' }]);
     const last = lastFinancialDate(loan);
     if (valueDate < last) throw bad(`Value date cannot be before the last transaction (${formatDate(last)})`, [{ field: 'valueDate', message: 'Before the last transaction' }]);
+    assertWithinLimit(db, user, 'LOAN_REPAYMENT', C.fromPaise(amount));
     const before = loan.state;
     const mode = b.mode?.trim() || 'CASH';
     const ev = addEvent(db, loan, user.username, nowIso(), { type: 'REPAYMENT', valueDate, amount, summary: '', data: { mode, reference: b.reference?.trim() || undefined } });
@@ -1099,7 +1147,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (ppRule) {
       const c = C.computeFee(ppRule, amount, loan.supplierState, loan.recipientState);
       if (c.total > 0) {
-        addEvent(db, loan, user.username, nowIso(), { type: 'FEE_CHARGE', valueDate: db.businessDate, amount: c.total, summary: `${c.code} ${c.name} ${inr(c.total)} incl. GST`, data: { chargeId: `CHG-${uuid().slice(0, 8)}`, code: c.code, name: c.name } });
+        addEvent(db, loan, user.username, nowIso(), { type: 'FEE_CHARGE', valueDate: db.businessDate, amount: c.total, summary: `${c.code} ${c.name} ${inr(c.total)} incl. GST`, data: { chargeId: nextChargeId(loan), code: c.code, name: c.name } });
         refreshLoan(db, loan);
       }
     }
@@ -1121,7 +1169,8 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (amount !== C.toPaise(quote.total)) {
       throw conflict('Amount does not match the pre-closure quote', `Pre-closure needs exactly ${formatINR(quote.total!)} today; ${inr(amount)} was offered`, { quote });
     }
-    addEvent(db, loan, user.username, nowIso(), { type: 'PRECLOSURE', valueDate: db.businessDate, amount, summary: `Pre-closed: principal ${formatINR(quote.principal!)}, dues ${formatINR(quote.overdueDues!)}, interest ${formatINR(quote.accruedInterest!)}, charges ${formatINR(quote.charges!)}, foreclosure fee ${formatINR(quote.foreclosureFee!)}` });
+    assertWithinLimit(db, user, 'LOAN_PRECLOSURE', C.fromPaise(amount));
+    addEvent(db, loan, user.username, nowIso(), { type: 'PRECLOSURE', valueDate: db.businessDate, amount, data: { chargeId: nextChargeId(loan) }, summary: `Pre-closed: principal ${formatINR(quote.principal!)}, dues ${formatINR(quote.overdueDues!)}, interest ${formatINR(quote.accruedInterest!)}, charges ${formatINR(quote.charges!)}, foreclosure fee ${formatINR(quote.foreclosureFee!)}` });
     refreshLoan(db, loan);
     appendAudit(db, nowIso(), user.username, 'LOAN_PRECLOSED', 'LOAN', loan.id, { amount: quote.total });
     return ok(view(loan));
@@ -1166,7 +1215,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
       valueDate: db.businessDate,
       amount: c.total,
       summary: `${c.name} ${inr(c.fee)} + GST ${inr(gst)}${c.igst ? ' (IGST)' : ' (CGST+SGST)'}`,
-      data: { chargeId: `CHG-${uuid().slice(0, 8)}`, code: c.code, name: c.name },
+      data: { chargeId: nextChargeId(loan), code: c.code, name: c.name },
     });
     refreshLoan(db, loan);
     appendAudit(db, nowIso(), user.username, 'LOAN_FEE_CHARGED', 'LOAN', loan.id, { feeCode: c.code, amount: C.fromPaise(c.total) });
@@ -1180,6 +1229,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     const b = (body ?? {}) as { amount?: string; reason?: string };
     const amount = positiveAmount(b.amount);
     const reason = reasonOf(b);
+    assertWithinLimit(db, user, 'FEE_WAIVER', C.fromPaise(amount));
     if (amount > unpaidOf(charge)) throw bad(`Waiver cannot exceed the unpaid ${inr(unpaidOf(charge))}`, [{ field: 'amount', message: 'More than the unpaid amount' }]);
     if (hasPending('LOAN_WAIVER', (p) => p.kind === 'LOAN_WAIVER' && p.loanId === loan.id && p.chargeId === charge.id)) throw conflict('Waiver already pending', `${charge.name} already has a waiver awaiting approval`);
     return propose(

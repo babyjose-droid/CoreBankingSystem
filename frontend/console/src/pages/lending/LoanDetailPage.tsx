@@ -9,6 +9,7 @@ import { isZero, subtractMoney, addMoney } from '../../lib/money';
 import { Badge, Banner, Button, Card, DateText, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, Tabs, humanize } from '../../ui';
 import { AssetClassBadge, Stat, pct } from './common';
 import { KfsView, ScheduleTable } from './KfsView';
+import { LoanDocumentsTab, LoanPartiesTab } from './LoanDocuments';
 import { LoanActionDialog, type LoanAction } from './loanActions';
 import { amendmentKindLabel } from './restructuring';
 
@@ -103,6 +104,8 @@ export function LoanDetailPage() {
           { id: 'schedule', label: 'Schedule', content: <ScheduleTab loan={loan} canWaive={can(P.loanWaive)} onWaive={(charge) => setAction({ kind: 'waive', charge })} /> },
           { id: 'transactions', label: 'Transactions', content: <TransactionsTab loan={loan} canReverse={can(P.loanReverse)} onReverse={(txn) => setAction({ kind: 'reverse', txn })} /> },
           { id: 'amendments', label: 'Amendments', content: <AmendmentsTab loan={loan} /> },
+          { id: 'parties', label: 'Parties', content: <LoanPartiesTab loan={loan} /> },
+          { id: 'documents', label: 'Documents', content: <LoanDocumentsTab loan={loan} businessDate={businessDate} /> },
           {
             id: 'kfs',
             label: 'KFS',

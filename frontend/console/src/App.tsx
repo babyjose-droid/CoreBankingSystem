@@ -31,12 +31,14 @@ import { TrialBalancePage } from './pages/ledger/TrialBalancePage';
 import { VoucherFormPage } from './pages/ledger/VoucherFormPage';
 import { VouchersPage } from './pages/ledger/VouchersPage';
 import { LoginPage } from './pages/LoginPage';
+import { AmountLimitsPage } from './pages/masters/AmountLimitsPage';
 import { BranchesPage } from './pages/masters/BranchesPage';
 import { BranchSetsPage } from './pages/masters/BranchSetsPage';
 import { EnumerationsPage, EnumerationValuesPage } from './pages/masters/EnumerationsPage';
 import { StaffPage } from './pages/masters/StaffPage';
 import { SystemPropertiesPage } from './pages/masters/SystemPropertiesPage';
 import { TerritoryPage } from './pages/masters/TerritoryPage';
+import { ReportsPage } from './pages/reports/ReportsPage';
 import { HolidaysPage } from './pages/masters/HolidaysPage';
 import { TaxRatesPage } from './pages/masters/TaxRatesPage';
 import { ToastProvider } from './ui';
@@ -132,6 +134,8 @@ export function AppRoutes() {
         <Route path="masters/system-properties" element={guard(P.masterView, <SystemPropertiesPage />)} />
         <Route path="masters/enumerations" element={guard(P.masterView, <EnumerationsPage />)} />
         <Route path="masters/enumerations/:type" element={guard(P.masterView, <EnumerationValuesPage />)} />
+        <Route path="masters/amount-limits" element={guard(P.limitView, <AmountLimitsPage />)} />
+        <Route path="reports" element={guard(P.reportRun, <ReportsPage />)} />
         <Route path="audit" element={guard(P.auditView, <AuditPage />)} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

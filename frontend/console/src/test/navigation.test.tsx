@@ -24,7 +24,7 @@ describe('permission-aware navigation', () => {
     renderApp({ user: 'maker' });
     const links = await navLinks();
     expect(links).not.toContain('Audit');
-    expect(links).toEqual(expect.arrayContaining(['Approvals', 'Customers', 'Loans', 'Products', 'Branches', 'Holidays', 'Tax rates', 'Staff', 'Branch sets', 'Territory', 'System properties', 'Enumerations']));
+    expect(links).toEqual(expect.arrayContaining(['Approvals', 'Customers', 'Loans', 'Products', 'Branches', 'Holidays', 'Tax rates', 'Staff', 'Branch sets', 'Territory', 'System properties', 'Enumerations', 'Amount limits', 'Reports']));
   });
 
   it('shows a clear 403 page on direct URL access without permission', async () => {
