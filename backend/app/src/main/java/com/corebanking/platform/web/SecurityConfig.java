@@ -93,7 +93,7 @@ class SecurityConfig {
         @Override
         public AbstractAuthenticationToken convert(Jwt jwt) {
             List<GrantedAuthority> authorities = permissions(jwt).stream()
-                    .map(p -> (GrantedAuthority) new SimpleGrantedAuthority(p)).toList();
+                    .<GrantedAuthority>map(SimpleGrantedAuthority::new).toList();
             return new JwtAuthenticationToken(jwt, authorities, jwt.getClaimAsString("preferred_username"));
         }
 

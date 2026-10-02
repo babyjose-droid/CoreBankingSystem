@@ -37,6 +37,17 @@ export const P = {
   staffPropose: 'staff:propose',
   masterView: 'master:view',
   masterPropose: 'master:propose',
+  limitView: 'limit:view',
+  limitPropose: 'limit:propose',
+  consentView: 'consent:view',
+  consentRecord: 'consent:record',
+  kycUpload: 'kyc:upload',
+  kycVerify: 'kyc:verify',
+  kycViewDocument: 'kyc:view-document',
+  reportRun: 'report:run',
+  reportAdmin: 'report:admin',
+  bureauExport: 'bureau:export',
+  dashboardView: 'dashboard:view',
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];
@@ -55,6 +66,11 @@ export const VIEW_PERMISSIONS: Permission[] = [
   P.loanView,
   P.staffView,
   P.masterView,
+  P.limitView,
+  P.consentView,
+  P.kycViewDocument,
+  P.reportRun,
+  P.dashboardView,
 ];
 
 export const PROPOSE_PERMISSIONS: Permission[] = [
@@ -76,6 +92,8 @@ export const PROPOSE_PERMISSIONS: Permission[] = [
   P.loanRestructure,
   P.staffPropose,
   P.masterPropose,
+  P.consentRecord,
+  P.kycUpload,
 ];
 
 export const ALL_PERMISSIONS: Permission[] = Object.values(P);

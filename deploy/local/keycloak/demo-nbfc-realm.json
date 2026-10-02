@@ -200,7 +200,14 @@
               "master:view",
               "master:propose",
               "loan:amend",
-              "loan:restructure"
+              "loan:restructure",
+              "limit:view",
+              "consent:view",
+              "consent:record",
+              "kyc:upload",
+              "kyc:view-document",
+              "report:run",
+              "dashboard:view"
             ]
           }
         }
@@ -225,7 +232,13 @@
               "product:view",
               "loan:view",
               "staff:view",
-              "master:view"
+              "master:view",
+              "limit:view",
+              "consent:view",
+              "kyc:verify",
+              "kyc:view-document",
+              "report:run",
+              "dashboard:view"
             ]
           }
         }
@@ -243,7 +256,9 @@
               "gl:view",
               "gl:reports",
               "loan:view",
-              "loan:repay"
+              "loan:repay",
+              "report:run",
+              "dashboard:view"
             ]
           }
         }
@@ -268,7 +283,12 @@
               "product:view",
               "loan:view",
               "staff:view",
-              "master:view"
+              "master:view",
+              "limit:view",
+              "consent:view",
+              "kyc:view-document",
+              "report:run",
+              "dashboard:view"
             ]
           }
         }
@@ -314,7 +334,18 @@
               "master:view",
               "master:propose",
               "loan:amend",
-              "loan:restructure"
+              "loan:restructure",
+              "limit:view",
+              "limit:propose",
+              "consent:view",
+              "consent:record",
+              "kyc:upload",
+              "kyc:verify",
+              "kyc:view-document",
+              "report:run",
+              "report:admin",
+              "bureau:export",
+              "dashboard:view"
             ]
           }
         }
@@ -531,6 +562,72 @@
           "description": "Propose loan restructuring",
           "composite": false,
           "clientRole": true
+        },
+        {
+          "name": "limit:view",
+          "description": "View role amount limits",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "limit:propose",
+          "description": "Propose role amount limits and customer exposure limits",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "consent:view",
+          "description": "View customer consent records",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "consent:record",
+          "description": "Record or withdraw customer consent",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "kyc:upload",
+          "description": "Upload KYC documents",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "kyc:verify",
+          "description": "Verify or reject KYC documents",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "kyc:view-document",
+          "description": "Open KYC document files",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "report:run",
+          "description": "Run reports",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "report:admin",
+          "description": "See every report run",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "bureau:export",
+          "description": "Generate credit bureau files (decrypts personal data)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "dashboard:view",
+          "description": "View the operational dashboard",
+          "composite": false,
+          "clientRole": true
         }
       ]
     }
@@ -612,6 +709,20 @@
             "introspection.token.claim": "true",
             "lightweight.claim": "false"
           }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
         }
       ]
     },
@@ -691,6 +802,20 @@
             "introspection.token.claim": "true",
             "lightweight.claim": "false"
           }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
         }
       ]
     }
@@ -733,7 +858,18 @@
           "master:view",
           "master:propose",
           "loan:amend",
-          "loan:restructure"
+          "loan:restructure",
+          "limit:view",
+          "limit:propose",
+          "consent:view",
+          "consent:record",
+          "kyc:upload",
+          "kyc:verify",
+          "kyc:view-document",
+          "report:run",
+          "report:admin",
+          "bureau:export",
+          "dashboard:view"
         ]
       },
       {
@@ -773,7 +909,18 @@
           "master:view",
           "master:propose",
           "loan:amend",
-          "loan:restructure"
+          "loan:restructure",
+          "limit:view",
+          "limit:propose",
+          "consent:view",
+          "consent:record",
+          "kyc:upload",
+          "kyc:verify",
+          "kyc:view-document",
+          "report:run",
+          "report:admin",
+          "bureau:export",
+          "dashboard:view"
         ]
       }
     ]
@@ -907,6 +1054,28 @@
           "product:view"
         ]
       }
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "console",
+      "roles": [
+        "MAKER",
+        "CHECKER",
+        "OPERATIONS",
+        "AUDITOR",
+        "TENANT_ADMIN"
+      ]
+    },
+    {
+      "client": "corebanking-service",
+      "roles": [
+        "MAKER",
+        "CHECKER",
+        "OPERATIONS",
+        "AUDITOR",
+        "TENANT_ADMIN"
+      ]
     }
   ]
 }

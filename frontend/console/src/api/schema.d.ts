@@ -92,6 +92,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/amount-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Role amount limits per transaction type (permission limit:view)
+         * @description What each role may put through in one transaction and in one business day (US-021). The most permissive of
+         *     a user's roles applies. A role without a limit for a transaction type is not limited, unless the tenant
+         *     property `limits.default-deny` is `true`. Makers above their limit get 403; an approval above the checker's
+         *     limit is refused with 403, so a checker with a higher limit must approve.
+         */
+        get: operations["listAmountLimits"];
+        put?: never;
+        /**
+         * Propose a role amount limit (maker-checker, permission limit:propose)
+         * @description The new limit takes over from its effective date; the limit then in force ends the day before.
+         */
+        post: operations["proposeAmountLimit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/enumerations/{type}": {
         parameters: {
             query?: never;
@@ -396,6 +423,199 @@ export interface paths {
         get: operations["getCustomer"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/relationships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Relationships of a customer (permission customer:view)
+         * @description Co-applicants, guarantors, nominees and authorised signatories the customer has (`OUTGOING`) and the customers
+         *     they are related to in turn (`INCOMING`). The other party's name is shown only inside the caller's branch scope.
+         */
+        get: operations["listCustomerRelationships"];
+        put?: never;
+        /**
+         * Propose relationships (maker-checker, permission customer:create)
+         * @description The related party must be an ACTIVE customer. Nominees are sent as the complete set for an account (`loanId`)
+         *     or for the customer: their shares must total 100, and on approval the set replaces the current nominees.
+         *     An authorised signatory is an individual acting for a non-individual customer.
+         */
+        post: operations["proposeCustomerRelationships"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/exposure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Exposure as borrower, co-applicant and guarantor, with the limit (permission customer:view)
+         * @description A loan counts at its sanctioned amount until it is disbursed and at its principal outstanding afterwards.
+         *     The exposure limit applies to the borrower's own loans only; exposure as guarantor or co-applicant is shown
+         *     for information, and a borrower's NPA does not downgrade a guarantor's own accounts.
+         */
+        get: operations["getCustomerExposure"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/exposure-limit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set, change or remove the exposure limit (maker-checker, permission limit:propose)
+         * @description The limit is checked by the database when a loan is booked and again when it is disbursed (409 when it would
+         *     be exceeded). Loans already booked are not affected.
+         */
+        post: operations["proposeCustomerExposureLimit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/consents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Consent and purpose records (DPDP Act 2023; permission consent:view) */
+        get: operations["listCustomerConsents"];
+        put?: never;
+        /**
+         * Record a consent or a legitimate-use record (permission consent:record)
+         * @description One record can be in force per customer and purpose; 409 when one already is.
+         */
+        post: operations["recordCustomerConsent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/consents/{consentId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the withdrawal of a consent (permission consent:record)
+         * @description Takes effect at once; the grant is kept. When the purpose is needed to service a loan the customer is party
+         *     to, the withdrawal is recorded with `retainedForLegalObligation: true`: the consent is gone, the data is kept
+         *     and used only as far as law requires. A legitimate-use record cannot be withdrawn (409).
+         */
+        post: operations["withdrawCustomerConsent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/kyc-documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** KYC document metadata (permission customer:view) */
+        get: operations["listKycDocuments"];
+        put?: never;
+        /**
+         * Upload a KYC document (permission kyc:upload)
+         * @description The file is the request body (no multipart): PDF, JPEG or PNG up to 5 MB, and its leading bytes must match
+         *     the `Content-Type`. The document number travels in the `X-Document-Number` header and is never stored: only
+         *     its last four characters and a keyed hash are kept. For `AADHAAR_MASKED` send only the last four digits; a
+         *     full Aadhaar number is refused (422) for every document type.
+         */
+        post: operations["uploadKycDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/kyc-documents/{docId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download a KYC document (permission kyc:view-document; every download is audited) */
+        get: operations["downloadKycDocument"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/kyc-documents/{docId}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify a KYC document (permission kyc:verify; not by the uploader)
+         * @description The customer's `kycStatus` becomes VERIFIED when every required document (tenant property
+         *     `kyc.required-documents`, default `pan,address-proof,photo`) is verified and unexpired. For Aadhaar the
+         *     verifier must confirm that the copy shows only the last four digits (`maskingConfirmed`).
+         */
+        post: operations["verifyKycDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/kyc-documents/{docId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a KYC document with a reason (permission kyc:verify; not by the uploader) */
+        post: operations["rejectKycDocument"];
         delete?: never;
         options?: never;
         head?: never;
@@ -765,6 +985,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loans/{id}/parties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Borrower, co-applicants and guarantors of the loan */
+        get: operations["listLoanParties"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans/{id}/kfs": {
         parameters: {
             query?: never;
@@ -1081,6 +1318,235 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loans/{id}/documents/kfs.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Key Facts Statement as PDF
+         * @description The KFS stored at booking, laid out as in RBI's circular "Key Facts Statement (KFS) for Loans & Advances"
+         *     (15-Apr-2024): Part 1 (interest rate and fees/charges), Part 2 (other qualitative information), the
+         *     illustration of the APR computation and the repayment schedule. The APR is the one computed by the product
+         *     at booking. Grievance officer and clause references come from the system properties `lender.*`; one that
+         *     is not set prints as "[not configured]".
+         *     Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+         *     written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+         */
+        get: operations["getLoanKfsPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/documents/statement.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Statement of account as PDF
+         * @description Opening and closing balance, every transaction with its principal / interest / charges split and the
+         *     running outstanding, and the overdue summary with days past due. Built from the ledger entries on the
+         *     loan account; day-end interest accruals between two transactions are shown as one line per month.
+         *     Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+         *     written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+         */
+        get: operations["getLoanStatementPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/documents/schedule.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Repayment schedule as PDF
+         * @description Instalments fallen due with what was paid against each, and the instalments to come.
+         *     Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+         *     written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+         */
+        get: operations["getLoanSchedulePdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/documents/noc.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * No-objection (closure) letter as PDF
+         * @description Issued only for a loan whose status is CLOSED.
+         *     Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+         *     written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+         */
+        get: operations["getLoanNocPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/charges/{chargeId}/invoice.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GST tax invoice for a fee as PDF
+         * @description Supplier and recipient state, SAC 9971, taxable value, CGST + SGST (intra-state) or IGST (inter-state), and
+         *     the invoice number from the GST_INVOICE number series. The invoice of a reversed fee is returned marked
+         *     CANCELLED.
+         *     Permission `loan:view`; the loan must be in the caller's branch scope (404 otherwise). Every generation is
+         *     written to the audit log (action `DOCUMENT_GENERATED`), because the document holds personal data.
+         */
+        get: operations["getFeeInvoicePdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report catalogue
+         * @description The reports the caller may run: those whose permission they hold (`report:run`; `bureau:export` for the
+         *     credit bureau file).
+         */
+        get: operations["listReports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/{code}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a report now and store its file
+         * @description Runs synchronously (for now), writes the rows as CSV (cells that start with `=`, `+`, `-` or `@` are
+         *     neutralised) and stores the file; fetch it with the download call. The rows are limited to the caller's
+         *     branch scope. A run that fails is returned with status `FAILED` and its error.
+         *
+         *     `BUREAU_CONSUMER` produces the UCRF-style consumer bureau file instead of CSV. It needs `bureau:export`
+         *     and all-branch access, and is the only report that contains unmasked personal data. Its layout has **not**
+         *     been certified by any bureau: validate it against each bureau's format specification before submitting.
+         *
+         *     Every run is written to the audit log (`REPORT_RUN`, or `BUREAU_EXPORT`).
+         */
+        post: operations["runReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report runs, newest first
+         * @description The caller's own runs; every user's runs with `report:admin`. The file itself is never part of this list.
+         */
+        get: operations["listReportRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/runs/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The file of a completed run
+         * @description Only for the user who ran the report, or a user with `report:admin`, and only while they hold the report's
+         *     own permission (so `report:admin` alone never opens a bureau file). Every download is written to the audit
+         *     log (`REPORT_DOWNLOAD`, or `BUREAU_DOWNLOAD`).
+         */
+        get: operations["downloadReportRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Dashboard figures for the caller's branches
+         * @description Permission `dashboard:view`. Every figure is limited to the caller's branch scope.
+         */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/v1/tenants": {
         parameters: {
             query?: never;
@@ -1384,6 +1850,186 @@ export interface components {
             /** @enum {string} */
             strength?: "EXACT" | "STRONG" | "POSSIBLE";
         };
+        /** @enum {string} */
+        LimitTxnType: "LOAN_DISBURSEMENT" | "LOAN_REPAYMENT" | "LOAN_WAIVER" | "VOUCHER" | "LOAN_PRECLOSURE" | "FEE_WAIVER";
+        AmountLimitInput: {
+            /** @description A realm role as it appears in the access token, e.g. MAKER */
+            roleName: string;
+            txnType: components["schemas"]["LimitTxnType"];
+            perTransactionMax: number | string;
+            /** @description Cumulative per business day; null = no day limit */
+            perDayMax?: number | string | null;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo?: string | null;
+        };
+        AmountLimit: {
+            /** Format: uuid */
+            id: string;
+            roleName: string;
+            txnType: components["schemas"]["LimitTxnType"];
+            perTransactionMax: components["schemas"]["Money"];
+            perDayMax?: components["schemas"]["Money"] | null;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo?: string | null;
+            createdBy?: string;
+            createdAt?: string;
+            /** @description In force on the current business date */
+            inForce: boolean;
+        };
+        RelationshipInput: {
+            /** Format: uuid */
+            relatedCustomerId: string;
+            /** @enum {string} */
+            relationType: "CO_APPLICANT" | "GUARANTOR" | "NOMINEE" | "AUTHORISED_SIGNATORY";
+            /**
+             * Format: uuid
+             * @description Nominee only: the account the nomination applies to
+             */
+            loanId?: string | null;
+            /** @description Nominee only; the shares of a set total 100 */
+            sharePercent?: number | string | null;
+        };
+        CustomerRelationship: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            direction: "OUTGOING" | "INCOMING";
+            /** @enum {string} */
+            relationType: "CO_APPLICANT" | "GUARANTOR" | "NOMINEE" | "AUTHORISED_SIGNATORY";
+            /** Format: uuid */
+            relatedCustomerId: string;
+            relatedCustomerNo: string;
+            /** @description null when the other customer is outside the branch scope of the caller */
+            relatedCustomerName?: string | null;
+            /** Format: uuid */
+            loanId?: string | null;
+            sharePercent?: string | null;
+            /** @enum {string} */
+            status: "ACTIVE" | "ENDED";
+            createdBy?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            endedAt?: string | null;
+        };
+        CustomerExposure: {
+            /** Format: uuid */
+            customerId: string;
+            exposureLimit?: components["schemas"]["Money"] | null;
+            asBorrower: components["schemas"]["Money"];
+            asCoApplicant: components["schemas"]["Money"];
+            asGuarantor: components["schemas"]["Money"];
+            loansAsBorrower?: number;
+            loansAsCoApplicant?: number;
+            loansAsGuarantor?: number;
+            /** @description Room left under the limit; null when no limit is set */
+            available?: components["schemas"]["Money"] | null;
+        };
+        LoanParty: {
+            /** Format: uuid */
+            customerId: string;
+            customerNo: string;
+            customerName?: string;
+            /** @enum {string} */
+            role: "BORROWER" | "CO_APPLICANT" | "GUARANTOR";
+            customerStatus?: string;
+            addedBy?: string;
+            /** Format: date-time */
+            addedAt?: string;
+        };
+        ConsentInput: {
+            /**
+             * @description A value of the enumeration `consent-purpose`
+             * @example LOAN_PROCESSING
+             * @example CREDIT_BUREAU_REPORTING
+             * @example MARKETING
+             * @example KYC_VERIFICATION
+             * @example ACCOUNT_AGGREGATOR
+             */
+            purpose: string;
+            /**
+             * @description DPDP Act 2023: consent (s.6) or a legitimate use (s.7)
+             * @enum {string}
+             */
+            lawfulBasis: "CONSENT" | "LEGITIMATE_USE";
+            /** @description Version of the privacy notice shown to the customer */
+            noticeVersion: string;
+            /** @enum {string} */
+            channel: "BRANCH" | "WEB" | "MOBILE_APP" | "API" | "PAPER" | "CALL_CENTRE";
+            /** @description Proof that it was given (OTP or e-sign transaction, form scan); required for CONSENT */
+            evidenceRef?: string;
+            /**
+             * Format: date-time
+             * @description Defaults to now; never in the future
+             */
+            grantedAt?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        Consent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            customerId: string;
+            purpose: string;
+            /** @enum {string} */
+            lawfulBasis: "CONSENT" | "LEGITIMATE_USE";
+            noticeVersion: string;
+            channel: string;
+            evidenceRef?: string | null;
+            /** Format: date-time */
+            grantedAt: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            /** @enum {string} */
+            status: "ACTIVE" | "EXPIRED" | "WITHDRAWN";
+            /** Format: date-time */
+            withdrawnAt?: string | null;
+            withdrawalReason?: string | null;
+            withdrawnBy?: string | null;
+            /** @description Withdrawn, but the data is kept and used as far as law requires while a loan exists */
+            retainedForLegalObligation: boolean;
+            recordedBy?: string;
+            /** Format: date-time */
+            recordedAt?: string;
+        };
+        KycDocument: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            customerId: string;
+            docType: string;
+            /**
+             * @example XXXXXX234F
+             * @example XXXX XXXX 0000
+             */
+            numberMasked?: string | null;
+            /** Format: date */
+            issueDate?: string | null;
+            /** Format: date */
+            expiryDate?: string | null;
+            expired?: boolean;
+            /** @enum {string} */
+            status: "PENDING" | "VERIFIED" | "REJECTED";
+            statusReason?: string | null;
+            verifiedBy?: string | null;
+            /** Format: date-time */
+            verifiedAt?: string | null;
+            maskingConfirmed?: boolean;
+            /** @enum {string} */
+            contentType: "application/pdf" | "image/jpeg" | "image/png";
+            sizeBytes: number;
+            sha256: string;
+            uploadedBy: string;
+            /** Format: date-time */
+            uploadedAt: string;
+            /** @description KYC status of the customer after this change (not in list responses) */
+            customerKycStatus?: string;
+        };
         GlHead: {
             code: string;
             name: string;
@@ -1646,6 +2292,16 @@ export interface components {
             securedPortion?: number | string | null;
             /** @description LOS application id; repeating it returns the existing loan */
             externalRef?: string;
+            /**
+             * @description Co-applicants and guarantors (the borrower is `customerId`). Each must be an ACTIVE customer, named once,
+             *     and never the borrower.
+             */
+            parties?: {
+                /** Format: uuid */
+                customerId: string;
+                /** @enum {string} */
+                role: "CO_APPLICANT" | "GUARANTOR";
+            }[];
         };
         ScheduleRow: {
             instalmentNo?: number;
@@ -1972,6 +2628,110 @@ export interface components {
             advanceAdjusted?: string;
             total?: string;
         };
+        ReportDefinition: {
+            /** @example LOAN_BOOK */
+            code: string;
+            name: string;
+            description?: string;
+            /** @description JSON Schema of the run parameters: `{"type":"object","properties":{…},"required":[…]}`; dates are `format: date` */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /**
+             * @example report:run
+             * @example bureau:export
+             */
+            permission: string;
+            /** @enum {string} */
+            outputFormat: "CSV" | "UCRF";
+            /** @description Unmasked personal data (the bureau file) */
+            containsPersonalData?: boolean;
+            /** @description Needs all-branch access */
+            allBranchesOnly?: boolean;
+            /** @description Cron expression recorded for the scheduler, which is not built yet */
+            schedule?: string | null;
+        };
+        ReportRunRequest: {
+            /**
+             * @example {
+             *       "from": "2026-09-01",
+             *       "to": "2026-09-30"
+             *     }
+             */
+            parameters?: {
+                [key: string]: string;
+            };
+        };
+        ReportRun: {
+            /** Format: uuid */
+            id: string;
+            reportCode: string;
+            requestedBy: string;
+            /** Format: date-time */
+            requestedAt: string;
+            /** Format: date */
+            businessDate: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            /** @enum {string} */
+            status: "RUNNING" | "COMPLETED" | "FAILED";
+            /** @description Data rows in the file (accounts, for the bureau file) */
+            rowCount?: number | null;
+            /** @description Accounts left out of a bureau file; listed by the download call with part=rejections */
+            rejectedCount?: number;
+            fileName?: string | null;
+            contentType?: string | null;
+            /** Format: int64 */
+            bytes?: number | null;
+            error?: string | null;
+            /** Format: date-time */
+            finishedAt?: string | null;
+        };
+        DpdBucket: {
+            /** @enum {string} */
+            bucket: "0" | "1-30" | "31-60" | "61-90" | "91-180" | "181-365" | ">365";
+            loans: number;
+            /** @description Principal outstanding */
+            amount: string;
+        };
+        /** @description Money is a decimal string. A percentage is null when it has no base (no advances, nothing due). */
+        Dashboard: {
+            /** Format: date */
+            businessDate?: string | null;
+            activeLoans: number;
+            /** @description Principal outstanding of live loans (gross advances) */
+            portfolioOutstanding: string;
+            overdueAmount?: string;
+            /** @description Principal outstanding of non-performing loans */
+            grossNpa?: string;
+            npaLoans?: number;
+            /** @description Gross NPA / gross advances, in percent */
+            npaPercent?: string | null;
+            disbursedToday?: string;
+            disbursedMtd?: string;
+            disbursementsToday?: number;
+            disbursementsMtd?: number;
+            collectedToday?: string;
+            collectedMtd?: string;
+            /** @description Instalments that fell due this month */
+            demandMtd?: string;
+            collectedAgainstDemandMtd?: string;
+            /** @description Collected against this month's instalments / their amount, in percent */
+            collectionEfficiencyMtd?: string | null;
+            dpdBuckets: components["schemas"]["DpdBucket"][];
+            pendingApprovals: number;
+            lastEod?: {
+                /** Format: date */
+                businessDate?: string;
+                /** @enum {string} */
+                status?: "RUNNING" | "COMPLETED" | "COMPLETED_WITH_EXCEPTIONS" | "FAILED";
+                /** Format: date-time */
+                finishedAt?: string | null;
+            } | null;
+            /** @description Shown to all-branch users; 0 for others */
+            openEodExceptions?: number;
+        };
     };
     responses: {
         /** @description Change recorded as an approval request; applied when a checker approves it */
@@ -1996,6 +2756,7 @@ export interface components {
     parameters: {
         Id: string;
         IdempotencyKey: string;
+        DocId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2159,6 +2920,49 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TaxRate"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listAmountLimits: {
+        parameters: {
+            query?: {
+                roleName?: string;
+                txnType?: components["schemas"]["LimitTxnType"];
+                /** @description Only limits in force on the business date */
+                currentOnly?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Limits, newest period first within a role and transaction type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AmountLimit"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeAmountLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmountLimitInput"];
             };
         };
         responses: {
@@ -2657,6 +3461,328 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerSummary"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCustomerRelationships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerRelationship"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCustomerRelationships: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    relationships: components["schemas"]["RelationshipInput"][];
+                };
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCustomerExposure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerExposure"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCustomerExposureLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description null removes the limit */
+                    exposureLimit?: number | string | null;
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCustomerConsents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every record, newest first; withdrawn and expired records stay in the list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Consent"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    recordCustomerConsent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsentInput"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Consent"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    withdrawCustomerConsent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                consentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The record after withdrawal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Consent"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listKycDocuments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest first. Document numbers are masked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KycDocument"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadKycDocument: {
+        parameters: {
+            query: {
+                /** @description A value of the enumeration `kyc-document-type`; `address-proof` and `ADDRESS_PROOF` are the same */
+                docType: string;
+                issueDate?: string;
+                expiryDate?: string;
+            };
+            header?: {
+                /** @description The document number as printed; for Aadhaar only its last four digits */
+                "X-Document-Number"?: string;
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/pdf": string;
+                "image/jpeg": string;
+                "image/png": string;
+            };
+        };
+        responses: {
+            /** @description Stored as PENDING */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KycDocument"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    downloadKycDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as an attachment and never cached (Cache-Control no-store) */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    verifyKycDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Required and true for AADHAAR_MASKED */
+                    maskingConfirmed?: boolean;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The document after verification, with the customer's KYC status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KycDocument"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    rejectKycDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The document after rejection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KycDocument"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -3270,6 +4396,29 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    listLoanParties: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The borrower first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanParty"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     getLoanKfs: {
         parameters: {
             query?: never;
@@ -3779,6 +4928,293 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Loan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanKfsPdf: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanStatementPdf: {
+        parameters: {
+            query?: {
+                /** @description Default: the disbursement date */
+                from?: string;
+                /** @description Default: the business date; cannot be later */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description The loan has not been disbursed yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanSchedulePdf: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanNocPdf: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description The loan is not closed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getFeeInvoicePdf: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                /** @description The charge id shown on the loan (C1, C2 …), or D1, D2 … for the fees deducted from the disbursement */
+                chargeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description A penal charge (P…): penal charges carry no GST, so there is no invoice */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listReports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportDefinition"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    runReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReportRunRequest"];
+            };
+        };
+        responses: {
+            /** @description The run (COMPLETED or FAILED) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportRun"];
+                };
+            };
+            /** @description The bureau member code is not configured (system property `bureau.member-code`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listReportRuns: {
+        parameters: {
+            query?: {
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportRun"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    downloadReportRun: {
+        parameters: {
+            query?: {
+                /** @description `rejections`: the accounts left out of a bureau file, with the reason (CSV, no personal data) */
+                part?: "rejections";
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                    "text/plain": string;
+                };
+            };
+            /** @description The run did not complete, or the stored file no longer matches its record */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dashboard"];
                 };
             };
             default: components["responses"]["Problem"];
