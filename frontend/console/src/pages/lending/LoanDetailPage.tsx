@@ -9,6 +9,7 @@ import { isZero, subtractMoney, addMoney } from '../../lib/money';
 import { Badge, Banner, Button, Card, DateText, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, Tabs, humanize } from '../../ui';
 import { AssetClassBadge, Stat, assetClassLabel, pct } from './common';
 import { KfsView, ScheduleTable } from './KfsView';
+import { CustomFieldValues, useCustomDefs } from '../custom/CustomFields';
 import { TranchesTab } from './completion';
 import { LoanDocumentsTab, LoanPartiesTab } from './LoanDocuments';
 import { LoanActionDialog, type LoanAction } from './loanActions';
@@ -25,6 +26,7 @@ export function LoanDetailPage() {
   const kfs = useLoanKfs(id);
   const [tab, setTab] = useState('schedule');
   const [action, setAction] = useState<LoanAction | null>(null);
+  const customDefs = useCustomDefs('LOAN_ACCOUNT');
   const can = (p: string) => hasPermission(me.permissions, p);
 
   if (q.isLoading) return <Spinner />;
@@ -110,6 +112,11 @@ export function LoanDetailPage() {
         </div>
       )}
       <LoanSummaryStats loan={loan} coolingOffEnd={inCoolingOff ? coolingOffEnd : null} />
+      {customDefs.length > 0 && Object.keys(loan.custom ?? {}).length > 0 && (
+        <Card title="Additional details">
+          <CustomFieldValues defs={customDefs} values={loan.custom as Record<string, unknown>} />
+        </Card>
+      )}
       <Tabs
         label="Loan details"
         active={tab}

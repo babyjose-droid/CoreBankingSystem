@@ -21,6 +21,7 @@ export const NAV: NavGroup[] = [
     items: [
       { to: '/loans', label: 'Loans', perm: P.loanView },
       { to: '/loan-products', label: 'Products', perm: P.productView },
+      { to: '/deferred-receipts', label: 'Deferred receipts', perm: P.loanView },
     ],
   },
   {
@@ -52,6 +53,14 @@ export const NAV: NavGroup[] = [
       { to: '/masters/system-properties', label: 'System properties', perm: P.masterView },
       { to: '/masters/enumerations', label: 'Enumerations', perm: P.masterView },
       { to: '/masters/amount-limits', label: 'Amount limits', perm: P.limitView },
+      { to: '/masters/custom-fields', label: 'Custom fields', perm: P.customFieldView },
+    ],
+  },
+  {
+    label: 'Platform',
+    items: [
+      { to: '/jobs', label: 'Jobs', perm: P.jobView },
+      { to: '/support-access', label: 'Support access', perm: P.supportAccessApprove },
     ],
   },
   { label: null, items: [{ to: '/reports', label: 'Reports', perm: P.reportRun }] },

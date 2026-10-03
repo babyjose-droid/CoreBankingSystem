@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 import { useAuditEvents, useCustomer, useMe } from '../../api/hooks';
 import { P, hasPermission } from '../../auth/permissions';
 import { Card, DateText, DateTimeText, ErrorBanner, Masked, PageHeader, Spinner, StatusBadge, Table, Tabs } from '../../ui';
+import { CustomFieldValues, useCustomDefs } from '../custom/CustomFields';
 import { ConsentsTab } from './ConsentsTab';
 import { KycTab } from './KycTab';
 import { RelationshipsTab } from './RelationshipsTab';
@@ -13,6 +14,7 @@ export function CustomerDetailPage() {
   const q = useCustomer(id);
   const canAudit = hasPermission(me.permissions, P.auditView);
   const [tab, setTab] = useState('overview');
+  const customDefs = useCustomDefs('CUSTOMER');
   const audit = useAuditEvents({ entityType: 'CUSTOMER', entityId: q.data?.id, limit: 20 }, canAudit && !!q.data);
   if (q.isLoading) return <Spinner />;
   if (q.error || !q.data) return <ErrorBanner error={q.error ?? new Error('Customer not found')} />;
@@ -58,6 +60,11 @@ export function CustomerDetailPage() {
           </p>
         </Card>
       </div>
+      {customDefs.length > 0 && (
+        <Card title="Additional details">
+          <CustomFieldValues defs={customDefs} values={q.data?.custom as Record<string, unknown> | undefined} />
+        </Card>
+      )}
       {canAudit && (
         <Card title="History" flush>
           <Table

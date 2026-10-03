@@ -28,6 +28,8 @@ const EMPTY_DETAILS: Details = { middleName: '', gender: '', email: '', line1: '
 
 const STRENGTH_TONE = { EXACT: 'danger', STRONG: 'warn', POSSIBLE: 'info' } as const;
 
+import { CustomFieldInputs, customDraftErrors, customFromDraft, useCustomDefs, type CustomDraft } from '../custom/CustomFields';
+
 export function NewCustomerPage() {
   const me = useMe().data!;
   const branches = useBranches();
@@ -47,6 +49,9 @@ export function NewCustomerPage() {
   const [matches, setMatches] = useState<DedupeMatch[]>([]);
   const [override, setOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  const customDefs = useCustomDefs('CUSTOMER');
+  const [custom, setCustom] = useState<CustomDraft>({});
+  const [customErrors, setCustomErrors] = useState<Record<string, string>>({});
   const [tab, setTab] = useState('personal');
 
   const basicsKey = JSON.stringify(basics);
@@ -82,6 +87,7 @@ export function NewCustomerPage() {
       address: hasAddr ? Object.fromEntries(Object.entries(addr).filter(([, v]) => v)) : undefined,
       overrideDedupe: needsOverride ? true : undefined,
       overrideReason: needsOverride ? overrideReason.trim() : undefined,
+      ...(customDefs.length ? { custom: customFromDraft(customDefs, custom) } : {}),
     };
   };
 
@@ -104,6 +110,12 @@ export function NewCustomerPage() {
     setDetailErrors(e);
     if (Object.keys(e).length) {
       setTab(e.email ? 'personal' : 'contact');
+      return;
+    }
+    const ce = customDraftErrors(customDefs, custom);
+    setCustomErrors(ce);
+    if (Object.keys(ce).length) {
+      setTab('additional');
       return;
     }
     create.mutate(toInput(), {
@@ -296,6 +308,9 @@ export function NewCustomerPage() {
                   </div>
                 ),
               },
+              ...(customDefs.length
+                ? [{ id: 'additional', label: 'Additional details', content: <CustomFieldInputs defs={customDefs} draft={custom} onChange={setCustom} errors={customErrors} /> }]
+                : []),
             ]}
           />
           <ErrorBanner error={create.error} />

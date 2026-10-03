@@ -38,6 +38,11 @@ import { EnumerationsPage, EnumerationValuesPage } from './pages/masters/Enumera
 import { StaffPage } from './pages/masters/StaffPage';
 import { SystemPropertiesPage } from './pages/masters/SystemPropertiesPage';
 import { TerritoryPage } from './pages/masters/TerritoryPage';
+import { CustomFieldsPage } from './pages/masters/CustomFieldsPage';
+import { DeferredReceiptsPage } from './pages/platform/DeferredReceiptsPage';
+import { JobsPage } from './pages/platform/JobsPage';
+import { SessionsPage } from './pages/platform/SessionsPage';
+import { SupportAccessPage } from './pages/platform/SupportAccessPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 import { HolidaysPage } from './pages/masters/HolidaysPage';
 import { TaxRatesPage } from './pages/masters/TaxRatesPage';
@@ -135,6 +140,11 @@ export function AppRoutes() {
         <Route path="masters/enumerations" element={guard(P.masterView, <EnumerationsPage />)} />
         <Route path="masters/enumerations/:type" element={guard(P.masterView, <EnumerationValuesPage />)} />
         <Route path="masters/amount-limits" element={guard(P.limitView, <AmountLimitsPage />)} />
+        <Route path="masters/custom-fields" element={guard(P.customFieldView, <CustomFieldsPage />)} />
+        <Route path="deferred-receipts" element={guard(P.loanView, <DeferredReceiptsPage />)} />
+        <Route path="jobs" element={guard(P.jobView, <JobsPage />)} />
+        <Route path="support-access" element={guard(P.supportAccessApprove, <SupportAccessPage />)} />
+        <Route path="sessions" element={<SessionsPage />} />
         <Route path="reports" element={guard(P.reportRun, <ReportsPage />)} />
         <Route path="audit" element={guard(P.auditView, <AuditPage />)} />
         <Route path="*" element={<NotFoundPage />} />

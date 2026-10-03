@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApiClient } from './useApiClient';
 import { unwrap, unwrapWithStatus } from './client';
 import type {
+  DeferredReceipt,
   DisbursementSimulation,
   LoanProductTemplate,
   LoanTranches,
@@ -188,14 +189,22 @@ export function useDisburseLoan(id: string) {
   });
 }
 
+export type RepayResult = { kind: 'posted'; loan: Loan } | { kind: 'deferred'; receipt: DeferredReceipt };
+
 export function useRepayLoan(id: string) {
   const api = useApiClient();
+  const qc = useQueryClient();
   const after = useAfterLoanChange();
   return useMutation({
-    mutationFn: (b: { amount: Money; valueDate?: string; mode?: string; reference?: string }) =>
-      // 200 with the loan, or 202 with a deferred receipt when end of day is running for a straight-through client
-      unwrap<Loan>(api.POST('/api/v1/loans/{id}/repayments', { params: { path: { id } }, body: b }) as never),
-    onSuccess: after,
+    // 200 with the loan, or 202 with a deferred receipt when the receipt arrives after the end-of-day cut-off.
+    mutationFn: async (b: { amount: Money; valueDate?: string; mode?: string; reference?: string }): Promise<RepayResult> => {
+      const { data, status } = await unwrapWithStatus<Loan | { receipt?: DeferredReceipt }>(api.POST('/api/v1/loans/{id}/repayments', { params: { path: { id } }, body: b }) as never);
+      return status === 202 ? { kind: 'deferred', receipt: (data as { receipt?: DeferredReceipt }).receipt ?? {} } : { kind: 'posted', loan: data as Loan };
+    },
+    onSuccess: (r) => {
+      if (r.kind === 'posted') after(r.loan);
+      else void qc.invalidateQueries({ queryKey: ['deferred-receipts'] });
+    },
   });
 }
 

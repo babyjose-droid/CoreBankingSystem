@@ -569,3 +569,19 @@
 }
 .doc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .doc-list > li { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-end; justify-content: space-between; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); }
+
+/* help footer */
+.app-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 32px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #d9dee5);
+  font-size: 12px;
+}
+a.usermenu__item {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}

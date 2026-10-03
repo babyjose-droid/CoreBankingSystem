@@ -34,6 +34,11 @@ const ROUTES: Array<[string, RegExp]> = [
   ['/masters/enumerations/loan-purpose', /^Enumeration loan-purpose$/],
   ['/reports', /^Reports$/],
   ['/masters/amount-limits', /^Role amount limits$/],
+  ['/masters/custom-fields', /^Custom fields$/],
+  ['/deferred-receipts', /^Deferred receipts$/],
+  ['/jobs', /^Scheduled jobs$/],
+  ['/support-access', /^Support access$/],
+  ['/sessions', /^Sessions$/],
   ['/audit', /^Audit trail$/],
   ['/no-such-page', /^Page not found$/],
 ];

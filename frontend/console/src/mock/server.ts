@@ -28,6 +28,7 @@ import { registerDocumentRoutes } from './documents';
 import { assertWithinLimit } from './limits';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
 import { applyLendingMoreApproval, registerLendingMoreRoutes } from './lendingMore';
+import { applyPlatformMoreApproval, assertCustom, bookDeferredReceipts, maskCustom, registerPlatformMoreRoutes } from './platformMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
 
@@ -153,6 +154,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       homeBranch: i.homeBranch,
       kycStatus: c.kycStatus,
       status: c.status,
+      custom: maskCustom(db, 'CUSTOMER', c.custom),
     };
   }
 
@@ -254,7 +256,9 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       }
       case 'CUSTOMER': {
         if (p.input.pan && db.customers.some((c) => c.input.pan === p.input.pan)) throw conflict('Duplicate PAN', 'A customer with this PAN was created meanwhile');
-        const c = customerRecord(db, { ...p.input }, at);
+        const { custom, ...input } = p.input;
+        const c = customerRecord(db, { ...input }, at);
+        c.custom = (custom ?? {}) as Record<string, unknown>;
         a.entityId = c.id;
         a.appliedRef = c.customerNo;
         appendAudit(db, at, checker, 'CUSTOMER_CREATED', 'CUSTOMER', c.id, { customerNo: c.customerNo });
@@ -280,7 +284,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -413,6 +417,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     db.businessDate = next;
     lendingDayEnd(db);
     db.dayStatus = 'OPEN';
+    // Receipts accepted during end of day are booked as soon as the new date opens.
+    bookDeferredReceipts(db, run.finishedAt!);
     appendAudit(db, run.finishedAt, 'system', 'EOD_COMPLETED', 'EOD_RUN', String(run.id), { businessDate: run.businessDate, next, status: run.status });
   }
 
@@ -436,6 +442,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       branches: scope.branches,
       businessDate: db.businessDate,
       permissions: [...user.permissions],
+      roles: [...user.roles],
       modules: ['CUSTOMER', 'GL', 'EOD', 'LENDING'],
     };
     return ok(me);
@@ -592,6 +599,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     const input = { ...(body as CustomerInput) };
     if (input.pan) input.pan = input.pan.toUpperCase();
     validateCustomer(input);
+    if (input.custom !== undefined) input.custom = assertCustom(db, 'CUSTOMER', input.custom);
+    else assertCustom(db, 'CUSTOMER', {});
     if (input.pan) {
       const existing = db.customers.find((c) => c.input.pan === input.pan);
       if (existing) return ok(summary(existing));
@@ -833,15 +842,17 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     return ok(verifyAudit(db));
   });
 
-  registerLendingRoutes(db, { on, require, propose, nowIso });
+  registerLendingRoutes(db, { on, require, propose, nowIso, nextBusinessDate: () => nextBusinessDate(db.businessDate) });
   registerPlatformRoutes(db, { on, require, propose });
   registerLendingMoreRoutes(db, { on, require, propose, nowIso });
   registerAmendmentRoutes(db, { on, require, propose, nowIso });
   registerCustomerExtraRoutes(db, { on, require, propose, nowIso });
   registerDocumentRoutes(db, { on, require, nowIso });
+  registerPlatformMoreRoutes(db, { on, require, propose, nowIso });
 
   // ---------- dispatcher ----------
   function respond(status: number, body: unknown, raw?: RawBody): Response {
+    if (status === 204) return new Response(null, { status });
     if (raw && status < 400) {
       return new Response(raw.data as BodyInit, {
         status,

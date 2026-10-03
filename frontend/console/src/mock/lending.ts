@@ -16,6 +16,7 @@ import { formatINR, isMoney } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type ChargeState, type LoanState, type MockDb, type StoredCustomer, type StoredLoan, type StoredLoanEvent } from './db';
 import { amendState, restructureState } from './amendCalc';
 import { assertWithinLimit } from './limits';
+import { assertCustom, deferReceipt, maskCustom } from './platformMore';
 import * as C from './lendingCalc';
 import { bad, conflict, notFound, type FieldProblem } from './problems';
 
@@ -817,7 +818,7 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     benchmarkCode: loan.product.benchmarkCode ?? null,
     spread: loan.product.spread === null || loan.product.spread === undefined ? null : String(loan.product.spread),
     nextRateReset: loan.product.benchmarkCode && loan.disbursedOn ? C.addMonths(loan.disbursedOn, loan.product.resetFrequencyMonths ?? 12) : null,
-    custom: loan.custom,
+    custom: maskCustom(db, 'LOAN_ACCOUNT', loan.custom),
     restructuredOn: st.restructuredOn,
     restructureCount: st.restructureCount,
     upgradeNotBefore: st.restructuredOn ? st.upgradeNotBefore : null,
@@ -1205,6 +1206,7 @@ export interface LendingRouter {
     amount?: string | null,
   ) => Result;
   nowIso: () => string;
+  nextBusinessDate?: () => string;
 }
 
 const ok = (body: unknown): Result => ({ status: 200, body });
@@ -1296,7 +1298,9 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     }
     const resolved = resolve(db, a);
     if (resolved.customer.kycStatus !== 'VERIFIED') throw bad('Customer KYC is not verified', [{ field: 'customerId', message: 'KYC must be verified before a loan is sanctioned' }]);
+    const custom = assertCustom(db, 'LOAN_ACCOUNT', a.custom);
     const loan = bookLoan(db, resolved, ref, db.businessDate, user.username);
+    loan.custom = custom;
     for (const p of loan.parties) p.addedAt = nowIso();
     appendAudit(db, nowIso(), user.username, 'LOAN_CREATED', 'LOAN', loan.id, { loanNo: loan.loanNo, amount: C.fromPaise(loan.amount) });
     return { status: 201, body: view(loan) };
@@ -1382,8 +1386,14 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   on('POST', '/api/v1/loans/{id}/repayments', ({ user, params, body }) => {
     require(user, P.loanRepay);
     const loan = findLoan(params.id);
-    assertServiceable(loan);
     const b = (body ?? {}) as { amount?: string; valueDate?: string; mode?: string; reference?: string };
+    if (db.dayStatus === 'EOD_RUNNING') {
+      // After the cut-off: a straight-through client's receipt is accepted for the next business date; staff postings stay blocked.
+      if (!can(user, LOAN_STP)) throw conflict('End of day is running', 'Postings are blocked until the business date has moved; try again when the day is open');
+      const receipt = deferReceipt(db, loan, user, positiveAmount(b.amount), b.mode?.trim() || null, b.reference?.trim() || null, nowIso(), r.nextBusinessDate?.() ?? addDays(db.businessDate, 1));
+      return { status: 202, body: { status: 'ACCEPTED_FOR_NEXT_BUSINESS_DATE', receipt } };
+    }
+    assertServiceable(loan);
     const amount = positiveAmount(b.amount);
     const valueDate = b.valueDate || db.businessDate;
     if (!ISO_DATE.test(valueDate)) throw bad('Invalid value date', [{ field: 'valueDate', message: 'Invalid date' }]);

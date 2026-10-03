@@ -52,6 +52,9 @@ const ENTITY_TYPES = [
   'AMOUNT_LIMIT',
   'CUSTOMER_RELATIONSHIP',
   'EXPOSURE_LIMIT',
+  'CUSTOM_FIELD',
+  'LOAN_PRODUCT_CUSTOM',
+  'JOB',
 ];
 
 export function slaClass(a: Pick<Approval, 'status' | 'ageHours'>): string | undefined {

@@ -1,8 +1,12 @@
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
+import { useLoanProductCustom, useProposeLoanProductCustom } from '../../api/platformHooks';
+import { CustomFieldInputs, CustomFieldValues, customDraftErrors, customFromDraft, draftFromCustom, useCustomDefs, type CustomDraft } from '../custom/CustomFields';
+import { useProposalToast } from '../proposal';
 import { useApprovals, useMe } from '../../api/hooks';
 import { useLoanProduct } from '../../api/lendingHooks';
 import { P, hasPermission } from '../../auth/permissions';
-import { Button, Card, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
+import { Dialog, Button, Card, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { BPI_LABEL, FREQUENCY_LABEL, INTEREST_BASIS_LABEL, REPAYMENT_METHOD_LABEL, describeFee, pct } from './common';
 
 export function LoanProductDetailPage() {
@@ -128,6 +132,7 @@ export function LoanProductDetailPage() {
           </dl>
         </Card>
       </div>
+      <ProductCustomCard code={p.code} canPropose={hasPermission(me.permissions, P.productPropose)} />
       <Card title="Fee rules" flush>
         <Table
           caption="Fee rules"
@@ -165,5 +170,56 @@ export function LoanProductDetailPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+function ProductCustomCard({ code, canPropose }: { code: string; canPropose: boolean }) {
+  const defs = useCustomDefs('LOAN_PRODUCT');
+  const q = useLoanProductCustom(code, defs.length > 0);
+  const [editing, setEditing] = useState(false);
+  if (defs.length === 0) return null;
+  return (
+    <Card title="Additional details" actions={canPropose && <Button size="sm" onClick={() => setEditing(true)}>Edit additional details</Button>}>
+      <ErrorBanner error={q.error} />
+      {q.isLoading ? <Spinner /> : <CustomFieldValues defs={defs} values={q.data?.custom} />}
+      {editing && <ProductCustomDialog code={code} initial={draftFromCustom(q.data?.custom)} onClose={() => setEditing(false)} />}
+    </Card>
+  );
+}
+
+function ProductCustomDialog({ code, initial, onClose }: { code: string; initial: CustomDraft; onClose: () => void }) {
+  const defs = useCustomDefs('LOAN_PRODUCT');
+  const propose = useProposeLoanProductCustom(code);
+  const toast = useProposalToast();
+  const [draft, setDraft] = useState<CustomDraft>(initial);
+  const [touched, setTouched] = useState(false);
+  const errors = customDraftErrors(defs, draft);
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Additional details of ${code}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            loading={propose.isPending}
+            onClick={() => {
+              setTouched(true);
+              if (Object.keys(errors).length) return;
+              propose.mutate(customFromDraft(defs, draft), { onSuccess: (a) => (toast(a, 'Product details'), onClose()) });
+            }}
+          >
+            Submit for approval
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <CustomFieldInputs defs={defs} draft={draft} onChange={setDraft} errors={touched ? errors : null} />
+        <ErrorBanner error={propose.error} />
+      </div>
+    </Dialog>
   );
 }

@@ -1,4 +1,10 @@
 import type {
+  CustomField,
+  DeferredReceipt,
+  Job,
+  JobRun,
+  LoginSession,
+  SupportAccess,
   AmendmentRequest,
   AmountLimit,
   Consent,
@@ -41,6 +47,8 @@ export interface StoredCustomer {
   createdAt: string;
   /** Paise; absent or null = no exposure limit. */
   exposureLimit?: number | null;
+  /** Custom field values by key (personal-data fields are masked when returned). */
+  custom?: Record<string, unknown>;
 }
 
 export interface StoredRelationship {
@@ -100,6 +108,9 @@ export type ApprovalPayload =
   | { kind: 'ENUMERATION'; type: string; values: StoredEnumValue[] }
   | { kind: 'TERRITORY'; places: PincodePlace[] }
   | { kind: 'AMOUNT_LIMIT'; limit: AmountLimit }
+  | { kind: 'CUSTOM_FIELD'; field: CustomField }
+  | { kind: 'PRODUCT_CUSTOM'; code: string; custom: Record<string, unknown> }
+  | { kind: 'JOB_SCHEDULE'; code: string; schedule: string | null; enabled: boolean; parameters: Record<string, unknown> }
   | { kind: 'CUSTOMER_RELATIONSHIPS'; customerId: string; relationships: RelationshipInput[] }
   | { kind: 'EXPOSURE_LIMIT'; customerId: string; limit: number | null; reason: string };
 
@@ -307,6 +318,13 @@ export interface MockDb {
   consents: Consent[];
   kycDocuments: StoredKycDocument[];
   reportRuns: StoredReportRun[];
+  customFields: CustomField[];
+  productCustom: Record<string, Record<string, unknown>>;
+  deferredReceipts: DeferredReceipt[];
+  sessions: LoginSession[];
+  jobs: Job[];
+  jobRuns: JobRun[];
+  supportAccess: SupportAccess[];
   idempotency: Map<string, { status: number; body: unknown }>;
   /** Fault injection for demos/tests: the named EOD step fails once. */
   eodFailAtStep: string | null;

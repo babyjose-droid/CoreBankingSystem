@@ -228,7 +228,20 @@ function RepayDialog({ loan, businessDate, onClose }: { loan: Loan; businessDate
             const amount = moneyInput(b.amount)!;
             m.mutate(
               { amount, valueDate: b.valueDate, mode: b.mode, ...(b.reference.trim() ? { reference: b.reference.trim() } : {}) },
-              { onSuccess: () => (toast({ tone: 'success', message: `Repayment of ${formatINR(amount)} recorded.` }), onClose()) },
+              {
+                onSuccess: (r) => {
+                  if (r.kind === 'deferred') {
+                    // 202: received after the end-of-day cut-off. It is not on the loan yet.
+                    toast({
+                      tone: 'info',
+                      timeoutMs: 12000,
+                      message: `Accepted for the next business date: ${formatINR(amount)} will be booked and valued on ${formatDate(r.receipt.expectedPostingDate)}, once end of day has finished.`,
+                      link: { to: '/deferred-receipts', label: 'Deferred receipts' },
+                    });
+                  } else toast({ tone: 'success', message: `Repayment of ${formatINR(amount)} recorded.` });
+                  onClose();
+                },
+              },
             );
           }}
         />
@@ -236,7 +249,7 @@ function RepayDialog({ loan, businessDate, onClose }: { loan: Loan; businessDate
     >
       <div className="stack">
         <p className="muted" style={{ margin: 0 }}>
-          Appropriated to overdue interest and principal first, then charges; any excess is kept as an advance for the next instalment.
+          Appropriated to overdue interest and principal first, then charges; any excess is kept as an advance for the next instalment. A receipt taken after the end-of-day cut-off is accepted for the next business date instead (it shows under Deferred receipts until it is booked).
           {loan.overdueAmount && !isZero(loan.overdueAmount) ? <> Overdue now: <MoneyText value={loan.overdueAmount} />.</> : null}
         </p>
         <div className="form-grid">

@@ -7,6 +7,7 @@ import { postVoucher } from './ledger';
 import { seedCustomerExtras } from './customerExtras';
 import { seedLending } from './lending';
 import { seedPlatform } from './platform';
+import { seedPlatformMore } from './platformMore';
 
 export const SEED_BUSINESS_DATE = '2026-06-30';
 export const CUSTOMER_SERIES_PREFIX = '9001';
@@ -237,6 +238,13 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     consents: [],
     kycDocuments: [],
     reportRuns: [],
+    customFields: [],
+    productCustom: {},
+    deferredReceipts: [],
+    sessions: [],
+    jobs: [],
+    jobRuns: [],
+    supportAccess: [],
     idempotency: new Map(),
     eodFailAtStep: null,
   };
@@ -262,6 +270,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
   seedPlatform(db, seedAt);
   seedLending(db);
   seedCustomerExtras(db, seedAt);
+  seedPlatformMore(db, seedAt, now);
 
   db.eodRuns.push(
     completedRun(101, '2026-06-26', '2026-06-27', '2026-06-26T18:00:00.000Z', false),

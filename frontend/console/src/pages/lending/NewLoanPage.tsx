@@ -5,6 +5,7 @@ import { useCreateLoan, useLoanProducts, usePreviewLoan } from '../../api/lendin
 import type { CustomerSummary, LoanApplication, LoanPartyInput, LoanProduct } from '../../api/types';
 import { formatINR } from '../../lib/money';
 import { Banner, Button, Card, EmptyState, ErrorBanner, Input, Masked, PageHeader, Select, Spinner, StatusBadge, Table, useToast } from '../../ui';
+import { CustomFieldInputs, customDraftErrors, customFromDraft, useCustomDefs, type CustomDraft } from '../custom/CustomFields';
 import { KfsView } from './KfsView';
 import { FREQUENCY_LABEL, moneyInput } from './common';
 
@@ -81,12 +82,15 @@ export function NewLoanPage() {
   const [f, setF] = useState<Form>({ productCode: '', amount: '', tenorMonths: '', rate: '', disbursalDate: me.businessDate, firstDueDate: '', moratoriumMonths: '', balloon: '', externalRef: '', instalment: '', maturityAmount: '', plan: [] });
   const [touched, setTouched] = useState(false);
   const [parties, setParties] = useState<Array<{ customer: CustomerSummary; role: LoanPartyInput['role'] }>>([]);
+  const customDefs = useCustomDefs('LOAN_ACCOUNT');
+  const [custom, setCustom] = useState<CustomDraft>({});
+  const customErrors = customDraftErrors(customDefs, custom);
   const preview = usePreviewLoan();
   const create = useCreateLoan();
   const active = (products.data ?? []).filter((p) => (p.status ?? 'ACTIVE') === 'ACTIVE');
   const product = active.find((p) => p.code === f.productCode);
   const errs = problems(f, product, customer);
-  const valid = Object.values(errs).every((x) => !x);
+  const valid = Object.values(errs).every((x) => !x) && Object.keys(customErrors).length === 0;
 
   const app: LoanApplication | null = useMemo(() => {
     if (!customer || !product) return null;
@@ -105,8 +109,10 @@ export function NewLoanPage() {
       ...(f.balloon ? { balloon: moneyInput(f.balloon) ?? f.balloon } : {}),
       ...(f.externalRef.trim() ? { externalRef: f.externalRef.trim() } : {}),
       ...(parties.length ? { parties: parties.map((p) => ({ customerId: p.customer.id, role: p.role })) } : {}),
+      ...(Object.keys(customFromDraft(customDefs, custom)).length ? { custom: customFromDraft(customDefs, custom) } : {}),
     };
-  }, [customer, product, f, parties]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer, product, f, parties, custom, customDefs.length]);
   const appKey = JSON.stringify(app);
   const [previewedKey, setPreviewedKey] = useState<string | null>(null);
   const previewFresh = !!preview.data && previewedKey === appKey;
@@ -267,6 +273,12 @@ export function NewLoanPage() {
                 {errs.plan}
               </span>
             )}
+          </fieldset>
+        )}
+        {customDefs.length > 0 && (
+          <fieldset className="fee-row" style={{ marginTop: 12, display: 'block' }} aria-label="Additional details">
+            <legend>Additional details</legend>
+            <CustomFieldInputs defs={customDefs} draft={custom} onChange={setCustom} errors={touched ? customErrors : null} />
           </fieldset>
         )}
         <div className="form-actions" style={{ marginTop: 16 }}>

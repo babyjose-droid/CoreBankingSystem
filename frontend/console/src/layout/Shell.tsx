@@ -5,6 +5,7 @@ import { useBusinessDay, useMe } from '../api/hooks';
 import { useAuth } from '../auth/AuthProvider';
 import { hasPermission } from '../auth/permissions';
 import { cx } from '../lib/cx';
+import { resolvedApiBaseUrl } from '../config';
 import { formatDate } from '../lib/dates';
 import { Badge, Button, ErrorBanner, Spinner } from '../ui';
 import { branchScopeText } from './branchScope';
@@ -42,6 +43,13 @@ export function Shell() {
       <Sidebar />
       <main id="main" className="main" tabIndex={-1}>
         <Outlet />
+        <footer className="app-footer">
+          <span>Help:</span>
+          <a href={`${resolvedApiBaseUrl()}/developer`} target="_blank" rel="noreferrer">
+            Developer portal
+          </a>
+          <span className="muted">API reference, integration guides and the sandbox</span>
+        </footer>
       </main>
     </div>
   );
@@ -147,6 +155,9 @@ function UserMenu() {
               {auth.mode === 'mock' && ' · mock mode'}
             </div>
           </div>
+          <Link to="/sessions" role="menuitem" className="usermenu__item" onClick={() => setOpen(false)}>
+            My sessions
+          </Link>
           <button
             type="button"
             role="menuitem"
