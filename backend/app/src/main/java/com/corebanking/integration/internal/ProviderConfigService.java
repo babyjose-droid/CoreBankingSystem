@@ -52,7 +52,7 @@ import org.springframework.transaction.annotation.Transactional;
 class ProviderConfigService {
 
     static final String ENTITY = "PROVIDER_CONFIG";
-    private static final String ROW_AAD = "integration.provider_config.secrets";
+    static final String ROW_AAD = "integration.provider_config.secrets";
     private static final String PAYLOAD_AAD = "approval.provider_config";
 
     /** openapi.yaml#/components/schemas/ProviderConfigInput. */

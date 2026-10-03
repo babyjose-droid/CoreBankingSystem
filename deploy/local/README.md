@@ -43,6 +43,14 @@ provisions the tenant `demo-nbfc` once through the same code path a platform ope
 - enables the GROWTH modules;
 - adds staff profiles for the demo users.
 
+On every start (also for a demo tenant created by an earlier build) it then adds whatever is missing of the
+simulator set-up, because the compose file enables the `SIMULATOR` provider
+(`COREBANKING_INTEGRATION_PROVIDERS`): the simulator as the ACTIVE provider for PAYOUT, COLLECTION, MANDATE, SMS
+and EMAIL (with a random `webhookSecret`, stored encrypted, so `POST /api/v1/integrations/simulator/callbacks`
+works), the tenant properties `nach.sponsor-bank-code` and `nach.utility-code`, and English SMS templates for
+`LOAN_DISBURSED` and `PAYMENT_RECEIVED`. Nothing that is already configured is changed; these rows are written
+without maker-checker, which is why this exists only behind the local bootstrap flag.
+
 ```bash
 ./init-env.sh                       # once: writes random local-only encryption keys to .env (git-ignored)
 docker compose up -d --build
