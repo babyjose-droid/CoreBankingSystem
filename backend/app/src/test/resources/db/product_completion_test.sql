@@ -448,4 +448,28 @@ SELECT pg_temp.check((SELECT (sum(taxable_value), sum(cgst + sgst), sum(igst)) =
                             FROM lending.gst_output_document WHERE loan_id = '00000000-0000-0000-0000-00000000aa02'),
                      'C28 net GST output = invoices (issued or credited) less live credit notes; cancelled documents are left out');
 
+-- ---------------------------------------------------------------------------------------------------------
+-- F: foreclosure charges are income of 4104 (V22); invoices and credit notes read either fee income head
+-- ---------------------------------------------------------------------------------------------------------
+SELECT pg_temp.check((SELECT bool_and(foreclosure_income_gl = '4104' AND fee_income_gl = '4102') FROM lending.loan_gl),
+                     'F1 a loan whose snapshot names no foreclosure head uses 4104');
+SELECT pg_temp.post('00000000-0000-0000-0000-00000000d204','FEE_CHARGE','2026-09-10','MUM', '[
+  ["DR","1103","10010000000025",1180,"Foreclosure charge"],["CR","4104","4104",1000,"Foreclosure charge 10010000000025"],
+  ["CR","2203","2203",180,"IGST Foreclosure charge 10010000000025"]]');
+SELECT pg_temp.txn('00000000-0000-0000-0000-00000000b204','00000000-0000-0000-0000-00000000aa02',4,'FEE_CHARGE','2026-09-10',NULL,'{00000000-0000-0000-0000-00000000d204}','{"chargeSeq":1}');
+SELECT pg_temp.check(lending.issue_fee_invoices('00000000-0000-0000-0000-00000000aa02') = 1, 'F2 a foreclosure charge booked to 4104 is invoiced');
+SELECT pg_temp.check((SELECT (description, charge_ref, taxable_value, igst, status) = ('Foreclosure charge', 'C2', 1000::numeric, 180::numeric, 'ISSUED')
+                        FROM lending.fee_invoice WHERE lot_id = '00000000-0000-0000-0000-00000000d204'),
+                     'F3 with the taxable value from the 4104 line');
+-- half of it waived, as the engine posts it for a foreclosure charge (LoanPostings.feeWaiver, foreclosure head)
+SELECT pg_temp.post('00000000-0000-0000-0000-00000000d205','WAIVER','2026-09-10','MUM', '[
+  ["DR","4104","4104",500,"Foreclosure charge 10010000000025"],["DR","2203","2203",90,"IGST Foreclosure charge 10010000000025"],
+  ["CR","1103","10010000000025",590,"FEE waiver C2"]]');
+SELECT pg_temp.txn('00000000-0000-0000-0000-00000000b205','00000000-0000-0000-0000-00000000aa02',5,'WAIVER','2026-09-10',590,'{00000000-0000-0000-0000-00000000d205}','{"chargeSeq":2}');
+SELECT pg_temp.check(lending.issue_fee_credit_notes('00000000-0000-0000-0000-00000000aa02') = 1, 'F4 its waiver gets a credit note');
+SELECT pg_temp.check((SELECT (c.reason, c.taxable_value, c.igst) = ('WAIVER', 500::numeric, 90::numeric)
+                        FROM lending.fee_credit_note c WHERE c.lot_id = '00000000-0000-0000-0000-00000000d205'),
+                     'F5 with the taxable value from the 4104 line');
+SELECT pg_temp.check(lending.issue_fee_invoices(NULL) = 0 AND lending.issue_fee_credit_notes(NULL) = 0, 'F6 issuing again adds nothing');
+
 \echo ALL PRODUCT COMPLETION TESTS PASSED

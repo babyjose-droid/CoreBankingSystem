@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.corebanking.calc.FeeCalculator;
+import com.corebanking.calc.Rounding;
 import com.corebanking.lending.engine.Delinquency.AssetClass;
 import com.corebanking.ledger.PostingLine;
 import com.corebanking.ledger.TransactionLot;
@@ -176,6 +177,36 @@ class LoanLifecycleTest {
         eq("0", gl.dr("1101"), "principal GL");
         eq("0", gl.dr("1102"), "interest receivable GL");
         eq("0", gl.dr("1103"), "fee receivable GL");
+        eq("1692.10", gl.cr("4104"), "the foreclosure charge is income of its own head");
+        eq("750", gl.cr("4102"), "processing fee income holds the processing fee only");
+    }
+
+    @Test
+    void foreclosure_charge_and_its_waiver_use_the_same_income_head() {
+        var post = new LoanPostings(LoanPostings.GlMap.starter(), "HO", "10010000000017", OPEN);
+        Gl gl = new Gl();
+        gl.post(List.of(post.feeCharge(FORECLOSE.compute(bd("50000"), "32", "32", Rounding.PAISE_HALF_UP), OPEN, true)));
+        eq("1000", gl.cr("4104"), "2% of 50,000");
+        eq("0", gl.cr("4102"), "nothing to processing fee income");
+        // waived with a credit note: taxable part off the same head, tax off the output tax
+        gl.post(List.of(post.feeWaiver("C1", "Foreclosure charge", bd("590"), Gst.unbundle(bd("590"), bd("18"), "32", "32"), true)));
+        eq("500", gl.cr("4104"), "taxable 500 waived");
+        eq("90", gl.cr("2201").add(gl.cr("2202")), "GST left on the half not waived");
+        // waived without a credit note (out of time): the whole amount off the same head
+        gl.post(List.of(post.waiver(Appropriation.Component.FEE, bd("590"), false, true)));
+        eq("-90", gl.cr("4104"), "income foregone, tax stays paid");
+        eq("0", gl.cr("4102"), "processing fee income untouched");
+        eq("0", gl.dr("1103"), "receivable cleared");
+
+        // a map stored before the head existed (no foreclosureIncome) posts to the starter head
+        var old = new LoanPostings.GlMap("1101", "1102", "1103", "1104", "4101", "4102", "4103", "2201", "2202", "2203",
+                "1202", "1203", "2302", "2305", "5102", "1109", "5103", null);
+        assertEquals("4104", old.foreclosureIncome());
+        // other fees are not affected by the flag's default
+        Gl other = new Gl();
+        other.post(List.of(post.feeCharge(PF.compute(bd("100000"), "32", "32", Rounding.PAISE_HALF_UP), OPEN)));
+        eq("750", other.cr("4102"), "processing fee");
+        eq("0", other.cr("4104"), "not a foreclosure charge");
     }
 
     @Test

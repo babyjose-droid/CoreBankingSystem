@@ -692,7 +692,7 @@ public final class LoanAccount {
         if (q.foreclosureFee() != null && q.foreclosureFee().total().signum() > 0) {
             charges.add(new ChargeRow("C" + (++chargeSeq), q.foreclosureFee().code(), q.foreclosureFee().name(), Component.FEE,
                     businessDate, q.foreclosureFee().total(), ZERO, ZERO));
-            lots.add(post.feeCharge(q.foreclosureFee(), businessDate));
+            lots.add(post.feeCharge(q.foreclosureFee(), businessDate, true));
         }
         // final broken-period demand: accrued interest (true-up to whole rupees) and all remaining principal
         BigDecimal trueUp = q.accruedInterest().subtract(accruedNotDemanded);
@@ -806,20 +806,22 @@ public final class LoanAccount {
             if (!c.id().equals(chargeId)) continue;
             if (amount.signum() <= 0 || amount.compareTo(c.unpaid()) > 0) throw new IllegalArgumentException("waiver must be 0 < amount <= " + c.unpaid());
             charges.set(i, new ChargeRow(c.id(), c.code(), c.name(), c.kind(), c.date(), c.amount(), c.paid(), c.waived().add(amount)));
+            boolean foreclosure = false;                   // waived from the head the charge was booked to
             if (c.kind() == Component.FEE) {
                 // a fee charged with GST: the waiver is a credit note, so the tax part comes off the output tax and only
                 // the taxable part off income - while the credit note can still be declared (CGST Act s.34(2))
                 FeeRule rule = p.fees().stream().filter(f -> f.code().equals(c.code())).findFirst().orElse(null);
+                foreclosure = rule != null && rule.event() == FeeRule.Event.PRECLOSURE;
                 if (rule != null && rule.gstRatePercent().signum() > 0 && Gst.creditNoteInTime(c.date(), businessDate)) {
                     Gst.Inclusive parts = Gst.unbundle(amount, rule.gstRatePercent(), p.supplierState(), p.recipientState());
-                    return new Result(List.of(postings(businessDate).feeWaiver(c.id(), c.name(), amount, parts)),
+                    return new Result(List.of(postings(businessDate).feeWaiver(c.id(), c.name(), amount, parts, foreclosure)),
                             "Waived " + amount + " of " + c.name() + " (credit note: taxable " + parts.taxable().toPlainString()
                                     + ", GST " + parts.tax().total().toPlainString() + ")");
                 }
             }
             boolean npa = assetClass.isNpa() && c.kind() == Component.PENAL;
             if (npa) suspense = suspense.subtract(amount.min(freeSuspense()));
-            return new Result(List.of(postings(businessDate).waiver(c.kind(), amount, npa)), "Waived " + amount + " of " + c.name());
+            return new Result(List.of(postings(businessDate).waiver(c.kind(), amount, npa, foreclosure)), "Waived " + amount + " of " + c.name());
         }
         throw new IllegalArgumentException("charge " + chargeId + " not found");
     }

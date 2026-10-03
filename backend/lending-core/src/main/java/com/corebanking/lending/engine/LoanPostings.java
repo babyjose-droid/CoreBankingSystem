@@ -18,11 +18,19 @@ public final class LoanPostings {
     public record GlMap(String principal, String interestReceivable, String feeReceivable, String penalReceivable,
                         String interestIncome, String feeIncome, String penalIncome, String cgst, String sgst, String igst,
                         String disbursementBank, String collectionBank, String excessReceipts, String interestSuspense,
-                        String provisionExpense, String provisionContra, String writeOffExpense) {
+                        String provisionExpense, String provisionContra, String writeOffExpense, String foreclosureIncome) {
+
+        /** The starter chart's head for foreclosure charges. */
+        public static final String FORECLOSURE_INCOME = "4104";
+
+        public GlMap {
+            // maps stored before the head existed (products, and the terms frozen in every open loan) do not name it
+            foreclosureIncome = foreclosureIncome == null || foreclosureIncome.isBlank() ? FORECLOSURE_INCOME : foreclosureIncome;
+        }
 
         public static GlMap starter() {
             return new GlMap("1101", "1102", "1103", "1104", "4101", "4102", "4103", "2201", "2202", "2203",
-                    "1202", "1203", "2302", "2305", "5102", "1109", "5103");
+                    "1202", "1203", "2302", "2305", "5102", "1109", "5103", FORECLOSURE_INCOME);
         }
     }
 
@@ -48,6 +56,10 @@ public final class LoanPostings {
 
     private static void cr(TransactionLot.Builder b, String branch, String gl, String account, BigDecimal amt, String text) {
         if (amt != null && amt.signum() > 0) b.line(new PostingLine(branch, gl, account, PostingLine.Side.CR, amt, "INR", text));
+    }
+
+    private String feeIncome(boolean foreclosure) {
+        return foreclosure ? gl.foreclosureIncome() : gl.feeIncome();
     }
 
     private void gst(TransactionLot.Builder b, Gst.Split g, String text) {
@@ -87,9 +99,18 @@ public final class LoanPostings {
 
     /** Fee charged to the borrower's account (not deducted): Dr fee receivable / Cr fee income / Cr GST. */
     public TransactionLot feeCharge(FeeRule.Charge c, LocalDate valueDate) {
+        return feeCharge(c, valueDate, false);
+    }
+
+    /**
+     * As {@link #feeCharge(FeeRule.Charge, LocalDate)}; a foreclosure (pre-closure) charge is income of its own
+     * head, not processing fee income. Its waiver takes the same flag, so the two stay on one head.
+     */
+    public TransactionLot feeCharge(FeeRule.Charge c, LocalDate valueDate, boolean foreclosure) {
+        String income = feeIncome(foreclosure);
         var b = lot("FEE_CHARGE", valueDate);
         dr(b, branch, gl.feeReceivable(), loanNo, c.total(), c.name());
-        cr(b, branch, gl.feeIncome(), gl.feeIncome(), c.fee(), c.name() + " " + loanNo);
+        cr(b, branch, income, income, c.fee(), c.name() + " " + loanNo);
         gst(b, c.gst(), c.name() + " " + loanNo);
         return b.build();
     }
@@ -181,6 +202,11 @@ public final class LoanPostings {
 
     /** Waiver of an unpaid charge or interest: income (or suspense for NPA) reduced, receivable cleared. */
     public TransactionLot waiver(Appropriation.Component component, BigDecimal amount, boolean npa) {
+        return waiver(component, amount, npa, false);
+    }
+
+    /** As {@link #waiver(Appropriation.Component, BigDecimal, boolean)}; {@code foreclosure}: the fee waived is a foreclosure charge. */
+    public TransactionLot waiver(Appropriation.Component component, BigDecimal amount, boolean npa, boolean foreclosure) {
         var b = lot("WAIVER", businessDate);
         String receivable = switch (component) {
             case INTEREST -> gl.interestReceivable();
@@ -191,7 +217,7 @@ public final class LoanPostings {
         String income = npa && component != Appropriation.Component.FEE ? gl.interestSuspense()
                 : switch (component) {
                     case INTEREST -> gl.interestIncome();
-                    case FEE -> gl.feeIncome();
+                    case FEE -> feeIncome(foreclosure);
                     default -> gl.penalIncome();
                 };
         dr(b, branch, income, income, amount, component + " waiver " + loanNo);
@@ -205,8 +231,14 @@ public final class LoanPostings {
      * can be issued from the ledger (V18 lending.issue_fee_credit_notes).
      */
     public TransactionLot feeWaiver(String chargeId, String feeName, BigDecimal amount, Gst.Inclusive parts) {
+        return feeWaiver(chargeId, feeName, amount, parts, false);
+    }
+
+    /** As {@link #feeWaiver(String, String, BigDecimal, Gst.Inclusive)}; {@code foreclosure}: the fee waived is a foreclosure charge. */
+    public TransactionLot feeWaiver(String chargeId, String feeName, BigDecimal amount, Gst.Inclusive parts, boolean foreclosure) {
+        String income = feeIncome(foreclosure);
         var b = lot("WAIVER", businessDate);
-        dr(b, branch, gl.feeIncome(), gl.feeIncome(), parts.taxable(), feeName + " " + loanNo);
+        dr(b, branch, income, income, parts.taxable(), feeName + " " + loanNo);
         dr(b, branch, gl.cgst(), gl.cgst(), parts.tax().cgst(), "CGST " + feeName + " " + loanNo);
         dr(b, branch, gl.sgst(), gl.sgst(), parts.tax().sgst(), "SGST " + feeName + " " + loanNo);
         dr(b, branch, gl.igst(), gl.igst(), parts.tax().igst(), "IGST " + feeName + " " + loanNo);
