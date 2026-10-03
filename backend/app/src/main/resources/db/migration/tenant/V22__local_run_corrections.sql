@@ -161,3 +161,20 @@ BEGIN
   PERFORM lending.issue_fee_credit_notes(p_loan);
   RETURN n;
 END $$;
+
+-- ---------------------------------------------------------------------------------------------------------
+-- 2. The instalment a loan pays now. loan_account.emi is the EMI as sanctioned and stays as it is (like rate);
+--    after a rate change, restructuring or part-prepayment the account showed that figure although the loan ran
+--    on another. current_emi is written by the engine on every save (LoanStore.save), as current_rate is. NULL
+--    means "as sanctioned": closed loans, and loans not saved since this migration that have no future schedule.
+-- ---------------------------------------------------------------------------------------------------------
+ALTER TABLE lending.loan_account ADD COLUMN current_emi platform.money;   -- instalment now payable (emi = as sanctioned)
+
+-- Open loans: the regular instalment of the stored future schedule, as LoanAccount.currentEmi() reads it (the row
+-- before the last: the first can carry broken-period interest and the last absorbs rounding).
+UPDATE lending.loan_account l
+   SET current_emi = (f.rows -> (CASE WHEN jsonb_array_length(f.rows) >= 2 THEN jsonb_array_length(f.rows) - 2 ELSE 0 END) ->> 'instalment')::numeric
+  FROM (SELECT id, state -> 'futureSchedule' AS rows FROM lending.loan_account
+         WHERE emi IS NOT NULL AND status IN ('ACTIVE','FROZEN') AND jsonb_typeof(state -> 'futureSchedule') = 'array') f
+ WHERE f.id = l.id AND jsonb_array_length(f.rows) >= 1
+   AND (f.rows -> (CASE WHEN jsonb_array_length(f.rows) >= 2 THEN jsonb_array_length(f.rows) - 2 ELSE 0 END) ->> 'instalment') ~ '^[0-9]+(\.[0-9]+)?$';

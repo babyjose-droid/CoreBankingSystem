@@ -4336,6 +4336,8 @@ components:
         assetClass: { $ref: '#/components/schemas/AssetClass' }
         nextDueDate: { type: [string, 'null'], format: date }
         branch: { type: string }
+        currentRate: { type: string, description: 'Rate now charged (Loan.rate is the rate as sanctioned)' }
+        currentEmi: { type: [string, 'null'], description: 'Instalment now payable, after any rate change, restructuring or part-prepayment (Loan.emi is the EMI as sanctioned); null when the loan has no equated instalment' }
     Loan:
       allOf:
         - $ref: '#/components/schemas/LoanSummary'
@@ -4344,10 +4346,10 @@ components:
             custom: { $ref: '#/components/schemas/CustomValues' }
             customerId: { type: string, format: uuid }
             productVersion: { type: integer }
-            rate: { type: string }
+            rate: { type: string, description: 'Rate as sanctioned; see currentRate' }
             tenorMonths: { type: integer }
             repaymentMethod: { type: string }
-            emi: { type: [string, 'null'] }
+            emi: { type: [string, 'null'], description: 'EMI as sanctioned; see currentEmi' }
             apr: { type: [string, 'null'] }
             openDate: { type: string, format: date }
             disbursedOn: { type: [string, 'null'], format: date }
@@ -4357,7 +4359,6 @@ components:
             kfsAcceptedAt: { type: [string, 'null'], format: date-time }
             externalRef: { type: [string, 'null'] }
             closedOn: { type: [string, 'null'], format: date }
-            currentRate: { type: string, description: Rate now charged (rate is the rate as sanctioned) }
             restructuredOn: { type: [string, 'null'], format: date }
             restructureCount: { type: integer }
             upgradeNotBefore: { type: [string, 'null'], format: date, description: 'Restructured and under monitoring: earliest end of the specified period' }

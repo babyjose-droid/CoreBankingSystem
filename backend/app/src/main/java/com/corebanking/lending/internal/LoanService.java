@@ -1557,7 +1557,9 @@ public class LoanService {
                        l.overdue_amount::text AS "overdueAmount", l.next_due_date::text AS "nextDueDate", l.dpd,
                        l.asset_class AS "assetClass", l.npa_since::text AS "npaSince", l.provision_held::text AS "provisionHeld",
                        l.kfs_accepted_at AS "kfsAcceptedAt", l.external_ref AS "externalRef", l.closed_on::text AS "closedOn",
-                       coalesce(l.current_rate, l.rate)::text AS "currentRate", l.restructured_on::text AS "restructuredOn",
+                       coalesce(l.current_rate, l.rate)::text AS "currentRate",
+                       CASE WHEN l.emi IS NOT NULL THEN coalesce(l.current_emi, l.emi)::text END AS "currentEmi",
+                       l.restructured_on::text AS "restructuredOn",
                        l.restructure_count AS "restructureCount", l.upgrade_not_before::text AS "upgradeNotBefore",
                        l.frequency, coalesce(l.disbursed_amount, 0)::text AS "disbursedAmount", l.undrawn_amount::text AS "undrawnAmount",
                        l.multiple_disbursements AS "multipleDisbursements", l.pre_emi AS "preEmi", l.top_up_allowed AS "topUpAllowed",
@@ -1595,7 +1597,9 @@ public class LoanService {
                 SELECT l.id, l.loan_no AS "loanNo", c.display_name AS "customerName", c.customer_no AS "customerNo",
                        l.product_code AS "productCode", l.status, l.sanctioned_amount::text AS amount,
                        l.principal_outstanding::text AS "principalOutstanding", l.overdue_amount::text AS "overdueAmount",
-                       l.dpd, l.asset_class AS "assetClass", l.next_due_date::text AS "nextDueDate", l.branch_code AS branch
+                       l.dpd, l.asset_class AS "assetClass", l.next_due_date::text AS "nextDueDate", l.branch_code AS branch,
+                       coalesce(l.current_rate, l.rate)::text AS "currentRate",
+                       CASE WHEN l.emi IS NOT NULL THEN coalesce(l.current_emi, l.emi)::text END AS "currentEmi"
                   FROM lending.loan_account l JOIN customer.customer c ON c.id = l.customer_id
                  WHERE l.branch_code IN (SELECT branch_code FROM platform.visible_branches(?))
                    AND (?::text IS NULL OR l.status = ?)

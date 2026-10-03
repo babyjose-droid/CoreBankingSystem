@@ -273,7 +273,8 @@ public class LoanDocumentService {
 
     private Loan loan(UUID loanId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT l.loan_no, l.customer_id, l.status, l.sanctioned_amount, coalesce(l.current_rate, l.rate) AS rate, l.tenor_months, l.emi,
+                SELECT l.loan_no, l.customer_id, l.status, l.sanctioned_amount, coalesce(l.current_rate, l.rate) AS rate, l.tenor_months,
+                       CASE WHEN l.emi IS NOT NULL THEN coalesce(l.current_emi, l.emi) END AS emi,   -- as now payable, like the rate
                        l.disbursed_on, l.first_due_date, l.next_due_date, l.closed_on, l.product_snapshot::text AS params,
                        l.state::text AS state, p.name AS product_name, b.name AS branch_name
                   FROM lending.loan_account l

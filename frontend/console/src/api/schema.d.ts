@@ -4184,15 +4184,21 @@ export interface components {
             /** Format: date */
             nextDueDate?: string | null;
             branch?: string;
+            /** @description Rate now charged (Loan.rate is the rate as sanctioned) */
+            currentRate?: string;
+            /** @description Instalment now payable, after any rate change, restructuring or part-prepayment (Loan.emi is the EMI as sanctioned); null when the loan has no equated instalment */
+            currentEmi?: string | null;
         };
         Loan: components["schemas"]["LoanSummary"] & {
             custom?: components["schemas"]["CustomValues"];
             /** Format: uuid */
             customerId?: string;
             productVersion?: number;
+            /** @description Rate as sanctioned; see currentRate */
             rate?: string;
             tenorMonths?: number;
             repaymentMethod?: string;
+            /** @description EMI as sanctioned; see currentEmi */
             emi?: string | null;
             apr?: string | null;
             /** Format: date */
@@ -4208,8 +4214,6 @@ export interface components {
             externalRef?: string | null;
             /** Format: date */
             closedOn?: string | null;
-            /** @description Rate now charged (rate is the rate as sanctioned) */
-            currentRate?: string;
             /** Format: date */
             restructuredOn?: string | null;
             restructureCount?: number;

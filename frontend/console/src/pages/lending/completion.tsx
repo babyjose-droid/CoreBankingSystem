@@ -61,7 +61,7 @@ type SimType = TransactionSimulationRequest['type'];
 
 export function WhatIfDialog({ loan, businessDate, onClose }: { loan: Loan; businessDate: string; onClose: () => void }) {
   const sim = useSimulateTransaction(loan.id!);
-  const [f, setF] = useState({ type: 'REPAYMENT' as SimType, amount: loan.emi ?? '', mode: 'REDUCE_TENURE' as 'REDUCE_EMI' | 'REDUCE_TENURE', onDate: businessDate });
+  const [f, setF] = useState({ type: 'REPAYMENT' as SimType, amount: loan.currentEmi ?? loan.emi ?? '', mode: 'REDUCE_TENURE' as 'REDUCE_EMI' | 'REDUCE_TENURE', onDate: businessDate });
   const [touched, setTouched] = useState(false);
   const needsAmount = f.type !== 'PRECLOSURE';
   const amount = moneyInput(f.amount);

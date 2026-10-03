@@ -202,7 +202,7 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
 
 // ---------------------------------------------------------------- repayment
 function RepayDialog({ loan, businessDate, onClose }: { loan: Loan; businessDate: string; onClose: () => void }) {
-  const suggested = loan.overdueAmount && isMoney(loan.overdueAmount) && !isZero(loan.overdueAmount) ? loan.overdueAmount : loan.emi ?? '';
+  const suggested = loan.overdueAmount && isMoney(loan.overdueAmount) && !isZero(loan.overdueAmount) ? loan.overdueAmount : loan.currentEmi ?? loan.emi ?? '';
   const [b, setB] = useState({ amount: suggested, valueDate: businessDate, mode: 'CASH', reference: '' });
   const [touched, setTouched] = useState(false);
   const m = useRepayLoan(loan.id!);
@@ -287,7 +287,7 @@ function PrepayDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) {
             if (err) return;
             m.mutate(
               { amount: moneyInput(amount)!, mode },
-              { onSuccess: (l) => (toast({ tone: 'success', message: `Part-prepayment recorded. ${mode === 'REDUCE_EMI' && l.emi ? `New EMI ${formatINR(l.emi)}.` : 'Tenure reduced.'}` }), onClose()) },
+              { onSuccess: (l) => (toast({ tone: 'success', message: `Part-prepayment recorded. ${mode === 'REDUCE_EMI' && (l.currentEmi ?? l.emi) ? `New EMI ${formatINR((l.currentEmi ?? l.emi)!)}.` : 'Tenure reduced.'}` }), onClose()) },
             );
           }}
         />

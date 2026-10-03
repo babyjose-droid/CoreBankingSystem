@@ -137,7 +137,7 @@ describe('restructure', () => {
     expect((await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}`)).body.restructuredOn).toBeNull();
     expect((await mockCall(server, 'admin', 'POST', `/api/v1/approvals/${a.approval.id}/approve`, {})).body).toMatchObject({ status: 'APPROVED', approvalsSoFar: 2, appliedRef: `${loan.loanNo} #1` });
     const after = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}`)).body;
-    expect(after).toMatchObject({ assetClass: 'SUBSTANDARD', restructuredOn: '2026-06-30', restructureCount: 1, dpd: 0, emi: '5099.00' });
+    expect(after).toMatchObject({ assetClass: 'SUBSTANDARD', restructuredOn: '2026-06-30', restructureCount: 1, dpd: 0, emi: '5423.00', currentEmi: '5099.00' });
     const hist = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}/amendments`)).body;
     expect(hist[0]).toMatchObject({ kind: 'RESTRUCTURE', checkedBy: 'checker, admin', differsFromProposal: false });
     const sched = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}/schedule`)).body;

@@ -5,7 +5,7 @@ import { useLoans } from '../../api/lendingHooks';
 import type { LoanStatus, LoanSummary } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { Button, Card, DateText, EmptyState, ErrorBanner, Input, MoneyText, PageHeader, Select, Spinner, StatusBadge, Table, humanize, type Column } from '../../ui';
-import { AssetClassBadge } from './common';
+import { AssetClassBadge, pct } from './common';
 
 const PAGE_SIZE = 20;
 const STATUSES: LoanStatus[] = ['SANCTIONED', 'ACTIVE', 'FROZEN', 'CLOSED', 'CANCELLED', 'WRITTEN_OFF'];
@@ -34,6 +34,8 @@ export function LoansPage() {
     { key: 'product', header: 'Product', render: (l) => <span className="mono">{l.productCode}</span> },
     { key: 'status', header: 'Status', render: (l) => <StatusBadge status={l.status} /> },
     { key: 'amount', header: 'Amount', numeric: true, render: (l) => <MoneyText value={l.amount} /> },
+    { key: 'rate', header: 'Rate', numeric: true, render: (l) => pct(l.currentRate) },
+    { key: 'emi', header: 'EMI', numeric: true, render: (l) => (l.currentEmi ? <MoneyText value={l.currentEmi} /> : <span className="muted">—</span>) },
     { key: 'outstanding', header: 'Outstanding', numeric: true, render: (l) => <MoneyText value={l.principalOutstanding} /> },
     { key: 'overdue', header: 'Overdue', numeric: true, render: (l) => <MoneyText value={l.overdueAmount} /> },
     { key: 'dpd', header: 'DPD', numeric: true, render: (l) => l.dpd ?? 0 },

@@ -163,6 +163,7 @@ export function LoanDetailPage() {
 
 function LoanSummaryStats({ loan, coolingOffEnd }: { loan: Loan; coolingOffEnd: string | null }) {
   const closed = loan.status === 'CLOSED' || loan.status === 'CANCELLED';
+  const emiNow = loan.currentEmi ?? loan.emi;   // what the loan pays now; emi is the EMI as sanctioned
   return (
     <div className="stat-grid" data-testid="loan-summary">
       <Stat label="Sanctioned amount">
@@ -190,7 +191,14 @@ function LoanSummaryStats({ loan, coolingOffEnd }: { loan: Loan; coolingOffEnd: 
           </div>
         )}
       </Stat>
-      <Stat label="EMI">{loan.emi ? <MoneyText value={loan.emi} /> : <span className="muted">—</span>}</Stat>
+      <Stat label="EMI" testId="stat-emi">
+        {emiNow ? <MoneyText value={emiNow} /> : <span className="muted">—</span>}
+        {emiNow && loan.emi && Number(emiNow) !== Number(loan.emi) && (
+          <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+            sanctioned at <MoneyText value={loan.emi} />
+          </div>
+        )}
+      </Stat>
       <Stat label="Rate / APR" testId="stat-rate">
         {pct(loan.currentRate ?? loan.rate)} / {loan.apr ? pct(loan.apr) : '—'}
         {loan.currentRate && loan.rate && Number(loan.currentRate) !== Number(loan.rate) && (

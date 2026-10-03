@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { formatINR } from '../lib/money';
 import { createMockServer, type MockServer } from '../mock/server';
 import { mockCall, renderApp } from './utils';
 
@@ -233,6 +234,15 @@ describe('loan detail and servicing', () => {
     await user.click(within(d).getByRole('button', { name: 'Record part-prepayment' }));
     expect(await screen.findByText(/Part-prepayment recorded. New EMI/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('stat-outstanding')).toHaveTextContent('₹50,000.00'));
+    // the EMI shown is the one now payable; the EMI as sanctioned is kept beside it
+    const now = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}`)).body as { emi: string; currentEmi: string };
+    expect(now.emi).toBe(loan.kfs.emi);
+    expect(Number(now.currentEmi)).toBeLessThan(Number(now.emi));
+    await waitFor(() => expect(screen.getByTestId('stat-emi')).toHaveTextContent(formatINR(now.currentEmi)));
+    expect(screen.getByTestId('stat-emi')).toHaveTextContent(`sanctioned at ${formatINR(now.emi)}`);
+    const listed = ((await mockCall(server, 'maker', 'GET', '/api/v1/loans')).body as Array<{ id: string; currentEmi: string; currentRate: string }>).find((l) => l.id === loan.id)!;
+    expect(listed.currentEmi).toBe(now.currentEmi);
+    expect(listed.currentRate).toBeDefined();
 
     await user.click(screen.getByRole('button', { name: 'Cancel (cooling-off)' }));
     const c = await screen.findByRole('dialog', { name: /cooling-off/ });

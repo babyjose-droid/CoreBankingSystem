@@ -63,7 +63,7 @@ describe('tranches, simulations and sanction change', () => {
     const s = createMockServer();
     const id = await trancheLoan(s);
     let loan = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}`)).body;
-    expect(loan).toMatchObject({ status: 'ACTIVE', amount: '1000000.00', disbursedAmount: '400000.00', undrawnAmount: '600000.00', principalOutstanding: '400000.00', emi: null, preEmi: true });
+    expect(loan).toMatchObject({ status: 'ACTIVE', amount: '1000000.00', disbursedAmount: '400000.00', undrawnAmount: '600000.00', principalOutstanding: '400000.00', currentEmi: null, preEmi: true });
     const sched = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}/schedule`)).body;
     expect(sched.future[0].principal).toBe('0.00'); // interest only until fully drawn
 

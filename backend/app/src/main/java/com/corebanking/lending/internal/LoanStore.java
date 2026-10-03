@@ -81,16 +81,22 @@ public class LoanStore {
                    SET state = ?::jsonb, status = ?, principal_outstanding = ?, overdue_amount = ?, next_due_date = ?,
                        dpd = ?, asset_class = ?, npa_since = ?, suspense = ?, provision_held = ?,
                        closed_on = CASE WHEN ? IN ('CLOSED','CANCELLED') AND closed_on IS NULL THEN ?::date ELSE closed_on END,
-                       current_rate = ?, restructured_on = ?, restructure_count = ?, upgrade_not_before = ?,
+                       current_rate = ?, current_emi = ?, restructured_on = ?, restructure_count = ?, upgrade_not_before = ?,
                        restructure_defaulted = ?, sanctioned_amount = ?, disbursed_amount = ?, undrawn_amount = ?,
                        class_floor = ?, class_floor_until = ?, version = version + 1
                  WHERE id = ?
                 """, json.write(a.snapshot()), status, a.principalOutstanding(), a.overdueAmount(asOf), a.nextDueDate(),
                 a.dpd(), a.assetClass().name(), a.npaSince(), a.suspense(), a.provisionHeld(), status, Date.valueOf(asOf),
-                a.ratePercent(), rs == null ? null : rs.restructuredOn(), rs == null ? 0 : rs.count(),
+                a.ratePercent(), currentEmi(a), rs == null ? null : rs.restructuredOn(), rs == null ? 0 : rs.count(),
                 rs == null || !rs.underMonitoring() ? null : rs.specifiedPeriodMinEnd(), rs != null && rs.defaulted(),
                 a.sanctioned(), a.disbursedAmount(), a.undrawn(), a.classFloor() == null ? null : a.classFloor().name(),
                 a.classFloorUntil(), loanId);
+    }
+
+    /** The instalment now payable; null (shown as the EMI as sanctioned) once nothing is left to demand. */
+    private static java.math.BigDecimal currentEmi(LoanAccount a) {
+        java.math.BigDecimal emi = a.currentEmi();
+        return emi == null || emi.signum() <= 0 ? null : emi;
     }
 
     /** Records a financial event with the state before it (for reversal) and the lots it posted. */

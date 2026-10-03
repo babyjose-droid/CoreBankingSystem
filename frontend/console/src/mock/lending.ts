@@ -784,6 +784,8 @@ export function summaryView(db: MockDb, loan: StoredLoan): LoanSummary {
     assetClass: st.assetClass,
     nextDueDate: open ? (st.rows[st.raised]?.dueDate ?? null) : null,
     branch: loan.branch,
+    currentRate: C.pct(st.rate),
+    currentEmi: st.emi === null ? null : C.fromPaise(st.emi),
   };
 }
 
@@ -796,7 +798,7 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     rate: C.pct(loan.rate),
     tenorMonths: loan.tenorMonths,
     repaymentMethod: loan.product.repaymentMethod,
-    emi: st.emi === null ? null : C.fromPaise(st.emi),
+    emi: loan.kfs.emi ?? null,                 // as sanctioned; currentEmi (summary) is what the loan pays now
     apr: loan.kfs.apr ?? null,
     openDate: loan.openDate,
     disbursedOn: loan.disbursedOn,
@@ -806,7 +808,6 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     kfsAcceptedAt: loan.kfsAcceptedAt,
     externalRef: loan.externalRef,
     closedOn: st.closedOn,
-    currentRate: C.pct(st.rate),
     frequency: loan.product.frequency ?? 'MONTHLY',
     disbursedAmount: C.fromPaise(st.drawn),
     undrawnAmount: C.fromPaise(Math.max(0, st.sanctioned - st.drawn)),

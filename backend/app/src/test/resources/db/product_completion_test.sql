@@ -472,4 +472,13 @@ SELECT pg_temp.check((SELECT (c.reason, c.taxable_value, c.igst) = ('WAIVER', 50
                      'F5 with the taxable value from the 4104 line');
 SELECT pg_temp.check(lending.issue_fee_invoices(NULL) = 0 AND lending.issue_fee_credit_notes(NULL) = 0, 'F6 issuing again adds nothing');
 
+-- ---------------------------------------------------------------------------------------------------------
+-- E: the instalment now payable (V22)
+-- ---------------------------------------------------------------------------------------------------------
+SELECT pg_temp.check((SELECT bool_and(current_emi IS NULL) FROM lending.loan_account), 'E1 current_emi is empty until the engine saves the loan');
+UPDATE lending.loan_account SET current_emi = 5678 WHERE id = '00000000-0000-0000-0000-00000000aa01';
+SELECT pg_temp.check((SELECT (coalesce(current_emi, emi) = 5678 AND emi IS DISTINCT FROM 5678) FROM lending.loan_account
+                       WHERE id = '00000000-0000-0000-0000-00000000aa01'),
+                     'E2 the EMI as sanctioned stays beside the instalment now payable');
+
 \echo ALL PRODUCT COMPLETION TESTS PASSED
