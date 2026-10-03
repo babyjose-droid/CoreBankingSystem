@@ -24,6 +24,15 @@ import { LoanProductFormPage } from './pages/lending/LoanProductFormPage';
 import { LoanProductsPage } from './pages/lending/LoanProductsPage';
 import { LoansPage } from './pages/lending/LoansPage';
 import { NewLoanPage } from './pages/lending/NewLoanPage';
+import { ApiClientsPage } from './pages/integrations/ApiClientsPage';
+import { CollectionsPage } from './pages/integrations/CollectionsPage';
+import { MandatesPage } from './pages/integrations/MandatesPage';
+import { MessagesPage } from './pages/integrations/MessagesPage';
+import { NachPage } from './pages/integrations/NachPage';
+import { PayoutsPage } from './pages/integrations/PayoutsPage';
+import { ProvidersPage } from './pages/integrations/ProvidersPage';
+import { SimulatorPage } from './pages/integrations/SimulatorPage';
+import { WebhooksPage } from './pages/integrations/WebhooksPage';
 import { AccountsPage } from './pages/ledger/AccountsPage';
 import { BalanceSheetPage } from './pages/ledger/BalanceSheetPage';
 import { ProfitLossPage } from './pages/ledger/ProfitLossPage';
@@ -145,6 +154,15 @@ export function AppRoutes() {
         <Route path="jobs" element={guard(P.jobView, <JobsPage />)} />
         <Route path="support-access" element={guard(P.supportAccessApprove, <SupportAccessPage />)} />
         <Route path="sessions" element={<SessionsPage />} />
+        <Route path="integrations/providers" element={guard(P.integrationView, <ProvidersPage />)} />
+        <Route path="integrations/payouts" element={guard(P.payoutView, <PayoutsPage />)} />
+        <Route path="integrations/collections" element={guard(P.collectionView, <CollectionsPage />)} />
+        <Route path="integrations/mandates" element={guard(P.mandateView, <MandatesPage />)} />
+        <Route path="integrations/nach" element={guard(P.nachAdmin, <NachPage />)} />
+        <Route path="integrations/webhooks" element={guard(P.webhookView, <WebhooksPage />)} />
+        <Route path="integrations/api-clients" element={guard(P.apiclientView, <ApiClientsPage />)} />
+        <Route path="integrations/messages" element={guard(P.messageView, <MessagesPage />)} />
+        <Route path="integrations/simulator" element={guard(P.integrationSimulate, <SimulatorPage />)} />
         <Route path="reports" element={guard(P.reportRun, <ReportsPage />)} />
         <Route path="audit" element={guard(P.auditView, <AuditPage />)} />
         <Route path="*" element={<NotFoundPage />} />

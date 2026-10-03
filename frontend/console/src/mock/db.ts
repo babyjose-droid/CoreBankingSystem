@@ -108,6 +108,7 @@ export type ApprovalPayload =
   | { kind: 'ENUMERATION'; type: string; values: StoredEnumValue[] }
   | { kind: 'TERRITORY'; places: PincodePlace[] }
   | { kind: 'AMOUNT_LIMIT'; limit: AmountLimit }
+  | { kind: 'INTEGRATION'; op: string; data: Record<string, unknown>; checkers: number; maker: string }
   | { kind: 'CUSTOM_FIELD'; field: CustomField }
   | { kind: 'PRODUCT_CUSTOM'; code: string; custom: Record<string, unknown> }
   | { kind: 'JOB_SCHEDULE'; code: string; schedule: string | null; enabled: boolean; parameters: Record<string, unknown> }
@@ -268,6 +269,8 @@ export interface StoredLoan {
   state: LoanState;
 }
 
+import type { IntegrationDb } from './integrations';
+
 export interface StoredApproval {
   approval: Approval;
   payload: ApprovalPayload;
@@ -325,6 +328,7 @@ export interface MockDb {
   jobs: Job[];
   jobRuns: JobRun[];
   supportAccess: SupportAccess[];
+  integration: IntegrationDb;
   idempotency: Map<string, { status: number; body: unknown }>;
   /** Fault injection for demos/tests: the named EOD step fails once. */
   eodFailAtStep: string | null;

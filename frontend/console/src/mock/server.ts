@@ -28,6 +28,7 @@ import { registerDocumentRoutes } from './documents';
 import { assertWithinLimit } from './limits';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
 import { applyLendingMoreApproval, registerLendingMoreRoutes } from './lendingMore';
+import { applyIntegrationApproval, registerIntegrationRoutes, rejectIntegrationApproval } from './integrations';
 import { applyPlatformMoreApproval, assertCustom, bookDeferredReceipts, maskCustom, registerPlatformMoreRoutes } from './platformMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
@@ -102,7 +103,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   }
 
   /** The backend's approval rules as the mock knows them: restructures and vouchers of ₹10 lakh or more need two checkers. */
-  function checkersRequired(entityType: string, amount: string | null): number {
+  function checkersRequired(entityType: string, amount: string | null, payload?: ApprovalPayload): number {
+    if (payload?.kind === 'INTEGRATION') return payload.checkers;
     if (entityType === 'LOAN_RESTRUCTURE' || entityType === 'LOAN_NPA_OVERRIDE') return 2;
     if (entityType === 'VOUCHER' && amount && isMoney(amount) && toUnits(amount) >= toUnits(TWO_CHECKER_VOUCHER_AMOUNT)) return 2;
     return 1;
@@ -130,7 +132,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       checkedAt: null,
       note: null,
       amount,
-      checkersRequired: checkersRequired(entityType, amount),
+      checkersRequired: checkersRequired(entityType, amount, payload),
       appliedRef: null,
       current,
       proposed,
@@ -284,7 +286,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at) && !applyIntegrationApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -315,6 +317,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       }
     }
     if (approve) applyApproval(s, user.username);
+    else rejectIntegrationApproval(db, s.payload, nowIso());
     if (approve) prior.push(user.username);
     if (approve && !s.approval.appliedRef) s.approval.appliedRef = s.approval.entityId ?? null;
     s.approval.status = approve ? 'APPROVED' : 'REJECTED';
@@ -849,6 +852,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   registerCustomerExtraRoutes(db, { on, require, propose, nowIso });
   registerDocumentRoutes(db, { on, require, nowIso });
   registerPlatformMoreRoutes(db, { on, require, propose, nowIso });
+  registerIntegrationRoutes(db, { on, require, propose, nowIso });
 
   // ---------- dispatcher ----------
   function respond(status: number, body: unknown, raw?: RawBody): Response {
@@ -891,7 +895,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         throw new HttpProblem(413, 'File too large', `The request body is ${text.length.toLocaleString('en-IN')} characters; the limit is ${MAX_BODY_CHARS.toLocaleString('en-IN')}`, {}, PROBLEM_BASE + 'payload-too-large');
       }
       let body: unknown = bytes;
-      if (text && /^text\/csv/i.test(contentType)) body = text;
+      if (text && /^text\/(csv|plain)/i.test(contentType)) body = text;
       else if (text) {
         try {
           body = JSON.parse(text);

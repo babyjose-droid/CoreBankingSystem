@@ -1,6 +1,6 @@
 import type { components, paths } from './schema';
 
-type S = components['schemas'];
+export type S = components['schemas'];
 export type { paths };
 export type Money = S['Money'];
 export type Problem = S['Problem'];

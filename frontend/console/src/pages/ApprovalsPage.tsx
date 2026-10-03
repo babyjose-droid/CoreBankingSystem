@@ -55,6 +55,11 @@ const ENTITY_TYPES = [
   'CUSTOM_FIELD',
   'LOAN_PRODUCT_CUSTOM',
   'JOB',
+  'PROVIDER_CONFIG',
+  'WEBHOOK_ENDPOINT',
+  'API_CLIENT',
+  'MESSAGE_TEMPLATE',
+  'LOAN_DISBURSEMENT_REVERSAL',
 ];
 
 export function slaClass(a: Pick<Approval, 'status' | 'ageHours'>): string | undefined {

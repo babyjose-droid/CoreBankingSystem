@@ -57,6 +57,20 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    label: 'Integrations',
+    items: [
+      { to: '/integrations/providers', label: 'Providers', perm: P.integrationView },
+      { to: '/integrations/payouts', label: 'Payouts', perm: P.payoutView },
+      { to: '/integrations/collections', label: 'Collections', perm: P.collectionView },
+      { to: '/integrations/mandates', label: 'Mandates', perm: P.mandateView },
+      { to: '/integrations/nach', label: 'NACH files', perm: P.nachAdmin },
+      { to: '/integrations/webhooks', label: 'Webhooks', perm: P.webhookView },
+      { to: '/integrations/api-clients', label: 'API clients', perm: P.apiclientView },
+      { to: '/integrations/messages', label: 'Messages', perm: P.messageView },
+      { to: '/integrations/simulator', label: 'Simulator (test only)', perm: P.integrationSimulate },
+    ],
+  },
+  {
     label: 'Platform',
     items: [
       { to: '/jobs', label: 'Jobs', perm: P.jobView },
