@@ -34,6 +34,8 @@ const ENTITY_TYPES = [
   'GL_HEAD',
   'VOUCHER',
   'TAX_RATE',
+  'BENCHMARK',
+  'BENCHMARK_RATE',
   'HOLIDAY',
   'EOD_SCHEDULE',
   'LOAN_PRODUCT',
@@ -105,6 +107,8 @@ function summaryOf(a: Approval): string {
     const hs = (p.holidays as Array<{ day: string; reason: string }> | undefined) ?? [];
     return hs.map((h) => `${h.day} ${h.reason}`).join(', ');
   }
+  if (a.entityType === 'BENCHMARK') return [p.code, p.name].filter(Boolean).join(' — ');
+  if (a.entityType === 'BENCHMARK_RATE') return `${String(p.code ?? '')} ${String(p.rate ?? '')}% from ${String(p.effectiveFrom ?? '')}`;
   if (a.entityType === 'EOD_SCHEDULE') return `Mode ${String(p.mode ?? '')}`;
   if (a.entityType.startsWith('LOAN_') && p.loanNo) return [p.loanNo, p.customer ?? p.charge ?? p.transaction ?? p.kind ?? p.reason].filter(Boolean).join(' — ');
   if (a.entityType === 'AMOUNT_LIMIT') return `${String(p.roleName ?? '')} · ${humanize(String(p.txnType ?? ''))}`;

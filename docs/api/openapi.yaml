@@ -1139,6 +1139,52 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LoanProduct' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/benchmarks:
+    get:
+      tags: [Lending]
+      operationId: listBenchmarks
+      summary: Benchmarks of floating-rate products, each with its rate history and the rate in force on the business date
+      description: Permission benchmark:view.
+      responses:
+        '200':
+          description: Ordered by code; rates newest first
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Benchmark' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Lending]
+      operationId: proposeBenchmark
+      summary: Propose a new benchmark (maker-checker)
+      description: Permission benchmark:propose. 409 when the code exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BenchmarkInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/benchmarks/{code}/rates:
+    post:
+      tags: [Lending]
+      operationId: proposeBenchmarkRate
+      summary: Propose a rate of the benchmark from an effective date (maker-checker)
+      description: >-
+        Permission benchmark:propose. The history is append-only: the effective date must be later than every rate on
+        record (409 otherwise), and a wrong rate is corrected by a later one. An approved rate is used for new bookings
+        from its effective date. It does not change a running loan: the loan becomes due for a reset on its next reset
+        date, and the reset is a RATE_CHANGE amendment (the borrower chooses between EMI and tenure).
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BenchmarkRateInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loan-product-templates:
     get:
       tags: [Lending]
@@ -4320,6 +4366,43 @@ components:
         coolingOffDays: { type: integer }
         placeOfSupply: { type: [string, 'null'] }
         schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+    Benchmark:
+      type: object
+      required: [code, name, source, external, rates]
+      properties:
+        code: { type: string, examples: ['REPO'] }
+        name: { type: string }
+        source: { type: string, description: 'Who publishes it: RBI, FBIL, the lender''s own ALCO' }
+        external: { type: boolean, description: An external benchmark in RBI's sense }
+        currentRate: { type: [string, 'null'], description: 'Rate in force on the business date; null when none is recorded yet' }
+        currentFrom: { type: [string, 'null'], format: date }
+        rates:
+          type: array
+          description: Newest first; may include a rate that takes effect after the business date
+          items: { $ref: '#/components/schemas/BenchmarkRate' }
+    BenchmarkRate:
+      type: object
+      required: [effectiveFrom, rate]
+      properties:
+        effectiveFrom: { type: string, format: date }
+        rate: { type: string, examples: ['6.5000'] }
+        recordedBy: { type: string }
+        recordedAt: { type: string, format: date-time }
+        approvalId: { type: [string, 'null'], format: uuid }
+    BenchmarkInput:
+      type: object
+      required: [code, name, source]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_]{2,20}$' }
+        name: { type: string, maxLength: 100 }
+        source: { type: string, maxLength: 100 }
+        external: { type: boolean, default: true }
+    BenchmarkRateInput:
+      type: object
+      required: [rate, effectiveFrom]
+      properties:
+        rate: { type: [number, string], description: 'Percent per annum, 0 to 100, at most four decimals' }
+        effectiveFrom: { type: string, format: date }
     LoanSummary:
       type: object
       properties:

@@ -100,6 +100,15 @@ const HOLIDAYS: Holiday[] = [
   { branchCode: null, day: '2026-07-04', reason: 'Demo holiday (mock calendar)' },
 ];
 
+/** Demo figures, not the published rates. */
+const demoRate = (rate: string, effectiveFrom: string) => ({ effectiveFrom, rate, recordedBy: 'checker', recordedAt: `${effectiveFrom}T05:30:00Z`, approvalId: null });
+const BENCHMARKS = [
+  { code: 'LENDER_PLR', name: "Lender's prime lending rate", source: 'Lender (ALCO)', external: false, rates: [] },
+  { code: 'MCLR1Y', name: 'One-year MCLR', source: 'Lender (ALCO)', external: false, rates: [demoRate('8.7500', '2026-04-01')] },
+  { code: 'REPO', name: 'RBI policy repo rate', source: 'Reserve Bank of India', external: true, rates: [demoRate('6.5000', '2026-04-01'), demoRate('6.7500', '2025-10-01')] },
+  { code: 'TBILL91', name: '91-day Treasury bill yield', source: 'FBIL', external: true, rates: [demoRate('6.8000', '2026-04-01')] },
+];
+
 const TAX_RATES: TaxRate[] = [
   { code: 'GST18', taxType: 'GST', ratePercent: '18.00', effectiveFrom: '2017-07-01', effectiveTo: null },
   { code: 'GST12', taxType: 'GST', ratePercent: '12.00', effectiveFrom: '2017-07-01', effectiveTo: null },
@@ -214,6 +223,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     branches: BRANCHES.map((b) => ({ ...b })),
     holidays: HOLIDAYS.map((h) => ({ ...h })),
     taxRates: TAX_RATES.map((t) => ({ ...t })),
+    benchmarks: BENCHMARKS.map((b) => ({ ...b, rates: b.rates.map((r) => ({ ...r })) })),
     glHeads: COA.map(([code, name, category, parentCode, posting]) => ({ code, name, category, parentCode, posting, status: 'ACTIVE' as const })),
     customers: [],
     customerSeq: 0,

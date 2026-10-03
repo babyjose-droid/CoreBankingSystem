@@ -899,6 +899,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Benchmarks of floating-rate products, each with its rate history and the rate in force on the business date
+         * @description Permission benchmark:view.
+         */
+        get: operations["listBenchmarks"];
+        put?: never;
+        /**
+         * Propose a new benchmark (maker-checker)
+         * @description Permission benchmark:propose. 409 when the code exists.
+         */
+        post: operations["proposeBenchmark"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/{code}/rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose a rate of the benchmark from an effective date (maker-checker)
+         * @description Permission benchmark:propose. The history is append-only: the effective date must be later than every rate on record (409 otherwise), and a wrong rate is corrected by a later one. An approved rate is used for new bookings from its effective date. It does not change a running loan: the loan becomes due for a reset on its next reset date, and the reset is a RATE_CHANGE amendment (the borrower chooses between EMI and tenure).
+         */
+        post: operations["proposeBenchmarkRate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loan-product-templates": {
         parameters: {
             query?: never;
@@ -4170,6 +4214,45 @@ export interface components {
             placeOfSupply?: string | null;
             schedule?: components["schemas"]["ScheduleRow"][];
         };
+        Benchmark: {
+            /** @example REPO */
+            code: string;
+            name: string;
+            /** @description Who publishes it: RBI, FBIL, the lender's own ALCO */
+            source: string;
+            /** @description An external benchmark in RBI's sense */
+            external: boolean;
+            /** @description Rate in force on the business date; null when none is recorded yet */
+            currentRate?: string | null;
+            /** Format: date */
+            currentFrom?: string | null;
+            /** @description Newest first; may include a rate that takes effect after the business date */
+            rates: components["schemas"]["BenchmarkRate"][];
+        };
+        BenchmarkRate: {
+            /** Format: date */
+            effectiveFrom: string;
+            /** @example 6.5000 */
+            rate: string;
+            recordedBy?: string;
+            /** Format: date-time */
+            recordedAt?: string;
+            /** Format: uuid */
+            approvalId?: string | null;
+        };
+        BenchmarkInput: {
+            code: string;
+            name: string;
+            source: string;
+            /** @default true */
+            external: boolean;
+        };
+        BenchmarkRateInput: {
+            /** @description Percent per annum, 0 to 100, at most four decimals */
+            rate: number | string;
+            /** Format: date */
+            effectiveFrom: string;
+        };
         LoanSummary: {
             /** Format: uuid */
             id?: string;
@@ -6479,6 +6562,63 @@ export interface operations {
                     "application/json": components["schemas"]["LoanProduct"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listBenchmarks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered by code; rates newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Benchmark"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeBenchmark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeBenchmarkRate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkRateInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
             default: components["responses"]["Problem"];
         };
     };

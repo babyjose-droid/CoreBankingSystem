@@ -9,6 +9,10 @@ export type BusinessDay = S['BusinessDay'];
 export type Branch = S['Branch'];
 export type Holiday = S['Holiday'];
 export type TaxRate = S['TaxRate'];
+export type Benchmark = S['Benchmark'];
+export type BenchmarkRate = S['BenchmarkRate'];
+export type BenchmarkInput = S['BenchmarkInput'];
+export type BenchmarkRateInput = S['BenchmarkRateInput'];
 export type EnumValue = S['EnumValue'];
 export type ApprovalStatus = S['ApprovalStatus'];
 /** The generated type has `current`/`proposed` as empty objects; widen them for the diff view. */

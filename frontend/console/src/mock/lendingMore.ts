@@ -133,6 +133,23 @@ function sanctionPreview(db: MockDb, loan: StoredLoan, body: unknown): SanctionC
 
 // ------------------------------------------------------------------ approvals
 export function applyLendingMoreApproval(db: MockDb, p: ApprovalPayload, approval: { id?: string; entityId?: string | null; maker?: string; appliedRef?: string | null }, checker: string, at: string, prior: string[] = []): boolean {
+  if (p.kind === 'BENCHMARK') {
+    if (db.benchmarks.some((b) => b.code === p.benchmark.code)) throw conflict('Benchmark exists', `Benchmark ${p.benchmark.code} already exists`);
+    db.benchmarks.push({ ...p.benchmark, rates: [] });
+    db.benchmarks.sort((a, b) => a.code.localeCompare(b.code));
+    approval.entityId = p.benchmark.code;
+    approval.appliedRef = p.benchmark.code;
+    return true;
+  }
+  if (p.kind === 'BENCHMARK_RATE') {
+    const b = db.benchmarks.find((x) => x.code === p.code);
+    if (!b) throw notFound('Benchmark');
+    // re-checked at approval: another rate may have been approved since the proposal
+    if (b.rates[0] && p.effectiveFrom <= b.rates[0].effectiveFrom) throw conflict('Rate history is not rewritten', `A rate of ${p.code} is already recorded from ${b.rates[0].effectiveFrom}; a new rate takes effect on a later date`);
+    b.rates.unshift({ effectiveFrom: p.effectiveFrom, rate: Number(p.rate).toFixed(4), recordedBy: approval.maker ?? checker, recordedAt: at, approvalId: approval.id ?? null });
+    approval.appliedRef = `${p.code}@${p.effectiveFrom}`;
+    return true;
+  }
   if (p.kind !== 'LOAN_SANCTION_CHANGE' && p.kind !== 'LOAN_NPA_OVERRIDE') return false;
   const loan = db.loans.find((l) => l.id === p.loanId);
   if (!loan) throw notFound('Loan');
@@ -171,6 +188,41 @@ export function registerLendingMoreRoutes(db: MockDb, r: LendingMoreRouter) {
     return loan;
   };
   const pendingOf = (loan: StoredLoan, kinds: ApprovalPayload['kind'][]) => db.approvals.find((s) => s.approval.status === 'PENDING' && kinds.includes(s.payload.kind) && 'loanId' in s.payload && s.payload.loanId === loan.id);
+
+  on('GET', '/api/v1/benchmarks', ({ user }) => {
+    require(user, P.benchmarkView);
+    return ok(db.benchmarks.map((b) => {
+      const current = b.rates.find((x) => x.effectiveFrom <= db.businessDate);
+      return { ...b, currentRate: current?.rate ?? null, currentFrom: current?.effectiveFrom ?? null };
+    }));
+  });
+  on('POST', '/api/v1/benchmarks', ({ user, body }) => {
+    require(user, P.benchmarkPropose);
+    const b = (body ?? {}) as { code?: string; name?: string; source?: string; external?: boolean };
+    const errors: Array<{ field: string; message: string }> = [];
+    if (!/^[A-Z0-9_]{2,20}$/.test(b.code ?? '')) errors.push({ field: 'code', message: 'Code is 2 to 20 capital letters, digits or underscores' });
+    if (!b.name?.trim() || b.name.length > 100) errors.push({ field: 'name', message: 'Name is required (at most 100 characters)' });
+    if (!b.source?.trim() || b.source.length > 100) errors.push({ field: 'source', message: 'Source is required: who publishes the benchmark' });
+    if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
+    if (db.benchmarks.some((x) => x.code === b.code)) throw conflict('Benchmark exists', `Benchmark ${b.code} already exists`);
+    const benchmark = { code: b.code!, name: b.name!.trim(), source: b.source!.trim(), external: b.external ?? true };
+    return propose(user, 'BENCHMARK', 'CREATE', { kind: 'BENCHMARK', benchmark }, { ...benchmark }, null, benchmark.code);
+  });
+  on('POST', '/api/v1/benchmarks/{code}/rates', ({ user, params, body }) => {
+    require(user, P.benchmarkPropose);
+    const b = db.benchmarks.find((x) => x.code === params.code);
+    if (!b) throw notFound('Benchmark');
+    const r = (body ?? {}) as { rate?: string | number; effectiveFrom?: string };
+    const rate = String(r.rate ?? '');
+    const errors: Array<{ field: string; message: string }> = [];
+    if (!/^\d{1,3}(\.\d{1,4})?$/.test(rate) || Number(rate) > 100) errors.push({ field: 'rate', message: 'Rate is a percentage from 0 to 100 with at most four decimals' });
+    if (!ISO_DATE.test(r.effectiveFrom ?? '')) errors.push({ field: 'effectiveFrom', message: 'Effective from is required' });
+    if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
+    const last = b.rates[0] ?? null;
+    if (last && r.effectiveFrom! <= last.effectiveFrom) throw conflict('Rate history is not rewritten', `A rate of ${b.code} is already recorded from ${last.effectiveFrom}; a new rate takes effect on a later date`);
+    return propose(user, 'BENCHMARK_RATE', 'CREATE', { kind: 'BENCHMARK_RATE', code: b.code, rate, effectiveFrom: r.effectiveFrom! }, { code: b.code, rate, effectiveFrom: r.effectiveFrom },
+      last ? { effectiveFrom: last.effectiveFrom, rate: last.rate } : null, `${b.code}@${r.effectiveFrom}`);
+  });
 
   on('GET', '/api/v1/loan-product-templates', ({ user }) => {
     require(user, P.productView);

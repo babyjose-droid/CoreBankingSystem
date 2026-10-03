@@ -33,6 +33,7 @@ import type {
   Staff,
   State,
   TaxRate,
+  BenchmarkRate,
   Voucher,
   VoucherInput,
 } from '../api/types';
@@ -89,6 +90,8 @@ export type ApprovalPayload =
   | { kind: 'BRANCH'; branch: Branch }
   | { kind: 'HOLIDAY'; holidays: Holiday[] }
   | { kind: 'TAX_RATE'; rate: TaxRate }
+  | { kind: 'BENCHMARK'; benchmark: { code: string; name: string; source: string; external: boolean } }
+  | { kind: 'BENCHMARK_RATE'; code: string; rate: string; effectiveFrom: string }
   | { kind: 'GL_HEAD'; head: GlHead }
   | { kind: 'CUSTOMER'; input: CustomerInput }
   | { kind: 'VOUCHER'; input: VoucherInput }
@@ -296,6 +299,8 @@ export interface MockDb {
   branches: Branch[];
   holidays: Holiday[];
   taxRates: TaxRate[];
+  /** Benchmarks of floating-rate products with their rate history (newest first). */
+  benchmarks: Array<{ code: string; name: string; source: string; external: boolean; rates: BenchmarkRate[] }>;
   glHeads: GlHead[];
   customers: StoredCustomer[];
   customerSeq: number;

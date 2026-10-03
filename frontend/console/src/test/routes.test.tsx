@@ -20,6 +20,7 @@ const ROUTES: Array<[string, RegExp]> = [
   ['/masters/branches', /^Branches$/],
   ['/masters/holidays', /^Holidays$/],
   ['/masters/tax-rates', /^Tax rates$/],
+  ['/masters/benchmarks', /^Benchmark rates$/],
   ['/loans', /^Loans$/],
   ['/loans/new', /^New loan$/],
   ['/loan-products', /^Loan products$/],

@@ -21,6 +21,9 @@ import type {
   Me,
   StatementRow,
   TaxRate,
+  Benchmark,
+  BenchmarkInput,
+  BenchmarkRateInput,
   TrialBalanceRow,
   VerifyResult,
   Voucher,
@@ -165,6 +168,31 @@ export function useProposeTaxRate() {
   const after = useAfterProposal();
   return useMutation({
     mutationFn: (t: TaxRate) => unwrap<Approval>(api.POST('/api/v1/tax-rates', { body: t }) as never),
+    onSuccess: after,
+  });
+}
+
+// ---------- benchmark rates ----------
+export function useBenchmarks() {
+  const api = useApiClient();
+  return useQuery({ queryKey: ['benchmarks'], queryFn: () => unwrap<Benchmark[]>(api.GET('/api/v1/benchmarks')) });
+}
+
+export function useProposeBenchmark() {
+  const api = useApiClient();
+  const after = useAfterProposal();
+  return useMutation({
+    mutationFn: (b: BenchmarkInput) => unwrap<Approval>(api.POST('/api/v1/benchmarks', { body: b }) as never),
+    onSuccess: after,
+  });
+}
+
+export function useProposeBenchmarkRate() {
+  const api = useApiClient();
+  const after = useAfterProposal();
+  return useMutation({
+    mutationFn: ({ code, ...body }: BenchmarkRateInput & { code: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/benchmarks/{code}/rates', { params: { path: { code } }, body }) as never),
     onSuccess: after,
   });
 }

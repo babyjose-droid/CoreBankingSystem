@@ -35,8 +35,11 @@ const isTranche = (e: StoredLoanEvent) => e.type === 'DISBURSEMENT' && (e.data.t
 const isReplayed = (e: StoredLoanEvent) => FINANCIAL.has(e.type) || IRREVERSIBLE.has(e.type) || isTranche(e);
 const blocksReversal = (e: StoredLoanEvent) => IRREVERSIBLE.has(e.type) || isTranche(e);
 const BLOCKED = () => conflict('Cannot be reversed', 'A restructure, tranche draw, sanction change or NPA override happened since; these cannot be reversed, so nothing before them can be either');
-/** Mock benchmark rates (% p.a.) for floating products. */
-export const BENCHMARKS: Record<string, number> = { REPO: 6.5, MCLR1Y: 8.75, TBILL91: 6.8 };
+/** The benchmark's rate (% p.a.) in force on `date`, or undefined when the benchmark is unknown or has no rate yet. */
+export function benchmarkRate(db: MockDb, code: string, date: string): number | undefined {
+  const r = db.benchmarks.find((b) => b.code === code)?.rates.find((x) => x.effectiveFrom <= date);
+  return r ? Number(r.rate) : undefined;
+}
 const PENAL_NOTE = 'Penal charges apply only on overdue amounts, are not added to the interest rate and are not compounded.';
 
 // ------------------------------------------------------------------ seed products
@@ -255,9 +258,10 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
       }
     } else if (rateIn === null) {
       const table = product.interestTableCode ? RATE_TABLES[product.interestTableCode] : undefined;
-      if (product.benchmarkCode && BENCHMARKS[product.benchmarkCode] !== undefined) {
-        rate = Math.round((BENCHMARKS[product.benchmarkCode] + C.num(product.spread ?? 0)) * 100) / 100;
-        rateExplanation = `${product.benchmarkCode} ${BENCHMARKS[product.benchmarkCode]}% + spread ${C.num(product.spread ?? 0)}%; reset every ${product.resetFrequencyMonths ?? 12} months`;
+      const benchmark = product.benchmarkCode ? benchmarkRate(db, product.benchmarkCode, a.disbursalDate || db.businessDate) : undefined;
+      if (product.benchmarkCode && benchmark !== undefined) {
+        rate = Math.round((benchmark + C.num(product.spread ?? 0)) * 100) / 100;
+        rateExplanation = `${product.benchmarkCode} ${benchmark}% + spread ${C.num(product.spread ?? 0)}%; reset every ${product.resetFrequencyMonths ?? 12} months`;
       } else if (!table) {
         if (opts.draft) {
           rate = C.num(product.minRate);
@@ -450,7 +454,7 @@ export function previewLoan(db: MockDb, a: LoanApplication): LoanKfs {
 
 /** Sample loan on a draft product (nothing is stored): smallest amount, shortest tenor, lowest rate by default. */
 export function previewProduct(db: MockDb, body: Record<string, unknown>): LoanKfs & { sampleSchedule?: boolean } {
-  const draft = validateProduct({ code: 'DRAFT', ...(body?.product as object), status: 'DRAFT' } as LoanProduct);
+  const draft = validateProduct({ code: 'DRAFT', ...(body?.product as object), status: 'DRAFT' } as LoanProduct, db.benchmarks.map((b) => b.code));
   const has = (k: string) => body[k] !== undefined && body[k] !== null && body[k] !== '';
   const r = resolve(db, {
     productCode: 'DRAFT', customerId: '',
@@ -1095,7 +1099,7 @@ export function lendingDayEnd(db: MockDb): number {
 }
 
 // ------------------------------------------------------------------ product validation
-export function validateProduct(p: LoanProduct): LoanProduct {
+export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProduct {
   const errors: FieldProblem[] = [];
   if (!p || typeof p !== 'object') throw bad('Body required');
   const n = (v: unknown) => (v === null || v === undefined || v === '' ? NaN : Number(v));
@@ -1119,7 +1123,7 @@ export function validateProduct(p: LoanProduct): LoanProduct {
   if (p.topUpAllowed && !trancheMethod) errors.push({ field: 'topUpAllowed', message: 'Top-up needs an equated, fixed-principal or bullet product on the daily-reducing basis' });
   if (p.preEmi && !(p.multipleDisbursements && method === 'EQUATED')) errors.push({ field: 'preEmi', message: 'Pre-EMI needs an equated product with multiple disbursements' });
   if (p.benchmarkCode) {
-    if (BENCHMARKS[p.benchmarkCode] === undefined) errors.push({ field: 'benchmarkCode', message: `Unknown benchmark ${p.benchmarkCode}` });
+    if (!benchmarks.includes(p.benchmarkCode)) errors.push({ field: 'benchmarkCode', message: `Unknown benchmark ${p.benchmarkCode}` });
     if (p.rateType !== 'FLOATING') errors.push({ field: 'rateType', message: 'A benchmark needs rate type FLOATING' });
     if (Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'A benchmark needs a spread' });
     if (!Number.isInteger(p.resetFrequencyMonths) || (p.resetFrequencyMonths ?? 0) < 1 || (p.resetFrequencyMonths ?? 0) > 60) errors.push({ field: 'resetFrequencyMonths', message: 'Reset frequency must be 1 to 60 months' });
@@ -1281,7 +1285,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   });
   on('POST', '/api/v1/loan-products', ({ user, body }) => {
     require(user, P.productPropose);
-    const product = validateProduct(body as LoanProduct);
+    const product = validateProduct(body as LoanProduct, db.benchmarks.map((b) => b.code));
     if (hasPending('LOAN_PRODUCT', (p) => p.kind === 'LOAN_PRODUCT' && p.product.code === product.code)) {
       throw conflict('Change already pending', `Product ${product.code} already has a pending change`);
     }

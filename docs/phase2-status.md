@@ -549,7 +549,7 @@ Stories: US-038 (templates), US-039 / US-054 (repayment methods, rate bases, sch
 
 ### Not yet built in P2-6
 - Reference methods 3, 9, 10, 11, 15, 18 and rate bases 6, 9, 10 (tables above).
-- Benchmark rates: no endpoint to record a rate (table, approval rule and view exist), and no day-end job that proposes the reset. A reset is a manual `RATE_CHANGE` amendment.
+- Benchmark rates: recorded through `GET/POST /api/v1/benchmarks` and `POST /api/v1/benchmarks/{code}/rates` (maker-checker, append-only history; console: Masters → Benchmark rates). A new rate is used for bookings from its effective date. **Still open:** nothing acts on `lending.rate_reset_due` — no API or report lists the loans due for a reset, no day-end job proposes the reset, and `next_rate_reset` is not moved forward after a reset. A reset is a manual `RATE_CHANGE` amendment per loan.
 - Amendments, restructures and `REDUCE_TENURE` prepayment apply to monthly equated loans on the daily-reducing basis only. Other methods take part-prepayment with `REDUCE_EMI`; structured and differing-interval loans take none.
 - Tranches and top-up: equated, fixed-principal and bullet products on the daily-reducing basis only; not step or structured loans.
 - Sanction change of a loan that is not yet disbursed.

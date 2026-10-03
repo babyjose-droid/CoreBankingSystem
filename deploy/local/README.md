@@ -48,7 +48,9 @@ simulator set-up, because the compose file enables the `SIMULATOR` provider
 (`COREBANKING_INTEGRATION_PROVIDERS`): the simulator as the ACTIVE provider for PAYOUT, COLLECTION, MANDATE, SMS
 and EMAIL (with a random `webhookSecret`, stored encrypted, so `POST /api/v1/integrations/simulator/callbacks`
 works), the tenant properties `nach.sponsor-bank-code` and `nach.utility-code`, and English SMS templates for
-`LOAN_DISBURSED` and `PAYMENT_RECEIVED`. Nothing that is already configured is changed; these rows are written
+`LOAN_DISBURSED` and `PAYMENT_RECEIVED`. It also records one rate for the `REPO` benchmark (6.00% from
+01-Apr-2026 — demo data, not the Reserve Bank's rate) while that benchmark has none, so the floating-rate product
+template can book a loan. Nothing that is already configured is changed; these rows are written
 without maker-checker, which is why this exists only behind the local bootstrap flag.
 
 ```bash
