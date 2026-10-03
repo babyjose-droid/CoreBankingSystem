@@ -107,8 +107,8 @@ class LendingController {
 
     @GetMapping("/loans/{id}/transactions")
     @PreAuthorize("hasAuthority('loan:view')")
-    List<Map<String, Object>> transactions(@PathVariable UUID id) {
-        return loans.transactions(visible(id));
+    List<Map<String, Object>> transactions(@PathVariable UUID id, @RequestParam(defaultValue = "false") boolean dayEnd) {
+        return loans.transactions(visible(id), dayEnd);
     }
 
     @GetMapping("/loans/{id}/parties")

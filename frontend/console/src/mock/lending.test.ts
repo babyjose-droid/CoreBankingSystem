@@ -25,6 +25,16 @@ describe('lending mock API', () => {
     expect(band.body.errors).toEqual([{ field: 'rate', message: 'Rate must be within the product band 12% to 24%' }]);
   });
 
+  it('lists day-end entries only with dayEnd=true', async () => {
+    const { server, loan } = setup('Deepak');
+    const plain = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}/transactions`)).body as Array<{ type: string }>;
+    expect(plain.some((t) => t.type === 'EOD')).toBe(false);
+    const all = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}/transactions?dayEnd=true`)).body as Array<{ type: string; businessDate: string }>;
+    expect(all.filter((t) => t.type === 'EOD').length).toBeGreaterThan(0);
+    expect(all.filter((t) => t.type !== 'EOD')).toHaveLength(plain.length);
+    expect(all.map((t) => t.businessDate)).toEqual([...all.map((t) => t.businessDate)].sort().reverse());
+  });
+
   it('reverses a repayment (and later ones) only after approval, replaying the loan', async () => {
     const { server, loan } = setup('Deepak');
     const repaid = await mockCall(server, 'maker', 'POST', `/api/v1/loans/${loan.id}/repayments`, { amount: '10954.00' });

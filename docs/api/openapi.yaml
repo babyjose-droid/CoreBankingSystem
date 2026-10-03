@@ -1258,8 +1258,10 @@ paths:
     get:
       tags: [Lending]
       operationId: getLoanTransactions
-      summary: Financial transactions (newest first); day-end accruals are not listed
-      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      summary: Financial transactions (newest first); day-end entries only on request
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: dayEnd, in: query, description: 'Also list the day-end entries (type EOD: interest accrual, demands raised, penal charges)', schema: { type: boolean, default: false } }
       responses:
         '200':
           description: OK
@@ -4408,7 +4410,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         seq: { type: integer }
-        type: { type: string, examples: [DISBURSEMENT, REPAYMENT, PREPAYMENT, PRECLOSURE, CANCELLATION, FEE_CHARGE, WAIVER, REVERSAL, FREEZE, AMENDMENT, RESTRUCTURE] }
+        type: { type: string, description: 'EOD (a day-end entry) is listed only with dayEnd=true', examples: [DISBURSEMENT, REPAYMENT, PREPAYMENT, PRECLOSURE, CANCELLATION, FEE_CHARGE, WAIVER, REVERSAL, FREEZE, AMENDMENT, RESTRUCTURE, EOD] }
         valueDate: { type: string, format: date }
         businessDate: { type: string, format: date }
         amount: { type: [string, 'null'] }

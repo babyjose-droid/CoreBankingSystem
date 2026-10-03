@@ -6,7 +6,7 @@ import type { AssetClass, Loan, LoanCharge, LoanDemand, LoanTxn } from '../../ap
 import { P, hasPermission } from '../../auth/permissions';
 import { addDays } from '../../lib/dates';
 import { isZero, subtractMoney, addMoney } from '../../lib/money';
-import { Badge, Banner, Button, Card, DateText, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, Tabs, humanize } from '../../ui';
+import { Badge, Banner, Button, Card, Checkbox, DateText, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, Tabs, humanize } from '../../ui';
 import { AssetClassBadge, Stat, assetClassLabel, pct } from './common';
 import { KfsView, ScheduleTable } from './KfsView';
 import { CustomFieldValues, useCustomDefs } from '../custom/CustomFields';
@@ -311,12 +311,16 @@ function ScheduleTab({ loan, canWaive, onWaive }: { loan: Loan; canWaive: boolea
 }
 
 function TransactionsTab({ loan, canReverse, onReverse }: { loan: Loan; canReverse: boolean; onReverse: (t: LoanTxn) => void }) {
-  const q = useLoanTransactions(loan.id);
-  if (q.isLoading) return <Spinner />;
+  const [dayEnd, setDayEnd] = useState(false);
+  const q = useLoanTransactions(loan.id, dayEnd);
   if (q.error) return <ErrorBanner error={q.error} />;
   const rows = q.data ?? [];
   return (
     <Card flush>
+      <div style={{ padding: '8px 16px' }}>
+        <Checkbox label="Show day-end entries" checked={dayEnd} onChange={(e) => setDayEnd(e.target.checked)} />
+      </div>
+      {q.isLoading ? <Spinner /> : null}
       <Table
         caption="Loan transactions"
         captionHidden

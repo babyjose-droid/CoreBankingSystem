@@ -1650,13 +1650,14 @@ public class LoanService {
         return m;
     }
 
-    public List<Map<String, Object>> transactions(UUID id) {
+    /** Newest first. Day-end rows (accrual, demands, penal charges: type EOD) are many, so only on request. */
+    public List<Map<String, Object>> transactions(UUID id, boolean dayEnd) {
         return jdbc.queryForList("""
                 SELECT id, seq, txn_type AS type, value_date::text AS "valueDate", business_date::text AS "businessDate",
                        amount::text AS amount, summary, reversed_by AS "reversedBy", reverses, created_by AS "createdBy",
                        created_at AS "createdAt"
-                  FROM lending.loan_txn WHERE loan_id = ? AND txn_type <> 'EOD' ORDER BY seq DESC
-                """, id);
+                  FROM lending.loan_txn WHERE loan_id = ? AND (? OR txn_type <> 'EOD') ORDER BY seq DESC
+                """, id, dayEnd);
     }
 
     public Map<String, Object> kfsOf(UUID id) {

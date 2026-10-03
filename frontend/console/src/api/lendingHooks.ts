@@ -89,11 +89,12 @@ export function useLoanSchedule(id: string | undefined) {
   });
 }
 
-export function useLoanTransactions(id: string | undefined) {
+/** `dayEnd`: also the day-end entries (type EOD), which the list leaves out by default. */
+export function useLoanTransactions(id: string | undefined, dayEnd = false) {
   const api = useApiClient();
   return useQuery({
-    queryKey: ['loan', id, 'transactions'],
-    queryFn: () => unwrap<LoanTxn[]>(api.GET('/api/v1/loans/{id}/transactions', { params: { path: { id: id! } } })),
+    queryKey: ['loan', id, 'transactions', { dayEnd }],
+    queryFn: () => unwrap<LoanTxn[]>(api.GET('/api/v1/loans/{id}/transactions', { params: { path: { id: id! }, query: dayEnd ? { dayEnd: true } : {} } })),
     enabled: !!id,
   });
 }

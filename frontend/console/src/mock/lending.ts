@@ -872,6 +872,28 @@ function txnView(e: StoredLoanEvent): LoanTxn {
   };
 }
 
+/**
+ * Day-end entries (type EOD). The mock keeps no day-end rows: it derives one per demand raised, numbered after the
+ * loan's own transactions (the backend numbers them in the loan's sequence as they happen).
+ */
+function dayEndTxns(loan: StoredLoan): LoanTxn[] {
+  if (!loan.disbursedOn) return [];
+  const base = loan.events.reduce((m, x) => Math.max(m, x.seq), 0);
+  return loan.state.demands.map((d) => ({
+    id: `eod-${loan.id}-${d.no}`,
+    seq: base + d.no,
+    type: 'EOD',
+    valueDate: d.dueDate,
+    businessDate: d.dueDate,
+    amount: null,
+    summary: `Day end: instalment ${d.no} demanded (${inr(d.principalDue + d.interestDue)})`,
+    reversedBy: null,
+    reverses: null,
+    createdBy: 'system',
+    createdAt: `${d.dueDate}T18:30:00.000Z`,
+  }));
+}
+
 const txnLabel = (e: StoredLoanEvent) => `#${e.seq} ${e.type}${e.amount !== null ? ` ${inr(e.amount)}` : ''} on ${formatDate(e.valueDate)}`;
 
 // ------------------------------------------------------------------ mutations
@@ -1313,9 +1335,13 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     require(user, P.loanView);
     return ok(scheduleView(findLoan(params.id)));
   });
-  on('GET', '/api/v1/loans/{id}/transactions', ({ user, params }) => {
+  on('GET', '/api/v1/loans/{id}/transactions', ({ user, params, url }) => {
     require(user, P.loanView);
-    return ok([...findLoan(params.id).events].sort((a, b) => b.seq - a.seq).map(txnView));
+    const loan = findLoan(params.id);
+    const txns = [...loan.events].sort((a, b) => b.seq - a.seq).map(txnView);
+    if (url.searchParams.get('dayEnd') !== 'true') return ok(txns);
+    // newest first; a day-end entry comes after the transactions of its own day
+    return ok([...txns, ...dayEndTxns(loan)].sort((a, b) => (a.businessDate === b.businessDate ? (b.seq ?? 0) - (a.seq ?? 0) : a.businessDate! < b.businessDate! ? 1 : -1)));
   });
   on('GET', '/api/v1/loans/{id}/parties', ({ user, params }) => {
     require(user, P.loanView);

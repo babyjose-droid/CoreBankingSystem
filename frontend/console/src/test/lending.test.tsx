@@ -182,6 +182,27 @@ describe('loan detail and servicing', () => {
     expect(within(txns).getAllByRole('button', { name: /Reverse transaction/ }).length).toBeGreaterThan(0);
   });
 
+  it('lists day-end entries only when asked', async () => {
+    const user = userEvent.setup();
+    const server = createMockServer();
+    const loan = loanByCustomer(server, 'Deepak');
+    renderApp({ user: 'maker', route: `/loans/${loan.id}`, server });
+    await user.click(await screen.findByRole('tab', { name: 'Transactions' }));
+    const box = await screen.findByRole('checkbox', { name: 'Show day-end entries' });
+    expect(box).not.toBeChecked();
+    const txns = await screen.findByRole('table', { name: 'Loan transactions' });
+    expect(within(txns).queryByText(/^Day end:/)).not.toBeInTheDocument();
+
+    await user.click(box);
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Loan transactions' })).getAllByText(/^Day end: instalment \d+ demanded/).length).toBeGreaterThan(0));
+    // a day-end entry is not a transaction a user can reverse
+    const eod = within(screen.getByRole('table', { name: 'Loan transactions' })).getAllByText(/^Day end:/)[0].closest('tr')!;
+    expect(within(eod).queryByRole('button', { name: /Reverse transaction/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Show day-end entries' }));
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Loan transactions' })).queryByText(/^Day end:/)).not.toBeInTheDocument());
+  });
+
   it('pre-closes a loan for exactly the quoted amount', async () => {
     const user = userEvent.setup();
     const server = createMockServer();

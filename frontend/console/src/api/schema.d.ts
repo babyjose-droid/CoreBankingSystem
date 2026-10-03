@@ -1015,7 +1015,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Financial transactions (newest first); day-end accruals are not listed */
+        /** Financial transactions (newest first); day-end entries only on request */
         get: operations["getLoanTransactions"];
         put?: never;
         post?: never;
@@ -4270,6 +4270,7 @@ export interface components {
             id?: string;
             seq?: number;
             /**
+             * @description EOD (a day-end entry) is listed only with dayEnd=true
              * @example DISBURSEMENT
              * @example REPAYMENT
              * @example PREPAYMENT
@@ -4281,6 +4282,7 @@ export interface components {
              * @example FREEZE
              * @example AMENDMENT
              * @example RESTRUCTURE
+             * @example EOD
              */
             type?: string;
             /** Format: date */
@@ -6644,7 +6646,10 @@ export interface operations {
     };
     getLoanTransactions: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also list the day-end entries (type EOD: interest accrual, demands raised, penal charges) */
+                dayEnd?: boolean;
+            };
             header?: never;
             path: {
                 id: components["parameters"]["Id"];
