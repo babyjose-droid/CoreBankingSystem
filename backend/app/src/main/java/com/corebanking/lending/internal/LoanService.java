@@ -1712,7 +1712,6 @@ public class LoanService {
         }
     }
 
-    @Service
     /**
      * Not private: the applier holds the Spring proxy of this service, and a private method called on a proxy runs
      * on the proxy object itself, whose fields are not set.
@@ -1721,6 +1720,7 @@ public class LoanService {
         apply(loanId, "WAIVER", amount, null, (a, bd) -> a.waiveCharge(chargeId, amount, bd));
     }
 
+    @Service
     static class WaiverApplier implements ApprovalApplier {
         private final LoanService loans;
 

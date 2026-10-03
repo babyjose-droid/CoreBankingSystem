@@ -1,6 +1,7 @@
 package com.corebanking.integration.internal;
 
 import com.corebanking.platform.Json;
+import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -74,7 +75,7 @@ class OutboxRelay implements IntegrationTask {
     }
 
     private void recordFailure(long id, RuntimeException e) {
-        String error = e.getClass().getSimpleName();
+        String error = describe(e);
         jdbc.update("""
                 UPDATE platform.outbox
                    SET relay_attempts = relay_attempts + 1, relay_error = ?,
@@ -82,5 +83,20 @@ class OutboxRelay implements IntegrationTask {
                  WHERE id = ? AND published_at IS NULL
                 """, error, MAX_ATTEMPTS, id);
         log.error("outbox event {} could not be relayed ({}); it is skipped after {} attempts", id, error, MAX_ATTEMPTS);
+    }
+
+    /**
+     * The exception class and, when a database error is underneath, its SQLState ("BadSqlGrammarException 42883") —
+     * enough to tell a typing mistake from a lock timeout. Never the message: it can quote the statement and its data.
+     */
+    static String describe(Throwable e) {
+        String name = e.getClass().getSimpleName();
+        Throwable t = e;
+        for (int depth = 0; t != null && depth < 20; depth++, t = t.getCause()) {
+            if (t instanceof SQLException sql && sql.getSQLState() != null && sql.getSQLState().matches("[0-9A-Z]{5}")) {
+                return name + " " + sql.getSQLState();
+            }
+        }
+        return name;
     }
 }
