@@ -9,13 +9,20 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
  * RFC 9457 errors. Business-rule violations raised by database triggers (SQLSTATE 23xxx, 42501) become 409 with
- * the trigger's message, which is written for users. Anything unexpected is 500 with no internal detail.
+ * the trigger's message, which is written for users. A request that cannot be bound (a required parameter left
+ * out, a value of the wrong type, an unreadable body, an unsupported Content-Type) names what is wrong without
+ * repeating the value sent. Anything unexpected is 500 with no internal detail.
  */
 @RestControllerAdvice
 class ProblemHandler {
@@ -49,6 +56,52 @@ class ProblemHandler {
         p.setProperty("errors", e.getBindingResult().getFieldErrors().stream()
                 .map(f -> Map.of("field", f.getField(), "message", String.valueOf(f.getDefaultMessage()))).toList());
         return p;
+    }
+
+    // ---- requests that never reach a controller: say what is wrong, never repeat what was sent ----------------
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    ProblemDetail missingParameter(MissingServletRequestParameterException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "query parameter '" + e.getParameterName() + "' is required");
+    }
+
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    ProblemDetail missingHeader(MissingRequestHeaderException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "header '" + e.getHeaderName() + "' is required");
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ProblemDetail wrongType(MethodArgumentTypeMismatchException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "'" + e.getName() + "' must be " + expected(e.getRequiredType()));
+    }
+
+    /** What a parameter of the type looks like, in the contract's words (the Java type name means nothing to a caller). */
+    static String expected(Class<?> type) {
+        if (type == null) return "a valid value";
+        if (type == java.time.LocalDate.class) return "a date (YYYY-MM-DD)";
+        if (type == java.util.UUID.class) return "a UUID";
+        if (type == boolean.class || type == Boolean.class) return "true or false";
+        if (type == int.class || type == Integer.class || type == long.class || type == Long.class) return "a whole number";
+        if (type == java.math.BigDecimal.class) return "a number";
+        if (type.isEnum()) {
+            return "one of " + java.util.Arrays.stream(type.getEnumConstants()).map(String::valueOf).toList();
+        }
+        return "a valid value";
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ProblemDetail unreadable(HttpMessageNotReadableException e) {
+        // the parser's message quotes the body, so it is not passed on
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                "the request body is missing or cannot be read: send it as documented for this operation (for JSON, well-formed and with values of the documented types)");
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    ProblemDetail mediaType(HttpMediaTypeNotSupportedException e) {
+        java.util.List<String> supported = e.getSupportedMediaTypes().stream().map(String::valueOf).sorted().toList();
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNSUPPORTED_MEDIA_TYPE, supported.isEmpty()
+                ? "the Content-Type of the request is not supported for this operation"
+                : "the Content-Type of the request is not supported for this operation; send " + String.join(" or ", supported));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
