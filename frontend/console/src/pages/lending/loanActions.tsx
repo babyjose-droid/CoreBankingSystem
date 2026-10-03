@@ -5,6 +5,7 @@ import {
   useCancellationQuote,
   useChargeLoanFee,
   useDisburseLoan,
+  useSimulateDisbursement,
   useFreezeLoan,
   useLoanProduct,
   usePrecloseLoan,
@@ -16,11 +17,13 @@ import {
 } from '../../api/lendingHooks';
 import type { Loan, LoanCharge, LoanTxn } from '../../api/types';
 import { formatDate, ISO_DATE } from '../../lib/dates';
-import { formatINR, isMoney, isZero } from '../../lib/money';
+import { addMoney, formatINR, isMoney, isZero } from '../../lib/money';
 import { IFSC_PATTERN } from '../../lib/mask';
-import { Banner, Button, Dialog, ErrorBanner, Input, MoneyText, Select, Spinner, Textarea, humanize, useToast } from '../../ui';
+import { Badge, Banner, Button, Card, Dialog, ErrorBanner, Input, MoneyText, Select, Spinner, Textarea, humanize, useToast } from '../../ui';
 import { useProposalToast } from '../proposal';
 import { moneyInput } from './common';
+import { NpaOverrideDialog, NpaReleaseDialog, SanctionChangeDialog, WhatIfDialog } from './completion';
+import { ScheduleTable } from './KfsView';
 import { AmendDialog, RestructureDialog } from './restructuring';
 
 export type LoanAction =
@@ -34,6 +37,11 @@ export type LoanAction =
   | { kind: 'unfreeze' }
   | { kind: 'kfs' }
   | { kind: 'amend' }
+  | { kind: 'tranche' }
+  | { kind: 'whatif' }
+  | { kind: 'sanction' }
+  | { kind: 'npa' }
+  | { kind: 'npaRelease' }
   | { kind: 'restructure' }
   | { kind: 'waive'; charge: LoanCharge }
   | { kind: 'reverse'; txn: LoanTxn };
@@ -41,7 +49,16 @@ export type LoanAction =
 export function LoanActionDialog({ action, loan, businessDate, onClose }: { action: LoanAction; loan: Loan; businessDate: string; onClose: () => void }) {
   switch (action.kind) {
     case 'disburse':
+    case 'tranche':
       return <DisburseDialog loan={loan} onClose={onClose} />;
+    case 'whatif':
+      return <WhatIfDialog loan={loan} businessDate={businessDate} onClose={onClose} />;
+    case 'sanction':
+      return <SanctionChangeDialog loan={loan} onClose={onClose} />;
+    case 'npa':
+      return <NpaOverrideDialog loan={loan} businessDate={businessDate} onClose={onClose} />;
+    case 'npaRelease':
+      return <NpaReleaseDialog loan={loan} onClose={onClose} />;
     case 'repay':
       return <RepayDialog loan={loan} businessDate={businessDate} onClose={onClose} />;
     case 'prepay':
@@ -86,9 +103,15 @@ const amountError = (v: string) => {
 
 // ---------------------------------------------------------------- disbursement
 function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) {
-  const [b, setB] = useState({ mode: 'IMPS', beneficiaryName: loan.customerName ?? '', beneficiaryAccount: '', ifsc: '' });
+  const tranche = !!loan.disbursedOn;
+  const undrawn = loan.undrawnAmount && isMoney(loan.undrawnAmount) && !isZero(loan.undrawnAmount) ? loan.undrawnAmount : loan.amount ?? '';
+  // Part of the amount can be drawn only on a product with multiple disbursements.
+  const partAllowed = !!loan.multipleDisbursements;
+  const [b, setB] = useState({ mode: 'IMPS', beneficiaryName: loan.customerName ?? '', beneficiaryAccount: '', ifsc: '', amount: undrawn });
   const [touched, setTouched] = useState(false);
   const m = useDisburseLoan(loan.id!);
+  const sim = useSimulateDisbursement(loan.id!);
+  const amount = moneyInput(b.amount);
   const proposal = useProposalToast();
   const toast = useToast();
   const cash = b.mode === 'CASH';
@@ -96,13 +119,15 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
     beneficiaryName: !cash && !b.beneficiaryName.trim() ? 'Required' : null,
     beneficiaryAccount: !cash && !/^\d{6,18}$/.test(b.beneficiaryAccount) ? '6-18 digits' : null,
     ifsc: !cash && !IFSC_PATTERN.test(b.ifsc) ? 'IFSC looks like HDFC0001234' : null,
+    amount: partAllowed ? (amountError(b.amount) ?? (amount && Number(amount) > Number(undrawn) ? `At most ${formatINR(undrawn)} is undrawn` : null)) : null,
   };
   const valid = Object.values(errs).every((e) => !e);
   return (
     <Dialog
       open
       onClose={onClose}
-      title={`Disburse loan ${loan.loanNo}`}
+      wide={!!sim.data}
+      title={tranche ? `Draw a tranche on ${loan.loanNo}` : `Disburse loan ${loan.loanNo}`}
       footer={
         <Footer
           onClose={onClose}
@@ -111,9 +136,9 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
           onSubmit={() => {
             setTouched(true);
             if (!valid) return;
-            m.mutate(cash ? { mode: b.mode } : { mode: b.mode, beneficiaryName: b.beneficiaryName.trim(), beneficiaryAccount: b.beneficiaryAccount, ifsc: b.ifsc }, {
+            m.mutate({ ...(partAllowed && amount ? { amount } : {}), ...(cash ? { mode: b.mode } : { mode: b.mode, beneficiaryName: b.beneficiaryName.trim(), beneficiaryAccount: b.beneficiaryAccount, ifsc: b.ifsc }) }, {
               onSuccess: (r) => {
-                if (r.kind === 'pending') proposal(r.approval, 'Disbursement');
+                if (r.kind === 'pending') proposal(r.approval, tranche ? 'Tranche' : 'Disbursement');
                 else toast({ tone: 'success', message: `Loan ${r.loan.loanNo} disbursed.` });
                 onClose();
               },
@@ -124,9 +149,16 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
     >
       <div className="stack">
         <p className="muted" style={{ margin: 0 }}>
-          Disburses <MoneyText value={loan.amount} /> (net of deducted fees) on the business date. A checker approves before money moves.
+          {tranche ? (
+            <>Undrawn: <MoneyText value={undrawn} />. Interest runs on the tranche from today.</>
+          ) : (
+            <>Disburses <MoneyText value={partAllowed ? (amount ?? undrawn) : loan.amount} /> (net of deducted fees) on the business date.</>
+          )}{' '}
+          A checker approves before money moves.
         </p>
+        {tranche && <Banner tone="warn">A tranche draw cannot be reversed, and no earlier transaction can be reversed after it.</Banner>}
         <div className="form-grid">
+          {partAllowed && <Input label="Amount to disburse" required numeric value={b.amount} onChange={(e) => (setB({ ...b, amount: e.target.value }), sim.reset())} hint={`Up to ${formatINR(undrawn)}; the rest stays undrawn`} error={touched ? errs.amount : null} />}
           <Select label="Mode" value={b.mode} onChange={(e) => setB({ ...b, mode: e.target.value })} options={['IMPS', 'NEFT', 'CASH'].map((x) => ({ value: x, label: x }))} />
           {!cash && (
             <>
@@ -136,7 +168,33 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
             </>
           )}
         </div>
-        <ErrorBanner error={m.error} />
+        <div>
+          <Button size="sm" loading={sim.isPending} onClick={() => sim.mutate(partAllowed && amount ? amount : null)}>
+            Simulate
+          </Button>
+        </div>
+        <ErrorBanner error={m.error ?? sim.error} />
+        {sim.data && (
+          <div className="stack" data-testid="disbursement-simulation">
+            <dl className="kv">
+              <dt>Tranche</dt>
+              <dd>#{sim.data.trancheNo}</dd>
+              <dt>Fees deducted</dt>
+              <dd><MoneyText value={(sim.data.deductedFees ?? []).reduce((x, f) => addMoney(x, f.total ?? '0'), '0')} /></dd>
+              <dt>Net payout</dt>
+              <dd data-testid="sim-net"><MoneyText value={sim.data.netDisbursal} /></dd>
+              <dt>Undrawn afterwards</dt>
+              <dd><MoneyText value={sim.data.undrawnAfter} /></dd>
+              <dt>Instalment afterwards</dt>
+              <dd>
+                <MoneyText value={sim.data.instalmentAfter} /> {sim.data.preEmi && <Badge tone="info">Pre-EMI: interest only until fully drawn</Badge>}
+              </dd>
+            </dl>
+            <Card title="Schedule after this disbursement" flush headingLevel={3}>
+              <ScheduleTable rows={sim.data.schedule ?? []} caption="Schedule after this disbursement" />
+            </Card>
+          </div>
+        )}
       </div>
     </Dialog>
   );

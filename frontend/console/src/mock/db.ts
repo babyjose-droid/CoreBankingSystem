@@ -87,7 +87,9 @@ export type ApprovalPayload =
   | { kind: 'VOUCHER_REVERSAL'; voucherId: string; reason: string }
   | { kind: 'EOD_SCHEDULE'; schedule: EodSchedule }
   | { kind: 'LOAN_PRODUCT'; product: LoanProduct }
-  | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null }
+  | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null; amount?: number | null }
+  | { kind: 'LOAN_SANCTION_CHANGE'; loanId: string; newAmount: number; reason: string; figures: Record<string, unknown> }
+  | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
   | { kind: 'LOAN_REVERSAL'; loanId: string; txnId: string; reason: string }
   | { kind: 'LOAN_AMENDMENT'; loanId: string; request: AmendmentRequest; figures: Record<string, unknown> }
@@ -141,6 +143,15 @@ export interface StoredLoanEvent {
     reason?: string;
     amendment?: AmendmentRequest;
     restructure?: RestructureTerms;
+    /** DISBURSEMENT: 1 for the first, 2… for later tranches. */
+    tranche?: number;
+    feesDeducted?: number;
+    netDisbursed?: number;
+    /** SANCTION_CHANGE: the new sanctioned amount (paise). */
+    newAmount?: number;
+    /** NPA_OVERRIDE */
+    overrideClass?: AssetClass;
+    until?: string;
   };
 }
 
@@ -189,6 +200,13 @@ export interface LoanState {
   rate: number;
   /** Interest capitalised into principal by restructures (paise). */
   capitalised: number;
+  /** Sanctioned amount now (paise): top-ups and reductions change it. */
+  sanctioned: number;
+  /** Disbursed so far (paise). */
+  drawn: number;
+  /** Manual NPA override: the class the account is held at or below, until a date. */
+  overrideClass: AssetClass | null;
+  overrideUntil: string | null;
   restructuredOn: string | null;
   restructureCount: number;
   upgradeNotBefore: string | null;
@@ -214,6 +232,13 @@ export interface StoredLoan {
   moratoriumMonths: number;
   /** Paise; 0 when none. */
   balloon: number;
+  /** STRUCTURED: principal (paise) by due date. */
+  plan: Array<{ dueDate: string; principal: number }> | null;
+  /** Rate as agreed (for a FLAT product the flat rate; `rate` is then the equivalent reducing rate). */
+  statedRate: number;
+  /** Amount of the first disbursement (paise); null until disbursed. */
+  firstDrawn: number | null;
+  custom: Record<string, unknown>;
   firstDueDate: string | null;
   openDate: string;
   externalRef: string | null;

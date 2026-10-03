@@ -78,3 +78,20 @@ export function moneyInput(v: string): string | null {
   const s = v.replace(/[,\s₹]/g, '');
   return s && isMoney(s) ? s : null;
 }
+
+export const FREQUENCY_LABEL: Record<NonNullable<LoanProduct['frequency']>, string> = {
+  DAILY: 'Daily', WEEKLY: 'Weekly', FORTNIGHTLY: 'Fortnightly', MONTHLY: 'Monthly', QUARTERLY: 'Quarterly', HALF_YEARLY: 'Half-yearly', YEARLY: 'Yearly',
+};
+
+export const INTEREST_BASIS_LABEL: Record<NonNullable<LoanProduct['interestBasis']>, string> = {
+  DAILY_REDUCING: 'Reducing balance, actual days',
+  PERIODIC_REDUCING: 'Reducing balance, per period',
+  FLAT: 'Flat rate',
+};
+
+export const BPI_LABEL: Record<NonNullable<LoanProduct['bpiMode']>, string> = {
+  NONE: 'Absorbed by the first instalment',
+  ADD_TO_FIRST_INSTALMENT: 'Added to the first instalment',
+  SEPARATE_DEMAND: 'Demanded on its own',
+  DEDUCT_AT_DISBURSAL: 'Deducted from the payout',
+};

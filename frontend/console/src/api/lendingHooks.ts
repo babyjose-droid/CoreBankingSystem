@@ -2,6 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApiClient } from './useApiClient';
 import { unwrap, unwrapWithStatus } from './client';
 import type {
+  DisbursementSimulation,
+  LoanProductTemplate,
+  LoanTranches,
+  NpaOverrideRequest,
+  SanctionChangePreview,
+  SanctionChangeRequest,
+  TransactionSimulation,
+  TransactionSimulationRequest,
   AmendmentPreview,
   AmendmentRequest,
   Approval,
@@ -169,7 +177,7 @@ export function useDisburseLoan(id: string) {
   const api = useApiClient();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (b: { beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string }): Promise<DisburseResult> => {
+    mutationFn: async (b: { amount?: Money; beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string }): Promise<DisburseResult> => {
       const { data, status } = await unwrapWithStatus<Loan | Approval>(api.POST('/api/v1/loans/{id}/disbursement', { params: { path: { id } }, body: b }) as never);
       return status === 202 ? { kind: 'pending', approval: data as Approval } : { kind: 'disbursed', loan: data as Loan };
     },
@@ -301,6 +309,78 @@ export function useProposeRestructure(id: string) {
   const after = useAfterLoanProposal();
   return useMutation({
     mutationFn: (terms: RestructureTerms) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/restructure', { params: { path: { id } }, body: terms }) as never),
+    onSuccess: after,
+  });
+}
+
+// ---------- lending completion: templates, product preview, tranches, simulations, sanction change, NPA override ----------
+export function useLoanProductTemplates(enabled = true) {
+  const api = useApiClient();
+  return useQuery({ queryKey: ['loan-product-templates'], queryFn: () => unwrap<LoanProductTemplate[]>(api.GET('/api/v1/loan-product-templates')), staleTime: Infinity, enabled });
+}
+
+export type ProductPreview = LoanKfs & { sampleSchedule?: boolean };
+export function usePreviewLoanProduct() {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: (b: { product: Record<string, unknown>; amount?: string | null; tenorMonths?: number | null; rate?: string | null }) =>
+      unwrap<ProductPreview>(api.POST('/api/v1/loan-products/preview', { body: b as never })),
+  });
+}
+
+export function useLoanTranches(id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['loan', id, 'tranches'],
+    queryFn: () => unwrap<LoanTranches>(api.GET('/api/v1/loans/{id}/tranches', { params: { path: { id: id! } } })),
+    enabled: !!id,
+  });
+}
+
+export function useSimulateDisbursement(id: string) {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: (amount: Money | null) => unwrap<DisbursementSimulation>(api.POST('/api/v1/loans/{id}/simulations/disbursement', { params: { path: { id } }, body: { amount } })),
+  });
+}
+
+export function useSimulateTransaction(id: string) {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: (req: TransactionSimulationRequest) => unwrap<TransactionSimulation>(api.POST('/api/v1/loans/{id}/simulations/transaction', { params: { path: { id } }, body: req })),
+  });
+}
+
+export function usePreviewSanctionChange(id: string) {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: (req: SanctionChangeRequest) => unwrap<SanctionChangePreview>(api.POST('/api/v1/loans/{id}/sanction-change/preview', { params: { path: { id } }, body: req })),
+  });
+}
+
+export function useProposeSanctionChange(id: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: (req: SanctionChangeRequest) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/sanction-change', { params: { path: { id } }, body: req }) as never),
+    onSuccess: after,
+  });
+}
+
+export function useProposeNpaOverride(id: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: (req: NpaOverrideRequest) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/npa-override', { params: { path: { id } }, body: req }) as never),
+    onSuccess: after,
+  });
+}
+
+export function useProposeNpaRelease(id: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: (reason: string) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/npa-override/release', { params: { path: { id } }, body: { reason } }) as never),
     onSuccess: after,
   });
 }

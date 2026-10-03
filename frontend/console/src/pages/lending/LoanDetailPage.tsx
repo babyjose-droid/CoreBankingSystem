@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useBusinessDay, useMe } from '../../api/hooks';
 import { useLoan, useLoanAmendments, useLoanKfs, useLoanSchedule, useLoanTransactions } from '../../api/lendingHooks';
-import type { Loan, LoanCharge, LoanDemand, LoanTxn } from '../../api/types';
+import type { AssetClass, Loan, LoanCharge, LoanDemand, LoanTxn } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { addDays } from '../../lib/dates';
 import { isZero, subtractMoney, addMoney } from '../../lib/money';
 import { Badge, Banner, Button, Card, DateText, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, Tabs, humanize } from '../../ui';
-import { AssetClassBadge, Stat, pct } from './common';
+import { AssetClassBadge, Stat, assetClassLabel, pct } from './common';
 import { KfsView, ScheduleTable } from './KfsView';
+import { TranchesTab } from './completion';
 import { LoanDocumentsTab, LoanPartiesTab } from './LoanDocuments';
 import { LoanActionDialog, type LoanAction } from './loanActions';
 import { amendmentKindLabel } from './restructuring';
@@ -34,6 +35,7 @@ export function LoanDetailPage() {
   const coolingOffEnd = loan.disbursedOn && kfs.data?.coolingOffDays !== undefined ? addDays(loan.disbursedOn, kfs.data.coolingOffDays) : null;
   const inCoolingOff = active && !!coolingOffEnd && businessDate <= coolingOffEnd;
 
+  const hasUndrawn = !!loan.disbursedOn && !!loan.undrawnAmount && !isZero(loan.undrawnAmount);
   const actions: Array<{ key: LoanAction['kind']; label: string; show: boolean; disabled?: string; variant?: 'primary' | 'danger' }> = [
     { key: 'disburse', label: 'Disburse', show: can(P.loanDisburse) && status === 'SANCTIONED', disabled: loan.kfsAcceptedAt ? undefined : 'Record the borrower’s KFS acceptance first', variant: 'primary' },
     { key: 'repay', label: 'Repayment', show: can(P.loanRepay) && active, variant: 'primary' },
@@ -42,6 +44,11 @@ export function LoanDetailPage() {
     { key: 'cancel', label: 'Cancel (cooling-off)', show: can(P.loanRepay) && inCoolingOff },
     { key: 'charge', label: 'Charge fee', show: can(P.loanRepay) && active },
     { key: 'amend', label: 'Amend', show: can(P.loanAmend) && active && loan.repaymentMethod === 'EQUATED' },
+    { key: 'tranche', label: 'Draw tranche', show: can(P.loanDisburse) && active && hasUndrawn, variant: 'primary' },
+    { key: 'whatif', label: 'What if…', show: active },
+    { key: 'sanction', label: 'Change sanction', show: can(P.loanAmend) && active },
+    { key: 'npa', label: 'Mark NPA', show: can(P.loanClassify) && (active || status === 'FROZEN') && !loan.overrideClass, variant: 'danger' },
+    { key: 'npaRelease', label: 'Release NPA mark', show: can(P.loanClassify) && !!loan.overrideClass },
     { key: 'restructure', label: 'Restructure', show: can(P.loanRestructure) && active && loan.repaymentMethod === 'EQUATED', variant: 'danger' },
     { key: 'freeze', label: 'Freeze', show: can(P.loanAdmin) && active, variant: 'danger' },
     { key: 'unfreeze', label: 'Unfreeze', show: can(P.loanAdmin) && status === 'FROZEN' },
@@ -85,6 +92,13 @@ export function LoanDetailPage() {
           </span>
         </Banner>
       )}
+      {loan.overrideClass && (
+        <Banner tone="warn">
+          <span>
+            Manual NPA mark: held at {assetClassLabel(loan.overrideClass as AssetClass)} or worse until <DateText value={loan.overrideUntil} />. It cannot be released while dues are unpaid.
+          </span>
+        </Banner>
+      )}
       {status === 'SANCTIONED' && !loan.kfsAcceptedAt && <Banner tone="info">Sanctioned. The borrower has not accepted the Key Fact Statement yet; record it on the KFS tab before disbursement.</Banner>}
       {visible.length > 0 && (
         <div className="action-bar" role="toolbar" aria-label="Loan actions">
@@ -103,6 +117,7 @@ export function LoanDetailPage() {
         tabs={[
           { id: 'schedule', label: 'Schedule', content: <ScheduleTab loan={loan} canWaive={can(P.loanWaive)} onWaive={(charge) => setAction({ kind: 'waive', charge })} /> },
           { id: 'transactions', label: 'Transactions', content: <TransactionsTab loan={loan} canReverse={can(P.loanReverse)} onReverse={(txn) => setAction({ kind: 'reverse', txn })} /> },
+          { id: 'tranches', label: 'Tranches', content: <TranchesTab loan={loan} /> },
           { id: 'amendments', label: 'Amendments', content: <AmendmentsTab loan={loan} /> },
           { id: 'parties', label: 'Parties', content: <LoanPartiesTab loan={loan} /> },
           { id: 'documents', label: 'Documents', content: <LoanDocumentsTab loan={loan} businessDate={businessDate} /> },
@@ -146,6 +161,11 @@ function LoanSummaryStats({ loan, coolingOffEnd }: { loan: Loan; coolingOffEnd: 
       <Stat label="Sanctioned amount">
         <MoneyText value={loan.amount} />
       </Stat>
+      {loan.undrawnAmount && !isZero(loan.undrawnAmount) && !!loan.disbursedOn && (
+        <Stat label="Undrawn" testId="stat-undrawn">
+          <MoneyText value={loan.undrawnAmount} />
+        </Stat>
+      )}
       <Stat label="Principal outstanding" testId="stat-outstanding">
         <MoneyText value={loan.principalOutstanding} />
       </Stat>

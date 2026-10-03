@@ -89,6 +89,7 @@ function cleanRequest(req: AmendmentRequest): AmendmentRequest {
   if (req.remainingInstalments !== undefined && req.remainingInstalments !== null && (req.kind === 'TENURE_CHANGE' || req.rateOption === 'CHANGE_BOTH')) keep.remainingInstalments = req.remainingInstalments;
   if (req.newEmi !== undefined && req.newEmi !== null && req.newEmi !== '' && (req.kind === 'EMI_CHANGE' || (req.rateOption === 'CHANGE_BOTH' && keep.remainingInstalments === undefined))) keep.newEmi = String(req.newEmi);
   if (req.kind === 'DUE_DAY_CHANGE') keep.newDueDay = req.newDueDay;
+  if (req.kind === 'MATURITY_CHANGE') keep.newMaturityDate = req.newMaturityDate;
   if (req.reason) keep.reason = req.reason.trim();
   return keep as AmendmentRequest;
 }

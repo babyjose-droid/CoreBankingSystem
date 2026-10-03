@@ -27,6 +27,7 @@ import { applyExtrasApproval, registerCustomerExtraRoutes } from './customerExtr
 import { registerDocumentRoutes } from './documents';
 import { assertWithinLimit } from './limits';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
+import { applyLendingMoreApproval, registerLendingMoreRoutes } from './lendingMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
 
@@ -101,7 +102,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
 
   /** The backend's approval rules as the mock knows them: restructures and vouchers of ₹10 lakh or more need two checkers. */
   function checkersRequired(entityType: string, amount: string | null): number {
-    if (entityType === 'LOAN_RESTRUCTURE') return 2;
+    if (entityType === 'LOAN_RESTRUCTURE' || entityType === 'LOAN_NPA_OVERRIDE') return 2;
     if (entityType === 'VOUCHER' && amount && isMoney(amount) && toUnits(amount) >= toUnits(TWO_CHECKER_VOUCHER_AMOUNT)) return 2;
     return 1;
   }
@@ -279,7 +280,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -834,6 +835,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
 
   registerLendingRoutes(db, { on, require, propose, nowIso });
   registerPlatformRoutes(db, { on, require, propose });
+  registerLendingMoreRoutes(db, { on, require, propose, nowIso });
   registerAmendmentRoutes(db, { on, require, propose, nowIso });
   registerCustomerExtraRoutes(db, { on, require, propose, nowIso });
   registerDocumentRoutes(db, { on, require, nowIso });

@@ -11,9 +11,9 @@ const navLinks = async () => {
 };
 
 describe('permission-aware navigation', () => {
-  it('ops sees only Home, Ledger and Day-end', async () => {
+  it('ops sees only Home, Loans, Ledger and Day-end', async () => {
     renderApp({ user: 'ops' });
-    expect(await navLinks()).toEqual(['Home', 'Chart of accounts', 'Vouchers', 'Trial balance', 'P&L', 'Balance sheet', 'Runs', 'Schedule']);
+    expect(await navLinks()).toEqual(['Home', 'Loans', 'Chart of accounts', 'Vouchers', 'Trial balance', 'P&L', 'Balance sheet', 'Runs', 'Schedule']);
     expect(screen.queryByTestId('approvals-badge')).not.toBeInTheDocument();
   });
 

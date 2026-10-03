@@ -28,6 +28,14 @@ const inr = (p: number) => formatINR(C.fromPaise(p));
 const FINANCIAL = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION', 'AMENDMENT', 'RESTRUCTURE']);
 /** A restructure cannot be reversed (and blocks reversing anything before it). */
 const REVERSIBLE = new Set([...FINANCIAL].filter((t) => t !== 'RESTRUCTURE'));
+/** Replayed, but never reversible; and nothing before one of these can be reversed either. */
+const IRREVERSIBLE = new Set(['RESTRUCTURE', 'SANCTION_CHANGE', 'NPA_OVERRIDE', 'NPA_RELEASE']);
+const isTranche = (e: StoredLoanEvent) => e.type === 'DISBURSEMENT' && (e.data.tranche ?? 1) > 1;
+const isReplayed = (e: StoredLoanEvent) => FINANCIAL.has(e.type) || IRREVERSIBLE.has(e.type) || isTranche(e);
+const blocksReversal = (e: StoredLoanEvent) => IRREVERSIBLE.has(e.type) || isTranche(e);
+const BLOCKED = () => conflict('Cannot be reversed', 'A restructure, tranche draw, sanction change or NPA override happened since; these cannot be reversed, so nothing before them can be either');
+/** Mock benchmark rates (% p.a.) for floating products. */
+export const BENCHMARKS: Record<string, number> = { REPO: 6.5, MCLR1Y: 8.75, TBILL91: 6.8 };
 const PENAL_NOTE = 'Penal charges apply only on overdue amounts, are not added to the interest rate and are not compounded.';
 
 // ------------------------------------------------------------------ seed products
@@ -53,6 +61,7 @@ export const SEED_PRODUCTS: LoanProduct[] = [
     maxMoratoriumMonths: 3,
     coolingOffDays: 3,
     secured: false,
+    topUpAllowed: true,
     appropriationSequence: APPROPRIATION,
     appropriationMode: 'BY_DEMAND',
     prepaymentMode: 'REDUCE_TENURE',
@@ -95,6 +104,14 @@ export const SEED_PRODUCTS: LoanProduct[] = [
   },
 ];
 
+SEED_PRODUCTS.push({
+  ...LOAN_PRODUCT_DEFAULTS,
+  code: 'HL01', name: 'Home Loan (tranches)', repaymentMethod: 'EQUATED', frequency: 'MONTHLY', minAmount: '500000.00', maxAmount: '20000000.00', minTenorMonths: 60, maxTenorMonths: 360,
+  minRate: '7.00', maxRate: '14.00', interestTableCode: null, rateType: 'FLOATING', benchmarkCode: 'REPO', spread: '2.75', resetFrequencyMonths: 3, dayCount: 'ACTUAL_365', rounding: 'RUPEE_HALF_UP',
+  penalChargeRate: '24.00', maxMoratoriumMonths: 0, coolingOffDays: 3, secured: true, multipleDisbursements: true, preEmi: true, topUpAllowed: true,
+  appropriationSequence: APPROPRIATION, appropriationMode: 'BY_DEMAND', prepaymentMode: 'REDUCE_TENURE', status: 'ACTIVE', version: 1, fees: [],
+});
+
 /** Mock interest tables (absolute slab rates by amount). */
 const RATE_TABLES: Record<string, Array<{ upTo: number; rate: number }>> = {
   PL1: [
@@ -105,7 +122,7 @@ const RATE_TABLES: Record<string, Array<{ upTo: number; rate: number }>> = {
 };
 
 // ------------------------------------------------------------------ helpers
-const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+export const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 export const displayName = (c: StoredCustomer) => [c.input.firstName, c.input.middleName, c.input.lastName].filter(Boolean).join(' ');
 
 function money(v: unknown): number | null {
@@ -119,7 +136,7 @@ export function arrearsOf(st: LoanState): number {
   return st.demands.reduce((s, d) => s + (d.principalDue - d.principalPaid) + (d.interestDue - d.interestPaid), 0);
 }
 const unpaidOf = (c: ChargeState) => c.amount - c.paid - c.waived;
-const unpaidCharges = (st: LoanState) => st.charges.reduce((s, c) => s + unpaidOf(c), 0);
+export const unpaidCharges = (st: LoanState) => st.charges.reduce((s, c) => s + unpaidOf(c), 0);
 export const futurePrincipal = (st: LoanState) => st.rows.slice(st.raised).reduce((s, r) => s + r.principal, 0);
 function oldestUnpaidDue(st: LoanState): string | null {
   const d = st.demands.find((x) => x.principalDue - x.principalPaid + x.interestDue - x.interestPaid > 0);
@@ -167,17 +184,21 @@ interface Resolved {
   disbursal: string;
   firstDue: string | null;
   parties: LoanPartyInput[];
+  plan: Array<{ dueDate: string; principal: number }> | null;
+  statedRate: number;
+  sampleSchedule?: boolean;
 }
 
-function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: boolean } = {}): Resolved {
+/** `draft`: a product that is not saved (product preview): no customer, branch or parties are needed. */
+function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: boolean; draft?: LoanProduct } = {}): Resolved {
   const errors: FieldProblem[] = [];
   if (!a || typeof a !== 'object') throw bad('Body required');
-  const product = db.loanProducts.find((p) => p.code === a.productCode);
+  const product = opts.draft ?? db.loanProducts.find((p) => p.code === a.productCode);
   if (!product) errors.push({ field: 'productCode', message: 'Unknown product' });
-  else if (product.status !== 'ACTIVE') errors.push({ field: 'productCode', message: `Product ${product.code} is ${product.status}` });
-  const customer = db.customers.find((c) => c.id === a.customerId);
-  if (!customer) errors.push({ field: 'customerId', message: 'Customer not found' });
-  else if (customer.status !== 'ACTIVE') errors.push({ field: 'customerId', message: `Customer is ${customer.status}` });
+  else if (!opts.draft && product.status !== 'ACTIVE') errors.push({ field: 'productCode', message: `Product ${product.code} is ${product.status}` });
+  const customer = opts.draft ? undefined : db.customers.find((c) => c.id === a.customerId);
+  if (!opts.draft && !customer) errors.push({ field: 'customerId', message: 'Customer not found' });
+  else if (customer && customer.status !== 'ACTIVE') errors.push({ field: 'customerId', message: `Customer is ${customer.status}` });
 
   const amount = money(a.amount);
   const tenor = Number(a.tenorMonths);
@@ -185,6 +206,10 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
   const moratorium = a.moratoriumMonths === undefined || a.moratoriumMonths === null ? 0 : Number(a.moratoriumMonths);
   const rateIn = a.rate === null || a.rate === undefined || a.rate === '' ? null : Number(a.rate);
   let rate = NaN;
+  let statedRate = NaN;
+  let derived = false;
+  let sampleSchedule = false;
+  let plan: Resolved['plan'] = null;
   let rateExplanation = 'rate set on the account';
 
   if (amount === null || Number.isNaN(amount) || amount <= 0) errors.push({ field: 'amount', message: 'Amount must be a positive decimal' });
@@ -205,16 +230,71 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
     if (balloonIn !== null && (Number.isNaN(balloonIn) || balloonIn < 0)) errors.push({ field: 'balloon', message: 'Balloon must be a decimal of 0 or more' });
     else if (balloonIn && product.repaymentMethod !== 'EQUATED') errors.push({ field: 'balloon', message: 'A balloon is allowed only on EMI (equated) products' });
     else if (balloonIn && amount !== null && !Number.isNaN(amount) && balloonIn >= amount / 2) errors.push({ field: 'balloon', message: 'Balloon must be less than half the loan amount' });
-    if (rateIn === null) {
+    const instalmentIn = money(a.instalment);
+    const maturityIn = money(a.maturityAmount);
+    const okAmount = amount !== null && !Number.isNaN(amount) && amount > 0 && Number.isInteger(tenor) && tenor > 0;
+    if (rateIn !== null && (instalmentIn || maturityIn)) errors.push({ field: 'rate', message: 'Give the rate or the instalment / maturity amount, not both' });
+    else if (rateIn === null && instalmentIn) {
+      if (product.repaymentMethod !== 'EQUATED') errors.push({ field: 'instalment', message: 'An agreed instalment applies to EMI (equated) products only' });
+      else if (Number.isNaN(instalmentIn) || (okAmount && instalmentIn * tenor <= amount!)) errors.push({ field: 'instalment', message: 'The instalments must add up to more than the amount' });
+      else if (okAmount) {
+        rate = C.rateForInstalment(amount!, tenor - moratorium, instalmentIn, ppy(product));
+        rateExplanation = `rate that follows from the agreed instalment of ${inr(instalmentIn)}`;
+        derived = true;
+      }
+    } else if (rateIn === null && maturityIn) {
+      if (product.repaymentMethod !== 'BULLET_TOTAL_INTEREST') errors.push({ field: 'maturityAmount', message: 'A maturity amount applies to bullet (principal and interest at maturity) products only' });
+      else if (Number.isNaN(maturityIn) || (okAmount && maturityIn <= amount!)) errors.push({ field: 'maturityAmount', message: 'The maturity amount must be more than the amount' });
+      else if (okAmount) {
+        const start = a.disbursalDate || db.businessDate;
+        const days = Math.max(1, C.daysBetween(start, C.dueDateAt(start, a.firstDueDate || null, tenor, product.frequency ?? 'MONTHLY')));
+        rate = Math.round((((maturityIn - amount!) / amount!) * 36500 * 10000) / days) / 10000;
+        rateExplanation = `simple annual rate that follows from ${inr(maturityIn)} repayable at maturity`;
+        derived = true;
+      }
+    } else if (rateIn === null) {
       const table = product.interestTableCode ? RATE_TABLES[product.interestTableCode] : undefined;
-      if (!table) errors.push({ field: 'rate', message: 'Rate is required (the product has no interest table)' });
-      else if (amount !== null && !Number.isNaN(amount)) {
+      if (product.benchmarkCode && BENCHMARKS[product.benchmarkCode] !== undefined) {
+        rate = Math.round((BENCHMARKS[product.benchmarkCode] + C.num(product.spread ?? 0)) * 100) / 100;
+        rateExplanation = `${product.benchmarkCode} ${BENCHMARKS[product.benchmarkCode]}% + spread ${C.num(product.spread ?? 0)}%; reset every ${product.resetFrequencyMonths ?? 12} months`;
+      } else if (!table) {
+        if (opts.draft) {
+          rate = C.num(product.minRate);
+          rateExplanation = 'the product minimum rate (sample)';
+        } else errors.push({ field: 'rate', message: 'Rate is required (the product has no interest table)' });
+      } else if (amount !== null && !Number.isNaN(amount)) {
         rate = table.find((s) => amount <= s.upTo)!.rate;
         rateExplanation = `slab rate ${rate}% from interest table ${product.interestTableCode}`;
       }
     } else if (!Number.isFinite(rateIn)) errors.push({ field: 'rate', message: 'Rate must be a number' });
     else rate = rateIn;
-    if (Number.isFinite(rate) && (rate < C.num(product.minRate) || rate > C.num(product.maxRate))) {
+    statedRate = rate;
+    if (product.interestBasis === 'FLAT' && Number.isFinite(rate) && okAmount && !derived) {
+      // Flat: interest = amount x rate x tenor; the account accrues at the equivalent reducing rate.
+      const n = tenor - moratorium;
+      const flatEmi = C.roundRupee((amount! * (1 + (rate * tenor) / (100 * ppy(product)))) / n);
+      const effective = C.rateForInstalment(amount!, n, flatEmi, ppy(product));
+      rateExplanation = `flat ${rate}% p.a., which is ${effective.toFixed(2)}% p.a. on the reducing balance`;
+      rate = effective;
+    }
+    if (product.repaymentMethod === 'STRUCTURED') {
+      const rowsIn = Array.isArray(a.scheduleRows) ? a.scheduleRows : null;
+      if (!rowsIn && opts.draft && okAmount) {
+        sampleSchedule = true;
+        const start = a.disbursalDate || db.businessDate;
+        const part = C.roundRupee(amount! / tenor);
+        plan = Array.from({ length: tenor }, (_, i) => ({ dueDate: C.dueDateAt(start, null, i + 1, product.frequency ?? 'MONTHLY'), principal: i === tenor - 1 ? amount! - part * (tenor - 1) : part }));
+      } else if (!rowsIn || rowsIn.length === 0) errors.push({ field: 'scheduleRows', message: 'A structured loan needs its principal plan (date and principal for every instalment)' });
+      else {
+        plan = rowsIn.map((r) => ({ dueDate: r?.dueDate, principal: money(r?.principal) ?? 0 }));
+        if (plan.some((r) => !ISO_DATE.test(r.dueDate ?? '') || Number.isNaN(r.principal) || r.principal < 0)) errors.push({ field: 'scheduleRows', message: 'Every row needs a date and a principal of 0 or more' });
+        else if (plan.some((r, i) => i > 0 && r.dueDate <= plan![i - 1].dueDate)) errors.push({ field: 'scheduleRows', message: 'The dates must be in ascending order' });
+        else if (plan[0].dueDate <= (a.disbursalDate || db.businessDate)) errors.push({ field: 'scheduleRows', message: 'The first date must be after the disbursal date' });
+        else if (okAmount && plan.reduce((x, r) => x + r.principal, 0) !== amount) errors.push({ field: 'scheduleRows', message: `The principal must add up to ${inr(amount!)} (it adds up to ${inr(plan.reduce((x, r) => x + r.principal, 0))})` });
+        else if (plan.length !== tenor) errors.push({ field: 'tenorMonths', message: `The tenor must equal the number of rows (${plan.length})` });
+      }
+    }
+    if (!derived && Number.isFinite(statedRate) && (statedRate < C.num(product.minRate) || statedRate > C.num(product.maxRate))) {
       errors.push({ field: 'rate', message: `Rate must be within the product band ${C.num(product.minRate)}% to ${C.num(product.maxRate)}%` });
     }
   }
@@ -229,7 +309,7 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
     else if (firstDue > addDays(disbursal, 62)) errors.push({ field: 'firstDueDate', message: 'First due date must be within two months of disbursal' });
   }
   const branchCode = a.branch || customer?.input.homeBranch || '';
-  const branch = db.branches.find((b) => b.code === branchCode && b.status === 'ACTIVE');
+  const branch = opts.draft ? db.branches.find((b) => b.headOffice) ?? db.branches[0] : db.branches.find((b) => b.code === branchCode && b.status === 'ACTIVE');
   if (customer && !branch) errors.push({ field: 'branch', message: 'Unknown or inactive branch' });
 
   const parties: LoanPartyInput[] = [];
@@ -252,7 +332,10 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
     customer: customer!,
     branch: branch!.code,
     supplierState,
-    recipientState: customer!.input.address?.stateCode || supplierState,
+    recipientState: customer?.input.address?.stateCode || supplierState,
+    plan,
+    statedRate,
+    sampleSchedule,
     amount: amount!,
     rate,
     rateExplanation,
@@ -265,15 +348,41 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
   };
 }
 
-function dueDates(method: C.RepaymentMethod, disbursal: string, firstDue: string | null, tenor: number): string[] {
-  if (method === 'BULLET_TOTAL_INTEREST') return [C.dueDate(disbursal, firstDue, tenor)];
-  return Array.from({ length: tenor }, (_, i) => C.dueDate(disbursal, firstDue, i + 1));
+const ppy = (product: LoanProduct) => C.PERIODS_PER_YEAR[product.frequency ?? 'MONTHLY'];
+
+function dueDates(product: LoanProduct, disbursal: string, firstDue: string | null, tenor: number): string[] {
+  const freq = product.frequency ?? 'MONTHLY';
+  if (product.repaymentMethod === 'BULLET_TOTAL_INTEREST') return [C.dueDateAt(disbursal, firstDue, tenor, freq)];
+  return Array.from({ length: tenor }, (_, i) => C.dueDateAt(disbursal, firstDue, i + 1, freq));
 }
 
-function planRows(product: LoanProduct, amount: number, rate: number, tenor: number, moratorium: number, disbursal: string, firstDue: string | null, balloon = 0) {
+/** Instalment i (0-based, after the moratorium) of a step-up / step-down product. */
+function stepEmi(product: LoanProduct, base: number, i: number): number {
+  return C.roundRupee(base * Math.pow(1 + C.num(product.stepPercent ?? 0) / 100, Math.floor(i / Math.max(1, product.stepEvery ?? 12))));
+}
+
+function planRows(
+  product: LoanProduct, amount: number, rate: number, tenor: number, moratorium: number, disbursal: string, firstDue: string | null, balloon = 0,
+  plan: Resolved['plan'] = null, interestOnly = false,
+) {
   const method = product.repaymentMethod;
-  const emi = method === 'EQUATED' ? C.pmtBalloon(amount, rate, tenor - moratorium, balloon) : null;
-  const rows = C.buildRows({ balance: amount, ratePct: rate, from: disbursal, dueDates: dueDates(method, disbursal, firstDue, tenor), method, moratoriumRows: moratorium, emi });
+  const n = tenor - moratorium;
+  const common = { balance: amount, ratePct: rate, from: disbursal, moratoriumRows: moratorium };
+  if (interestOnly) {
+    // Pre-EMI: interest on the amount drawn until the loan is fully drawn.
+    return { rows: C.buildRows({ ...common, dueDates: dueDates({ ...product, repaymentMethod: 'EQUATED' }, disbursal, firstDue, tenor), method: 'BULLET_PERIODIC_INTEREST' }), emi: null };
+  }
+  if (method === 'STRUCTURED' && plan) {
+    return { rows: C.buildRows({ ...common, dueDates: plan.map((r) => r.dueDate), method, principalPlan: plan.map((r) => r.principal) }), emi: null };
+  }
+  if (method === 'STEP_EQUATED') {
+    const base = C.stepBase(amount, rate, n, C.num(product.stepPercent ?? 0), Math.max(1, product.stepEvery ?? 12), ppy(product));
+    const rows = C.buildRows({ ...common, dueDates: dueDates(product, disbursal, firstDue, tenor), method, emi: base, emiAt: (i) => stepEmi(product, base, Math.max(0, i - moratorium)) });
+    if (rows.some((r, i) => i >= moratorium && i < rows.length - 1 && r.principal <= 0)) throw bad('The step is so steep that an instalment would not cover its interest', [{ field: 'stepPercent', message: 'Too steep' }]);
+    return { rows, emi: base };
+  }
+  const emi = method === 'EQUATED' ? C.pmtBalloon(amount, rate, n, balloon, ppy(product)) : null;
+  const rows = C.buildRows({ ...common, dueDates: dueDates(product, disbursal, firstDue, tenor), method, emi, principalEvery: product.principalEvery ?? 1 });
   return { rows, emi };
 }
 
@@ -284,7 +393,7 @@ function upfrontFees(product: LoanProduct, amount: number, supplier: string, rec
 /** KFS figures from the same code that books and services the loan (preview = post). */
 function buildKfs(r: Resolved): LoanKfs {
   const p = r.product;
-  const { rows, emi } = planRows(p, r.amount, r.rate, r.tenor, r.moratorium, r.disbursal, r.firstDue, r.balloon);
+  const { rows, emi } = planRows(p, r.amount, r.rate, r.tenor, r.moratorium, r.disbursal, r.firstDue, r.balloon, r.plan);
   const fees = upfrontFees(p, r.amount, r.supplierState, r.recipientState);
   const deducted = fees.filter((f) => f.rule.deductFromDisbursal).reduce((s, f) => s + f.charge.total, 0);
   const feesExGst = fees.reduce((s, f) => s + f.charge.fee, 0);
@@ -297,7 +406,7 @@ function buildKfs(r: Resolved): LoanKfs {
     tenorMonths: r.tenor,
     repaymentMethod: p.repaymentMethod,
     rateType: p.rateType ?? 'FIXED',
-    interestRate: C.pct(r.rate),
+    interestRate: C.pct(r.statedRate),
     rateExplanation: r.rateExplanation,
     emi: emi === null ? null : C.fromPaise(emi),
     instalments: rows.length,
@@ -313,7 +422,7 @@ function buildKfs(r: Resolved): LoanKfs {
     })),
     netDisbursal: C.fromPaise(r.amount - deducted),
     totalRepayable: C.fromPaise(r.amount + totalInterest),
-    apr: C.apr(r.amount, feesExGst, rows, p.repaymentMethod, r.disbursal, emi),
+    apr: aprOf(p, r.amount, feesExGst, rows, r.disbursal, emi),
     penalChargeRate: p.penalChargeRate === null || p.penalChargeRate === undefined ? null : C.pct(p.penalChargeRate),
     penalChargeNote: PENAL_NOTE,
     coolingOffDays: p.coolingOffDays ?? 0,
@@ -322,8 +431,37 @@ function buildKfs(r: Resolved): LoanKfs {
   };
 }
 
+/** APR: periodic IRR x periods per year for evenly spaced instalments, XIRR on dated flows otherwise. */
+function aprOf(p: LoanProduct, amount: number, feesExGst: number, rows: C.Row[], disbursal: string, emi: number | null): string {
+  if (rows.length === 0) return '0.00';
+  // EMI loans use the contractual flat EMI for amortising rows ("IRR basic").
+  if (p.repaymentMethod === 'EQUATED') return C.nominalAnnualIrr([-(amount - feesExGst) / 100, ...rows.map((r) => (emi !== null && r.principal > 0 ? emi : r.instalment) / 100)], ppy(p));
+  const net = (amount - feesExGst) / 100;
+  if (p.repaymentMethod === 'BULLET_TOTAL_INTEREST' || p.repaymentMethod === 'STRUCTURED') {
+    return C.xirr([{ date: disbursal, amount: -net }, ...rows.map((r) => ({ date: r.dueDate, amount: r.instalment / 100 }))]);
+  }
+  return C.nominalAnnualIrr([-net, ...rows.map((r) => r.instalment / 100)], ppy(p));
+}
+
 export function previewLoan(db: MockDb, a: LoanApplication): LoanKfs {
   return buildKfs(resolve(db, a));
+}
+
+/** Sample loan on a draft product (nothing is stored): smallest amount, shortest tenor, lowest rate by default. */
+export function previewProduct(db: MockDb, body: Record<string, unknown>): LoanKfs & { sampleSchedule?: boolean } {
+  const draft = validateProduct({ code: 'DRAFT', ...(body?.product as object), status: 'DRAFT' } as LoanProduct);
+  const has = (k: string) => body[k] !== undefined && body[k] !== null && body[k] !== '';
+  const r = resolve(db, {
+    productCode: 'DRAFT', customerId: '',
+    amount: has('amount') ? (body.amount as string) : String(draft.minAmount),
+    tenorMonths: has('tenorMonths') ? Number(body.tenorMonths) : draft.minTenorMonths,
+    rate: has('rate') ? (body.rate as string) : has('instalment') || has('maturityAmount') || draft.benchmarkCode || draft.interestTableCode ? null : String(draft.minRate),
+    disbursalDate: (body.disbursalDate as string) || undefined, firstDueDate: (body.firstDueDate as string) || undefined,
+    moratoriumMonths: has('moratoriumMonths') ? Number(body.moratoriumMonths) : undefined,
+    balloon: body.balloon as string, instalment: body.instalment as string, maturityAmount: body.maturityAmount as string,
+    scheduleRows: body.scheduleRows as LoanApplication['scheduleRows'],
+  }, { draft });
+  return { ...buildKfs(r), ...(r.sampleSchedule ? { sampleSchedule: true } : {}) };
 }
 
 // ------------------------------------------------------------------ replay
@@ -410,7 +548,7 @@ function rebuildFuture(loan: StoredLoan, st: LoanState, balance: number, mode: s
   let rows: C.Row[];
   if (balance <= 0) rows = [];
   else if (method === 'EQUATED') {
-    const emi = mode === 'REDUCE_EMI' ? C.pmt(balance, st.rate, dates.length - morLeft) : st.emi;
+    const emi = mode === 'REDUCE_EMI' ? C.pmt(balance, st.rate, dates.length - morLeft, ppy(loan.product)) : st.emi;
     rows = C.buildRows({ ...common, emi });
     st.emi = emi;
   } else if (method === 'FIXED_PRINCIPAL' && mode === 'REDUCE_TENURE') {
@@ -419,13 +557,42 @@ function rebuildFuture(loan: StoredLoan, st: LoanState, balance: number, mode: s
   st.rows = [...st.rows.slice(0, st.raised), ...rows];
 }
 
+/** Rebuilds the future rows after a tranche (or when a pre-EMI loan becomes fully drawn). */
+function replanFuture(loan: StoredLoan, st: LoanState, balance: number, date: string) {
+  const p = loan.product;
+  const from = st.lastInterestDate ?? date;
+  const fut = st.rows.slice(st.raised);
+  const freq = p.frequency ?? 'MONTHLY';
+  const first = fut[0]?.dueDate ?? C.addPeriods(from, 1, freq);
+  let rows: C.Row[];
+  if (p.preEmi && st.drawn < st.sanctioned) {
+    rows = C.buildRows({ balance, ratePct: st.rate, from, dueDates: fut.map((r) => r.dueDate), method: 'BULLET_PERIODIC_INTEREST', startNo: st.raised + 1 });
+    st.emi = null;
+  } else if (p.preEmi && p.repaymentMethod === 'EQUATED') {
+    // Fully drawn: EMIs for the full tenor from here.
+    const dates = Array.from({ length: loan.tenorMonths }, (_, i) => C.addPeriods(first, i, freq, C.isMonthEnd(first)));
+    st.emi = C.pmt(balance, st.rate, dates.length, ppy(p));
+    rows = C.buildRows({ balance, ratePct: st.rate, from, dueDates: dates, method: 'EQUATED', emi: st.emi, startNo: st.raised + 1 });
+  } else {
+    const dates = fut.map((r) => r.dueDate);
+    const emi = p.repaymentMethod === 'EQUATED' ? C.pmt(balance, st.rate, dates.length, ppy(p)) : null;
+    rows = C.buildRows({ balance, ratePct: st.rate, from, dueDates: dates, method: p.repaymentMethod === 'STEP_EQUATED' || p.repaymentMethod === 'STRUCTURED' ? 'EQUATED' : p.repaymentMethod, emi, startNo: st.raised + 1, principalEvery: p.principalEvery ?? 1, offset: st.raised });
+    if (emi !== null) st.emi = emi;
+  }
+  st.rows = [...st.rows.slice(0, st.raised), ...rows];
+}
+
 function initialState(loan: StoredLoan, asOf: string): LoanState {
   const base: LoanState = {
     asOf, status: 'SANCTIONED', rows: [], raised: 0, demands: [], charges: [], advance: 0, principalPaid: 0,
     lastInterestDate: null, emi: loan.kfs.emi ? C.toPaise(loan.kfs.emi) : null, rate: loan.rate, capitalised: 0, restructuredOn: null, restructureCount: 0, upgradeNotBefore: null, npaSince: null, dpd: 0, assetClass: 'STANDARD', closedOn: null,
+    sanctioned: loan.amount, drawn: 0, overrideClass: null, overrideUntil: null,
   };
   if (!loan.disbursedOn) return { ...base, rows: (loan.kfs.schedule ?? []).map(fromScheduleRow) };
-  const { rows, emi } = planRows(loan.product, loan.amount, loan.rate, loan.tenorMonths, loan.moratoriumMonths, loan.disbursedOn, loan.firstDueDate, loan.balloon);
+  const drawn = loan.firstDrawn ?? loan.amount;
+  base.drawn = drawn;
+  const partial = drawn < loan.amount;
+  const { rows, emi } = planRows(loan.product, drawn, loan.rate, loan.tenorMonths, loan.moratoriumMonths, loan.disbursedOn, loan.firstDueDate, partial ? 0 : loan.balloon, partial ? null : loan.plan, partial && !!loan.product.preEmi);
   const charges: ChargeState[] = upfrontFees(loan.product, loan.amount, loan.supplierState, loan.recipientState).map(({ rule, charge }, i) => ({
     id: `D${i + 1}`,
     code: charge.code,
@@ -485,17 +652,39 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
     case 'RESTRUCTURE':
       restructureState(loan, st, e.data.restructure!, e.valueDate);
       break;
+    case 'DISBURSEMENT': // a later tranche: interest runs on it from its own date
+      st.drawn += amt;
+      replanFuture(loan, st, futurePrincipal(st) + amt, e.valueDate);
+      break;
+    case 'SANCTION_CHANGE': {
+      const wasWaiting = !!loan.product.preEmi && st.drawn < st.sanctioned;
+      st.sanctioned = e.data.newAmount ?? st.sanctioned;
+      // Cancelling the undrawn amount starts the EMIs of a pre-EMI loan.
+      if (wasWaiting && st.drawn >= st.sanctioned) replanFuture(loan, st, futurePrincipal(st), e.valueDate);
+      break;
+    }
+    case 'NPA_OVERRIDE':
+      st.overrideClass = e.data.overrideClass ?? null;
+      st.overrideUntil = e.data.until ?? null;
+      if (!st.npaSince) st.npaSince = e.valueDate;
+      break;
+    case 'NPA_RELEASE':
+      st.overrideClass = null;
+      st.overrideUntil = null;
+      break;
   }
   // Upgrade only when all arrears of interest and principal are paid, and (restructured) after the specified period.
-  if (st.npaSince && arrearsOf(st) === 0 && (!st.upgradeNotBefore || e.valueDate >= st.upgradeNotBefore)) st.npaSince = null;
+  if (st.npaSince && !st.overrideClass && arrearsOf(st) === 0 && (!st.upgradeNotBefore || e.valueDate >= st.upgradeNotBefore)) st.npaSince = null;
   maybeClose(st, e.valueDate);
 }
+
+const CLASS_ORDER = ['STANDARD', 'SMA0', 'SMA1', 'SMA2', 'SUBSTANDARD', 'DOUBTFUL1', 'DOUBTFUL2', 'DOUBTFUL3', 'LOSS'];
 
 /** Derive the loan's state as of `asOf` by replaying its live financial transactions. */
 export function replay(loan: StoredLoan, asOf: string): LoanState {
   const st = initialState(loan, asOf);
   if (!loan.disbursedOn) return st;
-  const events = loan.events.filter((e) => FINANCIAL.has(e.type) && !e.reversedBy).sort((a, b) => a.seq - b.seq);
+  const events = loan.events.filter((e) => isReplayed(e) && !e.reversedBy).sort((a, b) => a.seq - b.seq);
   for (const e of events) {
     if (st.closedOn) break;
     advanceTo(loan, st, e.valueDate);
@@ -509,6 +698,17 @@ export function replay(loan: StoredLoan, asOf: string): LoanState {
     st.dpd = C.dpdOf(asOf, oldestUnpaidDue(st));
     markNpa(st, asOf);
     st.assetClass = st.npaSince ? C.npaAge(st.npaSince, asOf) : C.smaClass(st.dpd);
+    if (st.overrideClass && (st.overrideClass === 'LOSS' || (st.overrideUntil ?? '') >= asOf)) {
+      // While the override holds, classification can make the class worse but not better.
+      if (CLASS_ORDER.indexOf(st.overrideClass) > CLASS_ORDER.indexOf(st.assetClass)) st.assetClass = st.overrideClass;
+    } else if (st.overrideClass) {
+      st.overrideClass = null;
+      st.overrideUntil = null;
+      if (arrearsOf(st) === 0 && st.dpd === 0 && !st.restructuredOn) {
+        st.npaSince = null;
+        st.assetClass = 'STANDARD';
+      }
+    }
     st.status = loan.frozen ? 'FROZEN' : 'ACTIVE';
   }
   return st;
@@ -551,7 +751,7 @@ function cancellationTotal(loan: StoredLoan, asOf: string): number {
   const st = loan.state;
   const days = C.daysBetween(loan.disbursedOn!, asOf);
   const interest = C.roundRupee((loan.amount * C.num(loan.kfs.apr) * days) / 36500);
-  return Math.max(0, loan.amount - st.principalPaid + interest - st.advance);
+  return Math.max(0, st.drawn - st.principalPaid + interest - st.advance);
 }
 
 // ------------------------------------------------------------------ views
@@ -562,7 +762,7 @@ export function customerOf(db: MockDb, loan: StoredLoan) {
 export function principalOutstanding(loan: StoredLoan): number {
   const st = loan.state;
   if (!loan.disbursedOn || st.closedOn) return 0;
-  return loan.amount + st.capitalised - st.principalPaid;
+  return st.drawn + st.capitalised - st.principalPaid;
 }
 
 export function summaryView(db: MockDb, loan: StoredLoan): LoanSummary {
@@ -576,7 +776,7 @@ export function summaryView(db: MockDb, loan: StoredLoan): LoanSummary {
     customerNo: c?.customerNo ?? '',
     productCode: loan.product.code,
     status: st.status,
-    amount: C.fromPaise(loan.amount),
+    amount: C.fromPaise(st.sanctioned),
     principalOutstanding: C.fromPaise(principalOutstanding(loan)),
     overdueAmount: C.fromPaise(open ? arrearsOf(st) + unpaidCharges(st) : 0),
     dpd: st.dpd,
@@ -606,6 +806,18 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     externalRef: loan.externalRef,
     closedOn: st.closedOn,
     currentRate: C.pct(st.rate),
+    frequency: loan.product.frequency ?? 'MONTHLY',
+    disbursedAmount: C.fromPaise(st.drawn),
+    undrawnAmount: C.fromPaise(Math.max(0, st.sanctioned - st.drawn)),
+    multipleDisbursements: !!loan.product.multipleDisbursements,
+    preEmi: !!loan.product.preEmi,
+    topUpAllowed: !!loan.product.topUpAllowed,
+    overrideClass: st.overrideClass,
+    overrideUntil: st.overrideUntil,
+    benchmarkCode: loan.product.benchmarkCode ?? null,
+    spread: loan.product.spread === null || loan.product.spread === undefined ? null : String(loan.product.spread),
+    nextRateReset: loan.product.benchmarkCode && loan.disbursedOn ? C.addMonths(loan.disbursedOn, loan.product.resetFrequencyMonths ?? 12) : null,
+    custom: loan.custom,
     restructuredOn: st.restructuredOn,
     restructureCount: st.restructureCount,
     upgradeNotBefore: st.restructuredOn ? st.upgradeNotBefore : null,
@@ -717,6 +929,10 @@ function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate:
     tenorMonths: r.tenor,
     moratoriumMonths: r.moratorium,
     balloon: r.balloon,
+    plan: r.plan,
+    statedRate: r.statedRate,
+    firstDrawn: null,
+    custom: {},
     firstDueDate: r.firstDue,
     openDate,
     externalRef,
@@ -736,17 +952,45 @@ function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate:
   return loan;
 }
 
-function disburse(db: MockDb, loan: StoredLoan, by: string, at: string, mode: string) {
-  loan.disbursedOn = db.businessDate;
-  if (loan.firstDueDate && loan.firstDueDate <= loan.disbursedOn) loan.firstDueDate = null;
-  loan.netDisbursed = C.toPaise(loan.kfs.netDisbursal);
-  addEvent(db, loan, by, at, {
+/** 409 / 422 when this disbursement (first, or a further tranche of `amount`) cannot be made now. Returns the amount. */
+export function checkDisbursement(loan: StoredLoan, amountIn: number | null | undefined): number {
+  const st = loan.state;
+  if (st.status !== 'SANCTIONED' && st.status !== 'ACTIVE') throw conflict('Loan cannot be disbursed', `Loan ${loan.loanNo} is ${st.status}`);
+  if (!loan.kfsAcceptedAt) throw conflict('KFS not accepted', 'The borrower must accept the Key Fact Statement before disbursement');
+  const undrawn = st.sanctioned - st.drawn;
+  if (undrawn <= 0) throw conflict('Fully disbursed', `Loan ${loan.loanNo} has no undrawn amount`);
+  const amount = amountIn ?? undrawn;
+  if (!(amount > 0)) throw bad('Amount must be a positive decimal', [{ field: 'amount', message: 'Enter an amount greater than zero' }]);
+  if (amount > undrawn) throw bad(`Only ${inr(undrawn)} is undrawn`, [{ field: 'amount', message: 'More than the undrawn amount' }]);
+  if (amount < undrawn && !loan.product.multipleDisbursements) throw bad('This product is disbursed in one go; part of the amount cannot be drawn', [{ field: 'amount', message: 'Product has no tranches' }]);
+  if (st.status === 'ACTIVE') {
+    if (arrearsOf(st) + unpaidCharges(st) > 0) throw conflict('Account has unpaid dues', `No tranche is paid while ${inr(arrearsOf(st) + unpaidCharges(st))} is overdue`);
+    if (C.NPA_CLASSES.includes(st.assetClass)) throw conflict('Account is NPA', 'No tranche is paid on a non-performing account');
+  }
+  return amount;
+}
+
+export function disburse(db: MockDb, loan: StoredLoan, by: string, at: string, mode: string, amountIn?: number | null): StoredLoanEvent {
+  const first = !loan.disbursedOn;
+  const amount = amountIn ?? loan.state.sanctioned - loan.state.drawn;
+  let fees = 0;
+  if (first) {
+    loan.disbursedOn = db.businessDate;
+    if (loan.firstDueDate && loan.firstDueDate <= loan.disbursedOn) loan.firstDueDate = null;
+    loan.firstDrawn = amount;
+    fees = upfrontFees(loan.product, loan.amount, loan.supplierState, loan.recipientState).filter((f) => f.rule.deductFromDisbursal).reduce((s, f) => s + f.charge.total, 0);
+    loan.netDisbursed = amount - fees;
+  } else loan.netDisbursed = (loan.netDisbursed ?? 0) + amount;
+  const tranche = loan.events.filter((e) => e.type === 'DISBURSEMENT' && !e.reversedBy).length + 1;
+  const ev = addEvent(db, loan, by, at, {
     type: 'DISBURSEMENT',
-    valueDate: loan.disbursedOn,
-    amount: loan.amount,
-    summary: `Disbursed ${inr(loan.amount)} via ${mode}; net ${inr(loan.netDisbursed)} after deducted fees`,
+    valueDate: db.businessDate,
+    amount,
+    summary: `${tranche > 1 ? `Tranche ${tranche}: d` : 'D'}isbursed ${inr(amount)} via ${mode}; net ${inr(amount - fees)}${fees ? ' after deducted fees' : ''}`,
+    data: { tranche, mode, feesDeducted: fees, netDisbursed: amount - fees },
   });
   refreshLoan(db, loan);
+  return ev;
 }
 
 // ------------------------------------------------------------------ approvals
@@ -765,10 +1009,9 @@ export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: {
     case 'LOAN_DISBURSEMENT': {
       const loan = db.loans.find((l) => l.id === p.loanId);
       if (!loan) throw notFound('Loan');
-      if (loan.state.status !== 'SANCTIONED') throw conflict('Loan is not sanctioned', `Loan ${loan.loanNo} is ${loan.state.status}`);
-      if (!loan.kfsAcceptedAt) throw conflict('KFS not accepted', 'The borrower must accept the Key Fact Statement before disbursement');
-      disburse(db, loan, checker, at, p.mode);
-      appendAudit(db, at, checker, 'LOAN_DISBURSED', 'LOAN', loan.id, { loanNo: loan.loanNo, amount: C.fromPaise(loan.amount) });
+      const amount = checkDisbursement(loan, p.amount ?? null);
+      disburse(db, loan, checker, at, p.mode, amount);
+      appendAudit(db, at, checker, 'LOAN_DISBURSED', 'LOAN', loan.id, { loanNo: loan.loanNo, amount: C.fromPaise(amount) });
       return true;
     }
     case 'LOAN_WAIVER': {
@@ -795,8 +1038,8 @@ export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: {
       const target = loan.events.find((e) => e.id === p.txnId);
       if (!target) throw notFound('Transaction');
       if (target.reversedBy) throw conflict('Transaction already reversed');
-      const later = loan.events.filter((e) => FINANCIAL.has(e.type) && !e.reversedBy && e.seq > target.seq);
-      if (later.some((e) => e.type === 'RESTRUCTURE')) throw conflict('Loan was restructured since', 'A restructure cannot be reversed, so nothing before it can be either');
+      const later = loan.events.filter((e) => isReplayed(e) && !e.reversedBy && e.seq > target.seq);
+      if (later.some(blocksReversal)) throw BLOCKED();
       const rev = addEvent(db, loan, checker, at, {
         type: 'REVERSAL',
         valueDate: db.businessDate,
@@ -828,13 +1071,35 @@ export function lendingDayEnd(db: MockDb): number {
 }
 
 // ------------------------------------------------------------------ product validation
-function validateProduct(p: LoanProduct): LoanProduct {
+export function validateProduct(p: LoanProduct): LoanProduct {
   const errors: FieldProblem[] = [];
   if (!p || typeof p !== 'object') throw bad('Body required');
   const n = (v: unknown) => (v === null || v === undefined || v === '' ? NaN : Number(v));
   if (!/^[A-Z0-9]{2,12}$/.test(p.code ?? '')) errors.push({ field: 'code', message: 'Code must be 2-12 upper-case letters/digits' });
   if (!p.name?.trim()) errors.push({ field: 'name', message: 'Name is required' });
-  if (!['EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST'].includes(p.repaymentMethod)) errors.push({ field: 'repaymentMethod', message: 'Invalid repayment method' });
+  const method = p.repaymentMethod;
+  if (!['EQUATED', 'STEP_EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST', 'STRUCTURED'].includes(method)) errors.push({ field: 'repaymentMethod', message: 'Invalid repayment method' });
+  if (p.frequency && !(p.frequency in C.PERIODS_PER_YEAR)) errors.push({ field: 'frequency', message: 'Invalid frequency' });
+  const basis = p.interestBasis ?? 'DAILY_REDUCING';
+  if (!['DAILY_REDUCING', 'PERIODIC_REDUCING', 'FLAT'].includes(basis)) errors.push({ field: 'interestBasis', message: 'Invalid interest basis' });
+  else if (basis === 'FLAT' && method !== 'EQUATED') errors.push({ field: 'interestBasis', message: 'A flat rate is offered on EMI (equated) products only' });
+  if (p.bpiMode && !['NONE', 'ADD_TO_FIRST_INSTALMENT', 'SEPARATE_DEMAND', 'DEDUCT_AT_DISBURSAL'].includes(p.bpiMode)) errors.push({ field: 'bpiMode', message: 'Invalid broken-period interest mode' });
+  if (method === 'STEP_EQUATED') {
+    if (!(n(p.stepPercent) > -50 && n(p.stepPercent) <= 100) || n(p.stepPercent) === 0) errors.push({ field: 'stepPercent', message: 'Step must be above -50 and at most 100 percent, and not 0' });
+    if (!Number.isInteger(p.stepEvery) || (p.stepEvery ?? 0) < 1) errors.push({ field: 'stepEvery', message: 'Give the number of instalments between steps' });
+  }
+  if (p.principalEvery !== undefined && (!Number.isInteger(p.principalEvery) || p.principalEvery < 1)) errors.push({ field: 'principalEvery', message: 'Principal interval must be 1 or more' });
+  else if ((p.principalEvery ?? 1) > 1 && method !== 'FIXED_PRINCIPAL') errors.push({ field: 'principalEvery', message: 'A principal interval applies to fixed-principal products only' });
+  const trancheMethod = ['EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST'].includes(method) && basis === 'DAILY_REDUCING';
+  if (p.multipleDisbursements && !trancheMethod) errors.push({ field: 'multipleDisbursements', message: 'Tranches need an equated, fixed-principal or bullet product on the daily-reducing basis' });
+  if (p.topUpAllowed && !trancheMethod) errors.push({ field: 'topUpAllowed', message: 'Top-up needs an equated, fixed-principal or bullet product on the daily-reducing basis' });
+  if (p.preEmi && !(p.multipleDisbursements && method === 'EQUATED')) errors.push({ field: 'preEmi', message: 'Pre-EMI needs an equated product with multiple disbursements' });
+  if (p.benchmarkCode) {
+    if (BENCHMARKS[p.benchmarkCode] === undefined) errors.push({ field: 'benchmarkCode', message: `Unknown benchmark ${p.benchmarkCode}` });
+    if (p.rateType !== 'FLOATING') errors.push({ field: 'rateType', message: 'A benchmark needs rate type FLOATING' });
+    if (Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'A benchmark needs a spread' });
+    if (!Number.isInteger(p.resetFrequencyMonths) || (p.resetFrequencyMonths ?? 0) < 1 || (p.resetFrequencyMonths ?? 0) > 60) errors.push({ field: 'resetFrequencyMonths', message: 'Reset frequency must be 1 to 60 months' });
+  }
   const [minA, maxA] = [n(p.minAmount), n(p.maxAmount)];
   if (!(minA > 0)) errors.push({ field: 'minAmount', message: 'Minimum amount must be positive' });
   if (!(maxA >= minA)) errors.push({ field: 'maxAmount', message: 'Maximum amount must be at least the minimum' });
@@ -868,10 +1133,21 @@ function validateProduct(p: LoanProduct): LoanProduct {
   if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
   const s = (v: unknown) => (v === null || v === undefined || v === '' ? null : String(v));
   return {
-    ...LOAN_PRODUCT_DEFAULTS,
     code: p.code,
     name: p.name.trim(),
     repaymentMethod: p.repaymentMethod,
+    frequency: p.frequency ?? 'MONTHLY',
+    interestBasis: basis,
+    bpiMode: p.bpiMode ?? 'NONE',
+    stepPercent: method === 'STEP_EQUATED' ? s(p.stepPercent) : null,
+    stepEvery: method === 'STEP_EQUATED' ? (p.stepEvery ?? null) : null,
+    principalEvery: p.principalEvery ?? 1,
+    multipleDisbursements: !!p.multipleDisbursements,
+    preEmi: !!p.preEmi,
+    topUpAllowed: !!p.topUpAllowed,
+    benchmarkCode: p.benchmarkCode || null,
+    spread: p.benchmarkCode ? s(p.spread) : null,
+    resetFrequencyMonths: p.benchmarkCode ? (p.resetFrequencyMonths ?? null) : null,
     minAmount: C.fromPaise(C.toPaise(String(p.minAmount))),
     maxAmount: C.fromPaise(C.toPaise(String(p.maxAmount))),
     minTenorMonths: p.minTenorMonths,
@@ -965,7 +1241,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     return reason;
   }
   const lastFinancialDate = (loan: StoredLoan) =>
-    loan.events.filter((e) => (FINANCIAL.has(e.type) || e.type === 'DISBURSEMENT') && !e.reversedBy).reduce((m, e) => (e.valueDate > m ? e.valueDate : m), '');
+    loan.events.filter((e) => (isReplayed(e) || e.type === 'DISBURSEMENT') && !e.reversedBy).reduce((m, e) => (e.valueDate > m ? e.valueDate : m), '');
 
   // products
   on('GET', '/api/v1/loan-products', ({ user }) => {
@@ -1064,16 +1340,18 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   on('POST', '/api/v1/loans/{id}/disbursement', ({ user, params, body }) => {
     require(user, P.loanDisburse);
     const loan = findLoan(params.id);
-    if (loan.state.status !== 'SANCTIONED') throw conflict('Loan is not sanctioned', `Loan ${loan.loanNo} is ${loan.state.status}`);
-    if (!loan.kfsAcceptedAt) throw conflict('KFS not accepted', 'The borrower must accept the Key Fact Statement before disbursement');
+    const b0 = (body ?? {}) as { amount?: string | number };
+    const asked = b0.amount === undefined || b0.amount === null || b0.amount === '' ? null : money(b0.amount);
+    if (asked !== null && Number.isNaN(asked)) throw bad('Amount must be a positive decimal', [{ field: 'amount', message: 'Invalid amount' }]);
+    const amount = checkDisbursement(loan, asked);
     const pending = hasPending('LOAN_DISBURSEMENT', (p) => p.kind === 'LOAN_DISBURSEMENT' && p.loanId === loan.id);
     if (pending) throw conflict('Disbursement already pending', `Loan ${loan.loanNo} already has a disbursement awaiting approval`, { approvalId: pending.approval.id });
     const b = (body ?? {}) as { beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string };
-    assertWithinLimit(db, user, 'LOAN_DISBURSEMENT', C.fromPaise(loan.amount));
+    assertWithinLimit(db, user, 'LOAN_DISBURSEMENT', C.fromPaise(amount));
     const mode = b.mode?.trim() || 'IMPS';
     if (b.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(b.ifsc)) throw bad('IFSC must look like HDFC0001234', [{ field: 'ifsc', message: 'Invalid IFSC' }]);
     if (can(user, LOAN_STP)) {
-      disburse(db, loan, user.username, nowIso(), mode);
+      disburse(db, loan, user.username, nowIso(), mode, amount);
       return ok(view(loan));
     }
     const account = b.beneficiaryAccount?.trim() || null;
@@ -1082,13 +1360,13 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
       user,
       'LOAN_DISBURSEMENT',
       'DISBURSE',
-      { kind: 'LOAN_DISBURSEMENT', loanId: loan.id, mode, beneficiaryName: b.beneficiaryName?.trim() || null, beneficiaryAccount: account, ifsc: b.ifsc || null },
+      { kind: 'LOAN_DISBURSEMENT', loanId: loan.id, mode, beneficiaryName: b.beneficiaryName?.trim() || null, beneficiaryAccount: account, ifsc: b.ifsc || null, amount },
       {
         loanNo: loan.loanNo,
         customer: cust ? displayName(cust) : null,
         productCode: loan.product.code,
-        amount: C.fromPaise(loan.amount),
-        netDisbursal: loan.kfs.netDisbursal,
+        amount: C.fromPaise(amount),
+        ...(loan.disbursedOn ? { tranche: loan.events.filter((e) => e.type === 'DISBURSEMENT' && !e.reversedBy).length + 1 } : { netDisbursal: C.fromPaise(amount - (C.toPaise(loan.kfs.amount) - C.toPaise(loan.kfs.netDisbursal))) }),
         mode,
         beneficiaryName: b.beneficiaryName?.trim() || null,
         beneficiaryAccount: account ? `XXXX${account.slice(-4)}` : null,
@@ -1096,7 +1374,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
       },
       null,
       loan.id,
-      C.fromPaise(loan.amount),
+      C.fromPaise(amount),
     );
   });
 
@@ -1252,8 +1530,8 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (!REVERSIBLE.has(txn.type)) throw bad(`${txn.type} transactions cannot be reversed`, [{ field: 'txnId', message: 'Not reversible' }]);
     if (txn.reversedBy) throw conflict('Transaction already reversed');
     if (hasPending('LOAN_REVERSAL', (p) => p.kind === 'LOAN_REVERSAL' && p.loanId === loan.id)) throw conflict('Reversal already pending', `Loan ${loan.loanNo} already has a reversal awaiting approval`);
-    const later = loan.events.filter((e) => FINANCIAL.has(e.type) && !e.reversedBy && e.seq > txn.seq);
-    if (later.some((e) => e.type === 'RESTRUCTURE')) throw conflict('Loan was restructured since', 'A restructure cannot be reversed, so nothing before it can be either');
+    const later = loan.events.filter((e) => isReplayed(e) && !e.reversedBy && e.seq > txn.seq);
+    if (later.some(blocksReversal)) throw BLOCKED();
     return propose(
       user, 'LOAN_REVERSAL', 'REVERSE',
       { kind: 'LOAN_REVERSAL', loanId: loan.id, txnId: txn.id, reason },

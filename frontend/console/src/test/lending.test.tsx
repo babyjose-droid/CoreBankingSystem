@@ -289,7 +289,8 @@ describe('loan detail and servicing', () => {
     for (const name of ['Repayment', 'Part-prepayment', 'Pre-closure', 'Charge fee', 'Freeze', 'Disburse']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
     }
-    expect(screen.queryByRole('toolbar', { name: 'Loan actions' })).not.toBeInTheDocument();
+    // the only action left for a checker is the read-only simulation
+    expect(within(screen.getByRole('toolbar', { name: 'Loan actions' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['What if…']);
     unmount();
     const sanctioned = loanByCustomer(server, 'Gauri');
     renderApp({ user: 'checker', route: `/loans/${sanctioned.id}`, server });

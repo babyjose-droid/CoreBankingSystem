@@ -21,7 +21,7 @@ export const DEMO_USERS: DemoUser[] = [
     role: 'Maker',
     description: 'Views everything, proposes and creates changes',
     homeBranch: 'HO',
-    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose],
+    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose, P.collectionCreate, P.mandateRegister, P.payoutBeneficiary, P.loanClassify],
     roles: ['MAKER'],
   },
   {
@@ -37,9 +37,15 @@ export const DEMO_USERS: DemoUser[] = [
     username: 'ops',
     name: 'Omar Operations',
     role: 'Operations',
-    description: 'Runs end-of-day; views the ledger',
+    description: 'Runs end-of-day, payouts, collections, mandates and NACH files',
     homeBranch: 'HO',
-    permissions: [P.eodView, P.eodRun, P.glView],
+    permissions: [
+      P.eodView, P.eodRun, P.glView, P.loanView,
+      P.payoutView, P.payoutBeneficiary, P.payoutAdmin,
+      P.collectionView, P.collectionCreate, P.collectionAdmin,
+      P.mandateView, P.mandateRegister, P.mandateAdmin, P.nachAdmin, P.nachFile,
+      P.jobView, P.jobRun,
+    ],
     roles: ['OPERATIONS'],
   },
   {

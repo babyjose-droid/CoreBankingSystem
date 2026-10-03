@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { useLoanProduct, useProposeLoanProduct } from '../../api/lendingHooks';
+import { useLoanProduct, useLoanProductTemplates, usePreviewLoanProduct, useProposeLoanProduct } from '../../api/lendingHooks';
 import { LOAN_PRODUCT_DEFAULTS } from '../../api/types';
 import type { FeeRule, LoanProduct } from '../../api/types';
-import { Button, Card, Checkbox, ErrorBanner, Input, PageHeader, Select, Spinner } from '../../ui';
+import { Banner, Button, Card, Checkbox, ErrorBanner, Input, PageHeader, Select, Spinner } from '../../ui';
+import { KfsView } from './KfsView';
 import { useProposalToast } from '../proposal';
-import { REPAYMENT_METHOD_LABEL } from './common';
+import { BPI_LABEL, FREQUENCY_LABEL, INTEREST_BASIS_LABEL, REPAYMENT_METHOD_LABEL } from './common';
 
 type Seq = NonNullable<LoanProduct['appropriationSequence']>[number];
 const SEQ: Seq[] = ['INTEREST', 'PRINCIPAL', 'PENAL', 'FEE'];
@@ -40,6 +41,18 @@ interface Draft {
   interestTableCode: string;
   rateType: NonNullable<LoanProduct['rateType']>;
   dayCount: NonNullable<LoanProduct['dayCount']>;
+  frequency: NonNullable<LoanProduct['frequency']>;
+  interestBasis: NonNullable<LoanProduct['interestBasis']>;
+  bpiMode: NonNullable<LoanProduct['bpiMode']>;
+  stepPercent: string;
+  stepEvery: string;
+  principalEvery: string;
+  multipleDisbursements: boolean;
+  preEmi: boolean;
+  topUpAllowed: boolean;
+  benchmarkCode: string;
+  spread: string;
+  resetFrequencyMonths: string;
   rounding: NonNullable<LoanProduct['rounding']>;
   penalChargeRate: string;
   maxMoratoriumMonths: string;
@@ -85,6 +98,18 @@ function toDraft(p: LoanProduct | null): Draft {
     interestTableCode: s(p?.interestTableCode),
     rateType: p?.rateType ?? 'FIXED',
     dayCount: p?.dayCount ?? 'ACTUAL_365',
+    frequency: p?.frequency ?? 'MONTHLY',
+    interestBasis: p?.interestBasis ?? 'DAILY_REDUCING',
+    bpiMode: p?.bpiMode ?? 'NONE',
+    stepPercent: s(p?.stepPercent),
+    stepEvery: s(p?.stepEvery),
+    principalEvery: s(p?.principalEvery ?? 1),
+    multipleDisbursements: !!p?.multipleDisbursements,
+    preEmi: !!p?.preEmi,
+    topUpAllowed: !!p?.topUpAllowed,
+    benchmarkCode: s(p?.benchmarkCode),
+    spread: s(p?.spread),
+    resetFrequencyMonths: s(p?.resetFrequencyMonths),
     rounding: p?.rounding ?? 'RUPEE_HALF_UP',
     penalChargeRate: s(p?.penalChargeRate),
     maxMoratoriumMonths: s(p?.maxMoratoriumMonths ?? 0),
@@ -129,6 +154,12 @@ function validate(d: Draft) {
     maxMoratoriumMonths: !intOk(d.maxMoratoriumMonths) ? 'Whole months' : null,
     coolingOffDays: !intOk(d.coolingOffDays) ? 'Whole days' : null,
     appropriationSequence: new Set(d.appropriationSequence).size !== SEQ.length ? 'Each component exactly once' : null,
+    stepPercent: d.repaymentMethod === 'STEP_EQUATED' && (!/^-?\d+(\.\d+)?$/.test(d.stepPercent.trim()) || Number(d.stepPercent) <= -50 || Number(d.stepPercent) > 100 || Number(d.stepPercent) === 0) ? 'Above -50, at most 100, not 0' : null,
+    stepEvery: d.repaymentMethod === 'STEP_EQUATED' && (!intOk(d.stepEvery) || Number(d.stepEvery) < 1) ? 'Instalments between steps' : null,
+    principalEvery: d.repaymentMethod === 'FIXED_PRINCIPAL' && (!intOk(d.principalEvery) || Number(d.principalEvery) < 1) ? '1 or more' : null,
+    interestBasis: d.interestBasis === 'FLAT' && d.repaymentMethod !== 'EQUATED' ? 'Flat rate is for EMI (equated) products only' : null,
+    spread: d.rateType === 'FLOATING' && d.benchmarkCode && !/^-?\d+(\.\d+)?$/.test(d.spread.trim()) ? 'Enter the spread' : null,
+    resetFrequencyMonths: d.rateType === 'FLOATING' && d.benchmarkCode && (!intOk(d.resetFrequencyMonths) || Number(d.resetFrequencyMonths) < 1 || Number(d.resetFrequencyMonths) > 60) ? '1 to 60 months' : null,
   };
   const fees = d.fees.map((f) => ({
     code: !/^[A-Z0-9_]{2,20}$/.test(f.code) ? '2-20 upper-case letters, digits or _' : d.fees.filter((x) => x.code === f.code).length > 1 ? 'Duplicate code' : null,
@@ -160,6 +191,18 @@ function toProduct(d: Draft): LoanProduct {
     interestTableCode: opt(d.interestTableCode),
     rateType: d.rateType,
     dayCount: d.dayCount,
+    frequency: d.frequency,
+    interestBasis: d.interestBasis,
+    bpiMode: d.bpiMode,
+    stepPercent: d.repaymentMethod === 'STEP_EQUATED' ? opt(d.stepPercent) : null,
+    stepEvery: d.repaymentMethod === 'STEP_EQUATED' && d.stepEvery ? Number(d.stepEvery) : null,
+    principalEvery: d.repaymentMethod === 'FIXED_PRINCIPAL' && d.principalEvery ? Number(d.principalEvery) : 1,
+    multipleDisbursements: d.multipleDisbursements,
+    preEmi: d.multipleDisbursements && d.preEmi,
+    topUpAllowed: d.topUpAllowed,
+    benchmarkCode: d.rateType === 'FLOATING' ? opt(d.benchmarkCode) : null,
+    spread: d.rateType === 'FLOATING' && d.benchmarkCode ? opt(d.spread) : null,
+    resetFrequencyMonths: d.rateType === 'FLOATING' && d.benchmarkCode && d.resetFrequencyMonths ? Number(d.resetFrequencyMonths) : null,
     rounding: d.rounding,
     penalChargeRate: opt(d.penalChargeRate),
     maxMoratoriumMonths: Number(d.maxMoratoriumMonths),
@@ -200,6 +243,23 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
   const [d, setD] = useState<Draft>(() => toDraft(initial));
   const [touched, setTouched] = useState(false);
   const propose = useProposeLoanProduct();
+  const templates = useLoanProductTemplates(!initial);
+  const preview = usePreviewLoanProduct();
+  const [template, setTemplate] = useState('');
+  const applyTemplate = (code: string) => {
+    setTemplate(code);
+    const t = (templates.data ?? []).find((x) => x.code === code);
+    if (!t) return;
+    // Keep the code the user typed; a template has none (nothing in it is a live product).
+    setD((x) => ({ ...toDraft({ ...(t.product as unknown as LoanProduct), code: x.code }), status: 'ACTIVE' }));
+    preview.reset();
+  };
+  const runPreview = () => {
+    setTouched(true);
+    const { code: _c, status: _s, ...product } = toProduct(d);
+    if (!Object.entries(v.e).every(([k, x]) => k === 'code' || !x) || !v.fees.every((f) => Object.values(f).every((x) => !x))) return;
+    preview.mutate({ product });
+  };
   const toast = useProposalToast();
   const navigate = useNavigate();
   const v = validate(d);
@@ -232,11 +292,31 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
           submit();
         }}
       >
+        {!initial && (
+          <Card title="Start from a template">
+            <Select
+              label="Template"
+              value={template}
+              placeholder="Blank product"
+              onChange={(e) => applyTemplate(e.target.value)}
+              options={(templates.data ?? []).map((t) => ({ value: t.code ?? '', label: `${t.name} (${(t.category ?? '').toLowerCase()})` }))}
+              hint={(templates.data ?? []).find((t) => t.code === template)?.description ?? 'Illustrative starting points; change anything before you submit'}
+            />
+          </Card>
+        )}
         <Card title="Product">
           <div className="form-grid">
             <Input label="Code" required disabled={!!initial} className="mono" value={d.code} onChange={(e) => set({ code: e.target.value.toUpperCase() })} error={err('code')} />
             <Input label="Name" required value={d.name} onChange={(e) => set({ name: e.target.value })} error={err('name')} />
             <Select label="Repayment method" value={d.repaymentMethod} onChange={(e) => set({ repaymentMethod: e.target.value as Draft['repaymentMethod'] })} options={opts(Object.keys(REPAYMENT_METHOD_LABEL) as Draft['repaymentMethod'][], (m) => REPAYMENT_METHOD_LABEL[m])} />
+            <Select label="Frequency" value={d.frequency} onChange={(e) => set({ frequency: e.target.value as Draft['frequency'] })} options={opts(Object.keys(FREQUENCY_LABEL) as Draft['frequency'][], (f) => FREQUENCY_LABEL[f])} hint="The tenor counts periods of this frequency" />
+            {d.repaymentMethod === 'STEP_EQUATED' && (
+              <>
+                <Input label="Step %" required numeric value={d.stepPercent} onChange={(e) => set({ stepPercent: e.target.value })} hint="10 = step-up, -10 = step-down" error={err('stepPercent')} />
+                <Input label="Step every (instalments)" required numeric value={d.stepEvery} onChange={(e) => set({ stepEvery: e.target.value })} error={err('stepEvery')} />
+              </>
+            )}
+            {d.repaymentMethod === 'FIXED_PRINCIPAL' && <Input label="Principal every (instalments)" numeric value={d.principalEvery} onChange={(e) => set({ principalEvery: e.target.value })} hint="Interest falls due every instalment" error={err('principalEvery')} />}
             <Select label="Status" value={d.status} onChange={(e) => set({ status: e.target.value as Draft['status'] })} options={opts(['DRAFT', 'ACTIVE', 'WITHDRAWN'] as const)} />
             <Input label="Minimum amount" required numeric value={d.minAmount} onChange={(e) => set({ minAmount: e.target.value })} error={err('minAmount')} />
             <Input label="Maximum amount" required numeric value={d.maxAmount} onChange={(e) => set({ maxAmount: e.target.value })} error={err('maxAmount')} />
@@ -246,7 +326,12 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
             <Input label="Cooling-off days" numeric value={d.coolingOffDays} onChange={(e) => set({ coolingOffDays: e.target.value })} error={err('coolingOffDays')} />
           </div>
           <div style={{ marginTop: 12 }}>
-            <Checkbox label="Secured" checked={d.secured} onChange={(e) => set({ secured: e.target.checked })} />
+            <div className="row">
+              <Checkbox label="Secured" checked={d.secured} onChange={(e) => set({ secured: e.target.checked })} />
+              <Checkbox label="Multiple disbursements (tranches)" checked={d.multipleDisbursements} onChange={(e) => set({ multipleDisbursements: e.target.checked })} />
+              <Checkbox label="Pre-EMI interest until fully drawn" checked={d.multipleDisbursements && d.preEmi} disabled={!d.multipleDisbursements || d.repaymentMethod !== 'EQUATED'} onChange={(e) => set({ preEmi: e.target.checked })} />
+              <Checkbox label="Top-up allowed in the same account" checked={d.topUpAllowed} onChange={(e) => set({ topUpAllowed: e.target.checked })} />
+            </div>
           </div>
         </Card>
         <Card title="Interest">
@@ -255,7 +340,20 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
             <Input label="Maximum rate % p.a." required numeric value={d.maxRate} onChange={(e) => set({ maxRate: e.target.value })} error={err('maxRate')} />
             <Input label="Interest table code" hint="Leave empty to enter the rate on each loan" className="mono" value={d.interestTableCode} onChange={(e) => set({ interestTableCode: e.target.value.toUpperCase() })} />
             <Select label="Rate type" value={d.rateType} onChange={(e) => set({ rateType: e.target.value as Draft['rateType'] })} options={opts(['FIXED', 'FLOATING'] as const)} />
-            <Select label="Day count" value={d.dayCount} onChange={(e) => set({ dayCount: e.target.value as Draft['dayCount'] })} options={opts(['ACTUAL_365', 'ACTUAL_360', 'ACTUAL_ACTUAL', 'THIRTY_360'] as const)} />
+            <Select label="Day count" value={d.dayCount} onChange={(e) => set({ dayCount: e.target.value as Draft['dayCount'] })} options={opts(['ACTUAL_365', 'ACTUAL_360', 'ACTUAL_ACTUAL', 'THIRTY_360', 'THIRTY_E_360', 'ACTUAL_366', 'ACTUAL_364', 'ACTUAL_336', 'ACTUAL_372'] as const)} />
+            <Select label="Interest basis" value={d.interestBasis} onChange={(e) => set({ interestBasis: e.target.value as Draft['interestBasis'] })} options={opts(Object.keys(INTEREST_BASIS_LABEL) as Draft['interestBasis'][], (b) => INTEREST_BASIS_LABEL[b])} error={err('interestBasis')} hint={d.interestBasis === 'FLAT' ? 'The KFS shows the equivalent reducing rate and the APR' : undefined} />
+            <Select label="Broken-period interest" value={d.bpiMode} onChange={(e) => set({ bpiMode: e.target.value as Draft['bpiMode'] })} options={opts(Object.keys(BPI_LABEL) as Draft['bpiMode'][], (b) => BPI_LABEL[b])} />
+            {d.rateType === 'FLOATING' && (
+              <>
+                <Select label="Benchmark" value={d.benchmarkCode} placeholder="None" onChange={(e) => set({ benchmarkCode: e.target.value })} options={opts(['REPO', 'MCLR1Y', 'TBILL91'] as const)} hint="Rate = benchmark + spread when the loan gives no rate" />
+                {d.benchmarkCode && (
+                  <>
+                    <Input label="Spread % over the benchmark" required numeric value={d.spread} onChange={(e) => set({ spread: e.target.value })} error={err('spread')} />
+                    <Input label="Rate reset every (months)" required numeric value={d.resetFrequencyMonths} onChange={(e) => set({ resetFrequencyMonths: e.target.value })} error={err('resetFrequencyMonths')} hint="Resets are not automatic yet" />
+                  </>
+                )}
+              </>
+            )}
             <Select label="Rounding" value={d.rounding} onChange={(e) => set({ rounding: e.target.value as Draft['rounding'] })} options={opts(['RUPEE_HALF_UP', 'RUPEE_DOWN', 'RUPEE_UP', 'PAISE_HALF_UP', 'PAISE_HALF_EVEN'] as const)} />
             <Input label="Penal charge rate % p.a." numeric value={d.penalChargeRate} onChange={(e) => set({ penalChargeRate: e.target.value })} error={err('penalChargeRate')} />
           </div>
@@ -312,14 +410,26 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
             })}
           </div>
         </Card>
-        <ErrorBanner error={propose.error} />
+        <ErrorBanner error={propose.error ?? preview.error} />
         {touched && !v.valid && <p className="field__error" role="alert">Fix the highlighted fields.</p>}
         <div className="form-actions">
+          <Button loading={preview.isPending} onClick={runPreview}>
+            Preview sample loan
+          </Button>
           <Button type="submit" variant="primary" loading={propose.isPending}>
             Submit for approval
           </Button>
         </div>
       </form>
+      {preview.data && (
+        <>
+          <Banner tone="info">
+            Sample loan on this draft (nothing is stored): the product’s smallest amount, shortest tenor and lowest rate, GST as an intra-state supply.
+            {preview.data.sampleSchedule ? ' Structured product: equal principal on each period date is shown as an example.' : ''}
+          </Banner>
+          <KfsView kfs={preview.data} title="Preview of the draft product" />
+        </>
+      )}
     </div>
   );
 }

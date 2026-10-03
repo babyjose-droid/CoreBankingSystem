@@ -3,7 +3,7 @@ import { useApprovals, useMe } from '../../api/hooks';
 import { useLoanProduct } from '../../api/lendingHooks';
 import { P, hasPermission } from '../../auth/permissions';
 import { Button, Card, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
-import { REPAYMENT_METHOD_LABEL, describeFee, pct } from './common';
+import { BPI_LABEL, FREQUENCY_LABEL, INTEREST_BASIS_LABEL, REPAYMENT_METHOD_LABEL, describeFee, pct } from './common';
 
 export function LoanProductDetailPage() {
   const { code } = useParams();
@@ -49,6 +49,28 @@ export function LoanProductDetailPage() {
             <dd>
               {p.minTenorMonths}–{p.maxTenorMonths} months
             </dd>
+            <dt>Frequency</dt>
+            <dd>{FREQUENCY_LABEL[p.frequency ?? 'MONTHLY']}</dd>
+            {p.repaymentMethod === 'STEP_EQUATED' && (
+              <>
+                <dt>Step</dt>
+                <dd>
+                  {Number(p.stepPercent) > 0 ? '+' : ''}
+                  {String(p.stepPercent)}% every {p.stepEvery} instalments
+                </dd>
+              </>
+            )}
+            {(p.principalEvery ?? 1) > 1 && (
+              <>
+                <dt>Principal</dt>
+                <dd>Every {p.principalEvery} instalments (interest every instalment)</dd>
+              </>
+            )}
+            <dt>Disbursement</dt>
+            <dd data-testid="product-disbursement">
+              {p.multipleDisbursements ? `In tranches${p.preEmi ? ', pre-EMI interest until fully drawn' : ''}` : 'In one go'}
+              {p.topUpAllowed ? ' · top-up allowed' : ''}
+            </dd>
             <dt>Max moratorium</dt>
             <dd>{p.maxMoratoriumMonths ?? 0} months</dd>
             <dt>Cooling-off</dt>
@@ -75,6 +97,18 @@ export function LoanProductDetailPage() {
                 <span className="muted">None: the rate is entered per loan</span>
               )}
             </dd>
+            <dt>Interest basis</dt>
+            <dd>{INTEREST_BASIS_LABEL[p.interestBasis ?? 'DAILY_REDUCING']}</dd>
+            {p.benchmarkCode && (
+              <>
+                <dt>Benchmark</dt>
+                <dd>
+                  <span className="mono">{p.benchmarkCode}</span> + {String(p.spread)}% · reset every {p.resetFrequencyMonths} months
+                </dd>
+              </>
+            )}
+            <dt>Broken-period interest</dt>
+            <dd>{BPI_LABEL[p.bpiMode ?? 'NONE']}</dd>
             <dt>Day count</dt>
             <dd className="mono">{p.dayCount ?? 'ACTUAL_365'}</dd>
             <dt>Rounding</dt>

@@ -15,7 +15,8 @@ const KIND_LABEL: Record<AmendmentKind, string> = {
   DUE_DAY_CHANGE: 'Due-day change',
   MATURITY_CHANGE: 'Maturity date change',
 };
-export const amendmentKindLabel = (k: string | undefined) => (k === 'RESTRUCTURE' ? 'Restructure' : KIND_LABEL[k as AmendmentKind] ?? k ?? '');
+const OTHER_KIND_LABEL: Record<string, string> = { RESTRUCTURE: 'Restructure', SANCTION_CHANGE: 'Sanction change', NPA_OVERRIDE: 'NPA override' };
+export const amendmentKindLabel = (k: string | undefined) => OTHER_KIND_LABEL[k ?? ''] ?? KIND_LABEL[k as AmendmentKind] ?? k ?? '';
 
 const RATE_OPTIONS: Array<{ value: RateOption; label: string }> = [
   { value: 'KEEP_EMI_CHANGE_TENURE', label: 'Keep EMI, change tenure' },
@@ -55,7 +56,7 @@ function Compare({ caption, rows }: { caption: string; rows: Array<[label: strin
 // ---------------------------------------------------------------- amendment
 export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) {
   const [kind, setKind] = useState<AmendmentKind>('RATE_CHANGE');
-  const [f, setF] = useState({ rate: loan.currentRate ?? loan.rate ?? '', rateOption: 'KEEP_EMI_CHANGE_TENURE' as RateOption, instalments: '', emi: '', dueDay: '', reason: '' });
+  const [f, setF] = useState({ rate: loan.currentRate ?? loan.rate ?? '', rateOption: 'KEEP_EMI_CHANGE_TENURE' as RateOption, instalments: '', emi: '', dueDay: '', maturity: '', reason: '' });
   const [touched, setTouched] = useState(false);
   const preview = usePreviewAmendment(loan.id!);
   const propose = useProposeAmendment(loan.id!);
@@ -67,6 +68,7 @@ export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void
     instalments: (kind === 'TENURE_CHANGE' || (both && !f.emi)) && !isInt(f.instalments, 1, 480) ? (both ? 'Instalments (1-480) or a new EMI' : '1 to 480') : null,
     emi: (kind === 'EMI_CHANGE' || (both && !f.instalments)) && !moneyInput(f.emi) ? (both ? 'A new EMI or the instalments' : 'Enter the new EMI') : null,
     dueDay: kind === 'DUE_DAY_CHANGE' && !isInt(f.dueDay, 1, 31) ? '1 to 31 (31 = month end)' : null,
+    maturity: kind === 'MATURITY_CHANGE' && !f.maturity ? 'Choose the new maturity date' : null,
   };
   const valid = Object.values(errs).every((e) => !e);
   const request: AmendmentRequest = {
@@ -75,6 +77,7 @@ export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void
     ...((kind === 'TENURE_CHANGE' || (both && f.instalments)) ? { remainingInstalments: Number(f.instalments) } : {}),
     ...((kind === 'EMI_CHANGE' || (both && !f.instalments && f.emi)) ? { newEmi: moneyInput(f.emi) ?? f.emi } : {}),
     ...(kind === 'DUE_DAY_CHANGE' ? { newDueDay: Number(f.dueDay) } : {}),
+    ...(kind === 'MATURITY_CHANGE' ? { newMaturityDate: f.maturity } : {}),
   };
   const key = JSON.stringify(request);
   const [previewedKey, setPreviewedKey] = useState<string | null>(null);
@@ -135,6 +138,9 @@ export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void
           )}
           {(kind === 'EMI_CHANGE' || both) && (
             <Input label="New EMI" required={!both} numeric value={f.emi} onChange={(e) => set({ emi: e.target.value })} hint={both ? 'Or give the instalments instead' : `Now ${loan.emi ?? '—'}`} error={err('emi')} />
+          )}
+          {kind === 'MATURITY_CHANGE' && (
+            <Input label="New maturity date" required type="date" value={f.maturity} onChange={(e) => set({ maturity: e.target.value })} hint="The last instalment falls due in this month, on the loan's due day; the EMI is recomputed" error={err('maturity')} />
           )}
           {kind === 'DUE_DAY_CHANGE' && <Input label="New due day" required numeric value={f.dueDay} onChange={(e) => set({ dueDay: e.target.value })} hint="Day of the month; 31 = month end" error={err('dueDay')} />}
         </div>

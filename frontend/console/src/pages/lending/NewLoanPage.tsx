@@ -6,7 +6,7 @@ import type { CustomerSummary, LoanApplication, LoanPartyInput, LoanProduct } fr
 import { formatINR } from '../../lib/money';
 import { Banner, Button, Card, EmptyState, ErrorBanner, Input, Masked, PageHeader, Select, Spinner, StatusBadge, Table, useToast } from '../../ui';
 import { KfsView } from './KfsView';
-import { moneyInput } from './common';
+import { FREQUENCY_LABEL, moneyInput } from './common';
 
 interface Form {
   productCode: string;
@@ -18,7 +18,13 @@ interface Form {
   moratoriumMonths: string;
   balloon: string;
   externalRef: string;
+  instalment: string;
+  maturityAmount: string;
+  plan: Array<{ dueDate: string; principal: string }>;
 }
+
+/** The rate may be left out: interest table, benchmark + spread, or it follows from an instalment / maturity amount. */
+const rateFromElsewhere = (p: LoanProduct, f: Form) => !!p.interestTableCode || !!p.benchmarkCode || !!f.instalment.trim() || !!f.maturityAmount.trim();
 
 function problems(f: Form, product: LoanProduct | undefined, customer: CustomerSummary | null) {
   const amount = moneyInput(f.amount);
@@ -27,7 +33,7 @@ function problems(f: Form, product: LoanProduct | undefined, customer: CustomerS
     customer: !customer ? 'Select a customer' : null,
     productCode: !product ? 'Select a product' : null,
     amount: !amount || Number(amount) <= 0 ? 'Enter an amount' : null,
-    tenorMonths: Number.isNaN(tenor) || tenor < 1 ? 'Whole months' : null,
+    tenorMonths: product?.repaymentMethod === 'STRUCTURED' ? null : Number.isNaN(tenor) || tenor < 1 ? 'Whole number of periods' : null,
     rate: null,
     moratoriumMonths: f.moratoriumMonths && !/^\d+$/.test(f.moratoriumMonths) ? 'Whole months' : null,
     balloon: f.balloon && !moneyInput(f.balloon) ? 'Enter an amount' : null,
@@ -36,11 +42,27 @@ function problems(f: Form, product: LoanProduct | undefined, customer: CustomerS
     if (amount && (Number(amount) < Number(product.minAmount) || Number(amount) > Number(product.maxAmount))) {
       e.amount = `Between ${formatINR(String(product.minAmount))} and ${formatINR(String(product.maxAmount))}`;
     }
-    if (!Number.isNaN(tenor) && (tenor < product.minTenorMonths || tenor > product.maxTenorMonths)) e.tenorMonths = `${product.minTenorMonths} to ${product.maxTenorMonths} months`;
-    if (!product.interestTableCode) {
+    if (product.repaymentMethod !== 'STRUCTURED' && !Number.isNaN(tenor) && (tenor < product.minTenorMonths || tenor > product.maxTenorMonths)) e.tenorMonths = `${product.minTenorMonths} to ${product.maxTenorMonths} months`;
+    if (f.rate.trim() || !rateFromElsewhere(product, f)) {
       const r = Number(f.rate);
       if (!/^\d+(\.\d+)?$/.test(f.rate.trim())) e.rate = 'Enter the rate';
+      else if (f.instalment.trim() || f.maturityAmount.trim()) e.rate = 'Give the rate or the instalment / maturity amount, not both';
       else if (r < Number(product.minRate) || r > Number(product.maxRate)) e.rate = `${product.minRate}% to ${product.maxRate}%`;
+    }
+    e.instalment = f.instalment && !moneyInput(f.instalment) ? 'Enter an amount' : null;
+    e.maturityAmount = f.maturityAmount && !moneyInput(f.maturityAmount) ? 'Enter an amount' : null;
+    if (product.repaymentMethod === 'STRUCTURED') {
+      const total = f.plan.reduce((x, r) => x + Number(moneyInput(r.principal || '0') ?? NaN), 0);
+      e.plan =
+        f.plan.length === 0
+          ? 'Add the principal plan'
+          : f.plan.some((r) => !r.dueDate || moneyInput(r.principal || '0') === null)
+            ? 'Every row needs a date and a principal (0 for an interest-only date)'
+            : f.plan.some((r, i) => i > 0 && r.dueDate <= f.plan[i - 1].dueDate)
+              ? 'The dates must be in ascending order'
+              : amount && Math.abs(total - Number(amount)) > 0.001
+                ? `The principal must add up to the amount (it adds up to ${total})`
+                : null;
     }
     if (f.moratoriumMonths && Number(f.moratoriumMonths) > (product.maxMoratoriumMonths ?? 0)) e.moratoriumMonths = `At most ${product.maxMoratoriumMonths ?? 0}`;
   }
@@ -56,7 +78,7 @@ export function NewLoanPage() {
   const [q, setQ] = useState('');
   const customers = useCustomers(q, 0, 10);
   const [customer, setCustomer] = useState<CustomerSummary | null>(null);
-  const [f, setF] = useState<Form>({ productCode: '', amount: '', tenorMonths: '', rate: '', disbursalDate: me.businessDate, firstDueDate: '', moratoriumMonths: '', balloon: '', externalRef: '' });
+  const [f, setF] = useState<Form>({ productCode: '', amount: '', tenorMonths: '', rate: '', disbursalDate: me.businessDate, firstDueDate: '', moratoriumMonths: '', balloon: '', externalRef: '', instalment: '', maturityAmount: '', plan: [] });
   const [touched, setTouched] = useState(false);
   const [parties, setParties] = useState<Array<{ customer: CustomerSummary; role: LoanPartyInput['role'] }>>([]);
   const preview = usePreviewLoan();
@@ -72,8 +94,11 @@ export function NewLoanPage() {
       productCode: product.code,
       customerId: customer.id,
       amount: moneyInput(f.amount) ?? f.amount,
-      tenorMonths: Number(f.tenorMonths),
-      ...(product.interestTableCode ? {} : { rate: f.rate.trim() }),
+      tenorMonths: product.repaymentMethod === 'STRUCTURED' ? f.plan.length : Number(f.tenorMonths),
+      ...(f.rate.trim() ? { rate: f.rate.trim() } : {}),
+      ...(f.instalment.trim() ? { instalment: moneyInput(f.instalment) ?? f.instalment } : {}),
+      ...(f.maturityAmount.trim() ? { maturityAmount: moneyInput(f.maturityAmount) ?? f.maturityAmount } : {}),
+      ...(product.repaymentMethod === 'STRUCTURED' ? { scheduleRows: f.plan.map((r) => ({ dueDate: r.dueDate, principal: moneyInput(r.principal || '0') ?? r.principal })) } : {}),
       disbursalDate: f.disbursalDate || undefined,
       firstDueDate: f.firstDueDate || undefined,
       ...(f.moratoriumMonths ? { moratoriumMonths: Number(f.moratoriumMonths) } : {}),
@@ -159,7 +184,7 @@ export function NewLoanPage() {
             required
             value={f.productCode}
             placeholder="Select…"
-            onChange={(e) => set({ productCode: e.target.value, rate: '', moratoriumMonths: '', balloon: '' })}
+            onChange={(e) => set({ productCode: e.target.value, rate: '', moratoriumMonths: '', balloon: '', instalment: '', maturityAmount: '', plan: [] })}
             options={active.map((p) => ({ value: p.code, label: `${p.code} — ${p.name}` }))}
             error={err('productCode')}
           />
@@ -172,15 +197,39 @@ export function NewLoanPage() {
             hint={product ? `${formatINR(String(product.minAmount))} – ${formatINR(String(product.maxAmount))}` : undefined}
             error={err('amount')}
           />
-          <Input label="Tenor (months)" required numeric value={f.tenorMonths} onChange={(e) => set({ tenorMonths: e.target.value })} hint={product ? `${product.minTenorMonths}–${product.maxTenorMonths}` : undefined} error={err('tenorMonths')} />
+          {product?.repaymentMethod !== 'STRUCTURED' && (
+            <Input
+              label="Tenor (months)"
+              required
+              numeric
+              value={f.tenorMonths}
+              onChange={(e) => set({ tenorMonths: e.target.value })}
+              hint={product ? `${product.minTenorMonths}–${product.maxTenorMonths}${(product.frequency ?? 'MONTHLY') !== 'MONTHLY' ? ` ${FREQUENCY_LABEL[product.frequency!].toLowerCase()} instalments (not months)` : ''}` : undefined}
+              error={err('tenorMonths')}
+            />
+          )}
           {product && !product.interestTableCode && (
-            <Input label="Rate % p.a." required numeric value={f.rate} onChange={(e) => set({ rate: e.target.value })} hint={`${product.minRate}%–${product.maxRate}%`} error={err('rate')} />
+            <Input
+              label={product.interestBasis === 'FLAT' ? 'Flat rate % p.a.' : 'Rate % p.a.'}
+              required={!rateFromElsewhere(product, f)}
+              numeric
+              value={f.rate}
+              onChange={(e) => set({ rate: e.target.value })}
+              hint={product.benchmarkCode ? `Empty = ${product.benchmarkCode} + ${String(product.spread)}%` : `${product.minRate}%–${product.maxRate}%`}
+              error={err('rate')}
+            />
           )}
           {product?.interestTableCode && (
             <div className="field">
               <span className="field__label">Rate</span>
               <span className="muted">From interest table <span className="mono">{product.interestTableCode}</span></span>
             </div>
+          )}
+          {product?.repaymentMethod === 'EQUATED' && (
+            <Input label="Agreed instalment" numeric value={f.instalment} onChange={(e) => set({ instalment: e.target.value })} hint="Instead of the rate: the rate then follows from it" error={err('instalment')} />
+          )}
+          {product?.repaymentMethod === 'BULLET_TOTAL_INTEREST' && (
+            <Input label="Maturity amount" numeric value={f.maturityAmount} onChange={(e) => set({ maturityAmount: e.target.value })} hint="Instead of the rate: amount repayable at maturity" error={err('maturityAmount')} />
           )}
           <Input label="Disbursal date" type="date" min={me.businessDate} value={f.disbursalDate} onChange={(e) => set({ disbursalDate: e.target.value })} />
           <Input label="First due date" type="date" value={f.firstDueDate} onChange={(e) => set({ firstDueDate: e.target.value })} hint="Optional; defaults to one month after disbursal" />
@@ -192,6 +241,34 @@ export function NewLoanPage() {
           )}
           <Input label="LOS reference" value={f.externalRef} onChange={(e) => set({ externalRef: e.target.value })} hint="Optional; repeating it returns the existing loan" />
         </div>
+        {product?.repaymentMethod === 'STEP_EQUATED' && (
+          <p className="muted" style={{ margin: '12px 0 0' }}>
+            Step plan of the product: the instalment changes by {String(product.stepPercent)}% every {product.stepEvery} instalments.
+          </p>
+        )}
+        {product?.repaymentMethod === 'STRUCTURED' && (
+          <fieldset className="fee-row" style={{ marginTop: 12, display: 'block' }} aria-label="Principal plan">
+            <legend>Principal plan</legend>
+            <p className="muted" style={{ margin: '0 0 8px', fontSize: 12 }}>Principal falling due on each date (0 for an interest-only date). The tenor is the number of rows; the principal must add up to the amount.</p>
+            {f.plan.map((r, i) => (
+              <div className="row" key={i} style={{ alignItems: 'flex-end', marginBottom: 8 }}>
+                <Input label={`Due date ${i + 1}`} type="date" min={f.disbursalDate} value={r.dueDate} onChange={(e) => set({ plan: f.plan.map((x, j) => (j === i ? { ...x, dueDate: e.target.value } : x)) })} />
+                <Input label={`Principal ${i + 1}`} numeric value={r.principal} onChange={(e) => set({ plan: f.plan.map((x, j) => (j === i ? { ...x, principal: e.target.value } : x)) })} />
+                <Button size="sm" variant="ghost" aria-label={`Remove plan row ${i + 1}`} onClick={() => set({ plan: f.plan.filter((_, j) => j !== i) })}>
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <Button size="sm" onClick={() => set({ plan: [...f.plan, { dueDate: '', principal: '' }] })}>
+              Add plan row
+            </Button>
+            {touched && errs.plan && (
+              <span className="field__error" role="alert" style={{ display: 'block', marginTop: 8 }}>
+                {errs.plan}
+              </span>
+            )}
+          </fieldset>
+        )}
         <div className="form-actions" style={{ marginTop: 16 }}>
           <Button
             loading={preview.isPending}

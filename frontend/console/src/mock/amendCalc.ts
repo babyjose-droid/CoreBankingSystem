@@ -150,6 +150,19 @@ export function amendState(loan: StoredLoan, st: LoanState, req: AmendmentReques
       n = instalments(req.remainingInstalments);
       emi = C.pmt(bal, rate, n);
       break;
+    case 'MATURITY_CHANGE': {
+      // A tenure change expressed as a date: the last instalment falls due in that month, on the loan's due day.
+      const target = req.newMaturityDate ?? '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(target)) throw bad('Give the new maturity date', [{ field: 'newMaturityDate', message: 'Required' }]);
+      const [y1, m1] = fut[0].dueDate.split('-').map(Number);
+      const [y2, m2] = target.split('-').map(Number);
+      const months = (y2 - y1) * 12 + (m2 - m1) + 1;
+      if (months < 1) throw bad('The new maturity must not be before the next instalment', [{ field: 'newMaturityDate', message: 'Too early' }]);
+      n = instalments(months, 'newMaturityDate');
+      if (n === fut.length) throw bad('The loan already matures in that month', [{ field: 'newMaturityDate', message: 'No change' }]);
+      emi = C.pmt(bal, rate, n);
+      break;
+    }
     case 'EMI_CHANGE': {
       if (!(num(req.newEmi) > 0)) throw bad('Enter the new EMI', [{ field: 'newEmi', message: 'Required' }]);
       emi = C.roundRupee(C.toPaise(String(req.newEmi)));
@@ -170,7 +183,7 @@ export function amendState(loan: StoredLoan, st: LoanState, req: AmendmentReques
       break;
     }
     default:
-      throw bad('Kind must be RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE or DUE_DAY_CHANGE', [{ field: 'kind', message: 'Invalid' }]);
+      throw bad('Kind must be RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE or MATURITY_CHANGE', [{ field: 'kind', message: 'Invalid' }]);
   }
   if (n > 480) throw bad(`That needs ${n} more instalments; at most 480 are allowed`, [{ field: 'remainingInstalments', message: 'Too long' }]);
   if (n > fut.length && st.raised + n > loan.product.maxTenorMonths) {

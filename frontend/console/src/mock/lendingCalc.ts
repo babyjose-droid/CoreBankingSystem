@@ -87,22 +87,68 @@ export function interestFor(balance: Paise, ratePct: number, days: number): Pais
   return roundRupee((balance * ratePct * days) / 36500);
 }
 
+export type Frequency = NonNullable<LoanProduct['frequency']>;
+/** Instalment periods per year. */
+export const PERIODS_PER_YEAR: Record<Frequency, number> = { DAILY: 365, WEEKLY: 52, FORTNIGHTLY: 26, MONTHLY: 12, QUARTERLY: 4, HALF_YEARLY: 2, YEARLY: 1 };
+const MONTHS_PER_PERIOD: Partial<Record<Frequency, number>> = { MONTHLY: 1, QUARTERLY: 3, HALF_YEARLY: 6, YEARLY: 12 };
+const DAYS_PER_PERIOD: Partial<Record<Frequency, number>> = { DAILY: 1, WEEKLY: 7, FORTNIGHTLY: 14 };
+
+/** `n` periods of the frequency after `iso`. */
+export function addPeriods(iso: string, n: number, freq: Frequency = 'MONTHLY', monthEnd = false): string {
+  const days = DAYS_PER_PERIOD[freq];
+  if (days) {
+    const d = toUtcDate(iso);
+    d.setUTCDate(d.getUTCDate() + days * n);
+    return d.toISOString().slice(0, 10);
+  }
+  return addMonths(iso, n * (MONTHS_PER_PERIOD[freq] ?? 1), monthEnd);
+}
+
+/** Due date of instalment n (1-based) at a frequency; see dueDate for the anchoring rule. */
+export function dueDateAt(disbursal: string, firstDue: string | null | undefined, n: number, freq: Frequency = 'MONTHLY'): string {
+  if (!firstDue) return addPeriods(disbursal, n, freq, isMonthEnd(disbursal));
+  return n === 1 ? firstDue : addPeriods(firstDue, n - 1, freq, isMonthEnd(firstDue));
+}
+
 /** PMT rounded to the rupee. */
-export function pmt(principal: Paise, ratePct: number, n: number): Paise {
+export function pmt(principal: Paise, ratePct: number, n: number, ppy = 12): Paise {
   if (n <= 0) return principal;
   if (ratePct === 0) return roundRupee(principal / n);
-  const i = ratePct / 1200;
+  const i = ratePct / (100 * ppy);
   return roundRupee((principal * i) / (1 - Math.pow(1 + i, -n)));
 }
 
 /** EMI when a balloon of `balloon` is left for the last instalment (on top of its EMI). */
-export function pmtBalloon(principal: Paise, ratePct: number, n: number, balloon: Paise): Paise {
-  if (!balloon) return pmt(principal, ratePct, n);
+export function pmtBalloon(principal: Paise, ratePct: number, n: number, balloon: Paise, ppy = 12): Paise {
+  if (!balloon) return pmt(principal, ratePct, n, ppy);
   if (n <= 0) return principal;
   if (ratePct === 0) return roundRupee((principal - balloon) / n);
-  const i = ratePct / 1200;
+  const i = ratePct / (100 * ppy);
   const pv = balloon / Math.pow(1 + i, n);
   return roundRupee(((principal - pv) * i) / (1 - Math.pow(1 + i, -n)));
+}
+
+/** Annual rate (%) at which `n` instalments of `emi` repay `principal` (rate basis "tenure, amount and instalment"). */
+export function rateForInstalment(principal: Paise, n: number, emi: Paise, ppy = 12): number {
+  if (emi * n <= principal) return 0;
+  let lo = 0;
+  let hi = 200;
+  for (let k = 0; k < 80; k++) {
+    const mid = (lo + hi) / 2;
+    const i = mid / (100 * ppy);
+    const need = (principal * i) / (1 - Math.pow(1 + i, -n));
+    if (need > emi) hi = mid;
+    else lo = mid;
+  }
+  return Math.round(lo * 10000) / 10000;
+}
+
+/** First instalment of a step-up / step-down loan: instalment k is base x (1 + step%)^floor(k / every). */
+export function stepBase(principal: Paise, ratePct: number, n: number, stepPct: number, every: number, ppy = 12): Paise {
+  const i = ratePct / (100 * ppy);
+  let pv = 0;
+  for (let k = 0; k < n; k++) pv += Math.pow(1 + stepPct / 100, Math.floor(k / every)) / Math.pow(1 + i, k + 1);
+  return roundRupee(principal / pv);
 }
 
 export interface RowsInput {
@@ -119,6 +165,14 @@ export interface RowsInput {
   /** FIXED_PRINCIPAL: fixed principal part. */
   principalPart?: Paise | null;
   startNo?: number;
+  /** STEP_EQUATED: instalment of row i (0-based within this call). */
+  emiAt?: (i: number) => Paise;
+  /** STRUCTURED: principal of each row. */
+  principalPlan?: Paise[];
+  /** FIXED_PRINCIPAL: principal falls due every n-th row only. */
+  principalEvery?: number;
+  /** Rows before this call (for principalEvery counting). */
+  offset?: number;
 }
 
 /** Builds schedule rows; the last row clears the balance and absorbs rounding. */
@@ -137,7 +191,10 @@ export function buildRows(input: RowsInput): Row[] {
     return [{ no: start, dueDate: due, days, opening: bal, interest, principal: bal, instalment: bal + interest, closing: 0 }];
   }
   const emi = input.emi ?? pmt(bal, ratePct, dueDates.length - mor);
-  const part = input.principalPart ?? roundRupee(bal / dueDates.length);
+  const every = Math.max(1, input.principalEvery ?? 1);
+  const offset = input.offset ?? 0;
+  const principalRows = dueDates.filter((_, i) => (offset + i + 1) % every === 0 || i === dueDates.length - 1).length;
+  const part = input.principalPart ?? roundRupee(bal / Math.max(1, every > 1 ? principalRows : dueDates.length));
   const full = bal;
   for (let i = 0; i < dueDates.length; i++) {
     const due = dueDates[i];
@@ -147,7 +204,9 @@ export function buildRows(input: RowsInput): Row[] {
     let principal: Paise;
     if (last) principal = bal;
     else if (i < mor) principal = 0;
-    else if (method === 'EQUATED') principal = Math.min(Math.max(emi - interest, 0), bal);
+    else if (input.principalPlan) principal = Math.min(input.principalPlan[i] ?? 0, bal);
+    else if (method === 'EQUATED' || method === 'STEP_EQUATED') principal = Math.min(Math.max((input.emiAt ? input.emiAt(i) : emi) - interest, 0), bal);
+    else if (method === 'FIXED_PRINCIPAL' && every > 1 && (offset + i + 1) % every !== 0) principal = 0;
     else if (method === 'FIXED_PRINCIPAL') principal = Math.min(part, bal);
     else principal = 0; // BULLET_PERIODIC_INTEREST
     const closing = bal - principal;

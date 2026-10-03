@@ -99,6 +99,15 @@ export const VIEW_PERMISSIONS: Permission[] = [
   P.kycViewDocument,
   P.reportRun,
   P.dashboardView,
+  P.apiclientView,
+  P.collectionView,
+  P.customFieldView,
+  P.integrationView,
+  P.jobView,
+  P.mandateView,
+  P.messageView,
+  P.payoutView,
+  P.webhookView,
 ];
 
 export const PROPOSE_PERMISSIONS: Permission[] = [
