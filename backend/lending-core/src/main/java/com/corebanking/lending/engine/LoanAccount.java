@@ -115,6 +115,15 @@ public final class LoanAccount {
 
     public record Result(List<TransactionLot> lots, String summary) {}
 
+    /**
+     * An amount as a summary shows it: no trailing zeros ("5000", not "5000.0000"). Callers pass amounts at whatever
+     * scale they hold them — a receipt from a payment gateway arrives at the scale of its database column.
+     */
+    static String plain(BigDecimal v) {
+        BigDecimal s = v.stripTrailingZeros();
+        return (s.scale() < 0 ? s.setScale(0) : s).toPlainString();
+    }
+
     private final Params p;
     private Status status;
     private LocalDate disbursedOn;
@@ -253,7 +262,7 @@ public final class LoanAccount {
         BigDecimal fees = deducted.stream().map(FeeRule.Charge::total).reduce(ZERO, BigDecimal::add);
         BigDecimal net = firstTranche.subtract(fees).subtract(advance);
         a.tranches.add(new TrancheRow(1, terms.disbursalDate(), firstTranche, fees, advance, net));
-        return new Book(a, schedule, net, deducted, new Result(lots, "Disbursed " + firstTranche + ", net " + net), advance, charged);
+        return new Book(a, schedule, net, deducted, new Result(lots, "Disbursed " + plain(firstTranche) + ", net " + plain(net)), advance, charged);
     }
 
     public record Book(LoanAccount account, List<Instalment> schedule, BigDecimal netDisbursal, List<FeeRule.Charge> deductedFees,
@@ -537,7 +546,7 @@ public final class LoanAccount {
             }
             status = Status.CLOSED;               // fully repaid; any advance stays payable to the borrower
         }
-        return new Result(lots, "Received " + amount + (split.excess().signum() > 0 ? ", advance " + split.excess() : "")
+        return new Result(lots, "Received " + plain(amount) + (split.excess().signum() > 0 ? ", advance " + plain(split.excess()) : "")
                 + (status == Status.CLOSED ? "; loan closed" : ""));
     }
 
@@ -588,7 +597,7 @@ public final class LoanAccount {
             rebuilt = rebuildOnMethod(mode, businessDate, emiBefore);
         }
         future = renumber(rebuilt, demands.size());
-        return new Result(lots, "Prepaid " + amount + ", " + future.size() + " instalments left, next " + future.get(0).instalment());
+        return new Result(lots, "Prepaid " + plain(amount) + ", " + future.size() + " instalments left, next " + plain(future.get(0).instalment()));
     }
 
     /** A monthly equated loan on the daily-reducing basis (every loan booked before P2-6). */
@@ -730,7 +739,7 @@ public final class LoanAccount {
         }
         capitalisedSuspense = ZERO;
         status = Status.CLOSED;
-        return new Result(lots, "Pre-closed for " + amount);
+        return new Result(lots, "Pre-closed for " + plain(amount));
     }
 
     /** The part of an allocation funded by the advance is removed from the principal credited by the bank receipt. */
@@ -778,7 +787,7 @@ public final class LoanAccount {
         }
         lots.add(post.repayment(amount, split, false, businessDate, "Cancellation"));
         status = Status.CANCELLED;
-        return new Result(lots, "Cancelled in cooling-off; received " + amount);
+        return new Result(lots, "Cancelled in cooling-off; received " + plain(amount));
     }
 
     /** Principal + interest for the days used + any charge not deducted at disbursal. */
@@ -795,7 +804,7 @@ public final class LoanAccount {
                 .orElseThrow(() -> new IllegalArgumentException("fee " + feeCode + " is not defined on the product"));
         FeeRule.Charge c = rule.compute(base, p.supplierState(), p.recipientState(), Rounding.PAISE_HALF_UP);
         charges.add(new ChargeRow("C" + (++chargeSeq), c.code(), c.name(), Component.FEE, businessDate, c.total(), ZERO, ZERO));
-        return new Result(List.of(postings(businessDate).feeCharge(c, businessDate)), "Charged " + c.name() + " " + c.total());
+        return new Result(List.of(postings(businessDate).feeCharge(c, businessDate)), "Charged " + c.name() + " " + plain(c.total()));
     }
 
     /** Waives an unpaid charge (fee or penal) in full or part (US-057). */
@@ -815,13 +824,13 @@ public final class LoanAccount {
                 if (rule != null && rule.gstRatePercent().signum() > 0 && Gst.creditNoteInTime(c.date(), businessDate)) {
                     Gst.Inclusive parts = Gst.unbundle(amount, rule.gstRatePercent(), p.supplierState(), p.recipientState());
                     return new Result(List.of(postings(businessDate).feeWaiver(c.id(), c.name(), amount, parts, foreclosure)),
-                            "Waived " + amount + " of " + c.name() + " (credit note: taxable " + parts.taxable().toPlainString()
+                            "Waived " + plain(amount) + " of " + c.name() + " (credit note: taxable " + parts.taxable().toPlainString()
                                     + ", GST " + parts.tax().total().toPlainString() + ")");
                 }
             }
             boolean npa = assetClass.isNpa() && c.kind() == Component.PENAL;
             if (npa) suspense = suspense.subtract(amount.min(freeSuspense()));
-            return new Result(List.of(postings(businessDate).waiver(c.kind(), amount, npa, foreclosure)), "Waived " + amount + " of " + c.name());
+            return new Result(List.of(postings(businessDate).waiver(c.kind(), amount, npa, foreclosure)), "Waived " + plain(amount) + " of " + c.name());
         }
         throw new IllegalArgumentException("charge " + chargeId + " not found");
     }

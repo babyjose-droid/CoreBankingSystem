@@ -3546,7 +3546,7 @@ components:
         value: { type: string }
         description: { type: [string, 'null'] }
         updatedBy: { type: string }
-        updatedAt: { type: string }
+        updatedAt: { type: string, format: date-time }
     PropertyChange:
       type: object
       required: [value]
@@ -3706,7 +3706,7 @@ components:
         effectiveFrom: { type: string, format: date }
         effectiveTo: { type: [string, 'null'], format: date }
         createdBy: { type: string }
-        createdAt: { type: string }
+        createdAt: { type: string, format: date-time }
         inForce: { type: boolean, description: In force on the current business date }
     RelationshipInput:
       type: object

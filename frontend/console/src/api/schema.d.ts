@@ -3249,6 +3249,7 @@ export interface components {
             value?: string;
             description?: string | null;
             updatedBy?: string;
+            /** Format: date-time */
             updatedAt?: string;
         };
         PropertyChange: {
@@ -3437,6 +3438,7 @@ export interface components {
             /** Format: date */
             effectiveTo?: string | null;
             createdBy?: string;
+            /** Format: date-time */
             createdAt?: string;
             /** @description In force on the current business date */
             inForce: boolean;

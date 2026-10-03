@@ -264,7 +264,8 @@ class ReferenceDataController {
     @GetMapping("/system-properties")
     @PreAuthorize("hasAuthority('master:view')")
     List<Property> properties() {
-        return jdbc.query("SELECT key, value, description, updated_by, updated_at::text FROM platform.system_property ORDER BY key",
+        return jdbc.query("SELECT key, value, description, updated_by, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') "
+                        + "FROM platform.system_property ORDER BY key",
                 (rs, i) -> new Property(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)));
     }
 

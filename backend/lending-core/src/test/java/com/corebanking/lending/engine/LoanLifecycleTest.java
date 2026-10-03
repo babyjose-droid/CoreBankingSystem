@@ -210,6 +210,17 @@ class LoanLifecycleTest {
     }
 
     @Test
+    void summaries_show_amounts_without_trailing_zeros_whatever_scale_the_caller_holds() {
+        var book = LoanAccount.disburse(params(List.of()), LoanTerms.equated(bd("100000"), bd("18"), 12, OPEN), OPEN);
+        LoanAccount a = book.account();
+        a.endOfDay(OPEN, Provisioning.starter());
+        // a gateway receipt read from a numeric(…,4) column
+        assertEquals("Received 5000, advance 5000", a.pay(bd("5000.0000"), OPEN.plusDays(1), OPEN.plusDays(1), "UPI").summary());
+        assertEquals("Received 250.5, advance 250.5", a.pay(bd("250.50"), OPEN.plusDays(1), OPEN.plusDays(1), "UPI").summary());
+        assertEquals("100000", LoanAccount.plain(bd("1E+5")));
+    }
+
+    @Test
     void cooling_off_cancellation_and_frozen_accounts() {
         Gl gl = new Gl();
         var book = LoanAccount.disburse(params(List.of(PF)), LoanTerms.equated(bd("100000"), bd("18"), 12, OPEN), OPEN);

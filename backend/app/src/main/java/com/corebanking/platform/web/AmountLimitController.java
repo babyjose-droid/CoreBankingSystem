@@ -52,7 +52,8 @@ class AmountLimitController {
         BusinessDays.BusinessDay bd = days.current();
         LocalDate today = bd == null ? LocalDate.now() : bd.businessDate();
         return jdbc.query("""
-                SELECT id, role_name, txn_type, per_txn_max, per_day_max, effective_from, effective_to, created_by, created_at::text,
+                SELECT id, role_name, txn_type, per_txn_max, per_day_max, effective_from, effective_to, created_by,
+                       to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                        (effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)) AS in_force
                   FROM platform.amount_limit
                  WHERE (?::text IS NULL OR role_name = ?) AND (?::text IS NULL OR txn_type = ?)
