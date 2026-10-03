@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/cache/gradle \
  && test -s /workspace/app.jar
 
 # ---- Stage 2: runtime ------------------------------------------------------------------------
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:24-jre
 
 LABEL org.opencontainers.image.title="corebanking-backend" \
       org.opencontainers.image.description="CoreBanking core banking and lending backend" \
