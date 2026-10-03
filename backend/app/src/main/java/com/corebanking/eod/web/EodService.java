@@ -30,9 +30,12 @@ class EodService {
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final int partitions;
     private final List<com.corebanking.eod.EodStepProvider> providers;
+    private final List<com.corebanking.eod.EodListener> listeners;
 
     EodService(TenantDataSources dataSources, AuditLog audit, List<com.corebanking.eod.EodStepProvider> providers,
+               List<com.corebanking.eod.EodListener> listeners,
                @org.springframework.beans.factory.annotation.Value("${corebanking.eod.partitions:4}") int partitions) {
+        this.listeners = List.copyOf(listeners);
         this.dataSources = dataSources;
         this.audit = audit;
         this.partitions = partitions;
@@ -90,6 +93,16 @@ class EodService {
                 alert(jdbc, tenant, runId);
             }
             log.info("EOD run {} for {} finished {}", runId, tenant, status);
+            if (status != EodEngine.RunStatus.FAILED) {
+                LocalDate opened = jdbc.queryForObject("SELECT business_date FROM platform.business_day WHERE id = 1", LocalDate.class);
+                for (com.corebanking.eod.EodListener listener : listeners) {
+                    try {
+                        TenantDataSources.runAs(tenant, () -> listener.businessDateOpened(tenant, bd, opened));
+                    } catch (RuntimeException e) {
+                        log.warn("after end of day {} for {}: {} failed", runId, tenant, listener.getClass().getSimpleName(), e);
+                    }
+                }
+            }
         });
     }
 

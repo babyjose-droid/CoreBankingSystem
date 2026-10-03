@@ -31,6 +31,8 @@ tags:
   - name: Lending
   - name: Documents
   - name: Reporting
+  - name: Integrations
+  - name: Jobs
   - name: Control plane
 paths:
   /api/v1/me:
@@ -486,6 +488,7 @@ paths:
       summary: Search customers
       parameters:
         - { name: q, in: query, description: 'Customer number, exact PAN or exact mobile', schema: { type: string } }
+        - { name: externalRef, in: query, description: 'The id of the customer in the LOS (create-or-get): returns that customer or an empty list', schema: { type: string } }
         - { name: page, in: query, schema: { type: integer, default: 0 } }
         - { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
       responses:
@@ -1136,6 +1139,45 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LoanProduct' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loan-product-templates:
+    get:
+      tags: [Lending]
+      operationId: listLoanProductTemplates
+      summary: Product templates - starting points for the product wizard (US-038)
+      description: >-
+        Seeded examples (personal EMI, business EMI and step-up, gold bullet, weekly micro-loan, flat-rate consumer
+        loan, floating home loan in tranches, seasonal structured loan). `product` has the shape of LoanProduct
+        without code, status and version; the figures are illustrative and nothing here is a live product.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LoanProductTemplate' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loan-products/preview:
+    post:
+      tags: [Lending]
+      operationId: previewLoanProduct
+      summary: Simulate an account on a draft product - schedule, fees, net disbursal, APR (US-044; nothing is stored)
+      description: >-
+        The product need not be saved or approved, and needs no code. The sample loan defaults to the product's
+        smallest amount, shortest tenor and lowest rate. GST is shown as an intra-state supply. For a STRUCTURED
+        product without `scheduleRows`, equal principal on each period date is shown as an example
+        (`sampleSchedule: true`). The engine is the one that books loans, so a product the engine would refuse is
+        refused here (422).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductPreviewRequest' }
+      responses:
+        '200':
+          description: KFS figures of the sample loan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanKfs' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans/preview:
     post:
       tags: [Lending]
@@ -1280,6 +1322,16 @@ paths:
       tags: [Lending]
       operationId: disburseLoan
       summary: Staff users get a 202 approval; LOS clients with loan:stp are disbursed immediately (200)
+      description: >-
+        `amount` is what to disburse now; omitted, it is everything not yet drawn. A part of the sanctioned amount
+        can be drawn only on a product with `multipleDisbursements`; further tranches use this same endpoint while
+        the loan is ACTIVE with an undrawn amount. Interest accrues only on what is drawn. DISBURSEMENT fees are
+        charged once, on the first tranche, on the sanctioned amount; EVERY_DISBURSEMENT fees on each tranche's
+        amount; broken-period interest in mode DEDUCT_AT_DISBURSAL is taken from the first tranche. The schedule is
+        rebuilt on each tranche: with `preEmi` the instalments are interest-only until the loan is fully drawn (or
+        the undrawn amount is cancelled) and the EMIs then run for the full tenor; otherwise the instalments are
+        recomputed on the amount drawn over the instalments left. No tranche is paid while the account has unpaid
+        dues or is NPA (409). A tranche cannot be reversed.
       parameters: [ { $ref: '#/components/parameters/Id' } ]
       requestBody:
         content:
@@ -1287,6 +1339,7 @@ paths:
             schema:
               type: object
               properties:
+                amount: { type: [number, string], description: 'Amount of this disbursement; default: all that is undrawn' }
                 beneficiaryName: { type: string }
                 beneficiaryAccount: { type: string }
                 ifsc: { type: string }
@@ -1299,12 +1352,153 @@ paths:
               schema: { $ref: '#/components/schemas/Loan' }
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/tranches:
+    get:
+      tags: [Lending]
+      operationId: listLoanTranches
+      summary: Disbursements made so far and the amount still undrawn (US-050)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanTranches' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/simulations/disbursement:
+    post:
+      tags: [Lending]
+      operationId: simulateLoanDisbursement
+      summary: What a disbursement would do today - fees, interest deducted, net payout, schedule (nothing changes)
+      description: >-
+        For a SANCTIONED loan the first disbursement, for an ACTIVE loan the next tranche. Computed by the code that
+        posts the disbursement; nothing is posted or stored. The same refusals apply (409 / 422).
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: { type: [number, string, 'null'], description: 'Default: all that is undrawn' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DisbursementSimulation' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/simulations/transaction:
+    post:
+      tags: [Lending]
+      operationId: simulateLoanTransaction
+      summary: What a receipt, part-prepayment or pre-closure would do on a date (nothing changes)
+      description: >-
+        `onDate` is today or up to 366 days ahead: the day-ends until then (demands, accrual, penal charges,
+        classification) are run on a copy first. The figures come from the engine code that posts the transaction;
+        nothing is posted or stored. Restructure options are simulated by `/restructure/simulation`.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransactionSimulationRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionSimulation' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/sanction-change/preview:
+    post:
+      tags: [Lending]
+      operationId: previewLoanSanctionChange
+      summary: Before/after of a change of the sanctioned amount (nothing changes)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SanctionChangeRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SanctionChangePreview' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/sanction-change:
+    post:
+      tags: [Lending]
+      operationId: proposeLoanSanctionChange
+      summary: Propose a top-up, a reduction or the cancellation of the undrawn amount (maker-checker, entity LOAN_SANCTION_CHANGE)
+      description: >-
+        **Reduction** may only take away undrawn amount (never below what is disbursed); `cancelUndrawn` brings the
+        sanctioned amount down to the amount disbursed, which starts the EMIs of a pre-EMI loan. **Top-up** in the
+        same account needs a product with `topUpAllowed`, an amount within the product maximum and the customer's
+        exposure limit, and a STANDARD account with no unpaid dues that is not under post-restructuring monitoring
+        (409 otherwise: new money to a borrower in arrears would be evergreening). No money moves on approval: the
+        extra amount is then paid out through `/disbursement`. One checker. Recorded in the amendment history
+        (kind SANCTION_CHANGE); it cannot be reversed. Needs `loan:amend`.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SanctionChangeRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/npa-override:
+    post:
+      tags: [Lending]
+      operationId: proposeLoanNpaOverride
+      summary: Manual NPA mark - downgrade the account to an NPA class or hold it there (maker-checker, two checkers)
+      description: >-
+        Entity LOAN_NPA_OVERRIDE, action OVERRIDE. The override sets the worst class the account may be upgraded to
+        until `until`: it can downgrade the account or hold it at its present NPA class, never upgrade it (409).
+        A downgrade from a performing class moves unrealised interest to suspense. While it holds, day-end
+        classification can make the class worse but not better; after it expires the normal rules apply. LOSS is
+        permanent. Recorded in the amendment history (kind NPA_OVERRIDE); it cannot be reversed. Needs `loan:classify`.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NpaOverrideRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/npa-override/release:
+    post:
+      tags: [Lending]
+      operationId: proposeLoanNpaRelease
+      summary: Un-mark - end a manual NPA override before its expiry (maker-checker, two checkers)
+      description: >-
+        Entity LOAN_NPA_OVERRIDE, action RELEASE. Refused (409) while the account has unpaid dues, when proposed
+        and again when approved: an NPA is upgraded only when all arrears are cleared (RBI IRACP norms). Nothing is
+        posted; the next day-end classifies the account by the normal rules. A LOSS classification cannot be
+        released. Needs `loan:classify`.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans/{id}/repayments:
     post:
       tags: [Lending]
       operationId: repayLoan
       summary: Receipt appropriated per product sequence; any excess is kept as an advance
-      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -1318,6 +1512,13 @@ paths:
                 mode: { type: string, examples: [CASH, NACH, UPI, NEFT] }
                 reference: { type: string }
       responses:
+        '202':
+          description: >-
+            End of day has started (cut-off). The repayment of a straight-through client (`loan:stp`) is accepted and will
+            be booked and valued on the next business date. Send it without `valueDate`. A staff posting gets 409 instead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeferredReceiptAccepted' }
         '200':
           description: OK
           content:
@@ -1477,7 +1678,7 @@ paths:
     post:
       tags: [Lending]
       operationId: previewLoanAmendment
-      summary: Before/after figures and the new schedule for a rate, tenure, EMI or due-day change (nothing changes)
+      summary: Before/after figures and the new schedule for a rate, tenure, EMI, due-day or maturity-date change (nothing changes)
       description: >-
         Same engine as the posting. Rate resets follow RBI's 18-Aug-2023 circular on floating-rate EMI loans: the
         borrower keeps the EMI and changes the tenure, keeps the tenure and changes the EMI, or changes both. A
@@ -1833,6 +2034,894 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Dashboard' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/integrations/providers/catalogue:
+    get:
+      tags: [Integrations]
+      operationId: listProviderCatalogue
+      summary: Providers the product knows, their settings and secret names, and whether each is verified and enabled
+      description: 'Permission: integration:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/integrations/providers:
+    get:
+      tags: [Integrations]
+      operationId: listProviderConfigs
+      summary: Provider configuration per kind; secrets appear only as set + last four characters
+      description: 'Permission: integration:view.'
+      parameters:
+        - { name: history, in: query, description: 'Include superseded versions', schema: { type: boolean } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Integrations]
+      operationId: proposeProviderConfig
+      summary: Propose a provider configuration (maker-checker)
+      description: 'Permission: integration:admin. Secrets are encrypted in the approval request and never shown to the checker. A secret left out keeps its current value.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProviderConfigInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/integrations/providers/{kind}/deactivate:
+    post:
+      tags: [Integrations]
+      operationId: proposeProviderDeactivation
+      summary: Propose to deactivate the provider of a kind (maker-checker)
+      description: 'Permission: integration:admin.'
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string } }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/integrations/simulator/callbacks:
+    post:
+      tags: [Integrations]
+      operationId: simulateProviderCallback
+      summary: Test and demo only - play a callback of the SIMULATOR provider through the real verification path
+      description: 'Permission: integration:simulate.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SimulatedCallback' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /hooks/v1/{tenant}/{kind}/{provider}:
+    post:
+      tags: [Integrations]
+      operationId: receiveProviderCallback
+      security: []
+      summary: Provider callback (inbound webhook)
+      description: 'Permission: none. No access token - the request is authenticated by the provider signature over the raw body, checked with the secret of the tenant in the path. 200 is returned only after the event is durably stored; a repeated event id is answered 200 with duplicate = true and is not processed again. 401 when the signature does not verify.'
+      parameters:
+        - { name: tenant, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [payout, collection, mandate] } }
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/loans/{id}/payout-beneficiary:
+    put:
+      tags: [Integrations]
+      operationId: setPayoutBeneficiary
+      summary: Record the bank account the disbursement is paid to, after the gateway validates it
+      description: 'Permission: payout:beneficiary. 422 when the bank does not confirm the account. The account number is stored encrypted and returned masked.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BeneficiaryInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [Integrations]
+      operationId: getPayoutBeneficiary
+      summary: The payout beneficiary of a loan (masked)
+      description: 'Permission: payout:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/payouts:
+    get:
+      tags: [Integrations]
+      operationId: searchPayouts
+      summary: Payout reconciliation query
+      description: 'Permission: payout:view.'
+      parameters:
+        - { name: status, in: query, description: 'INITIATED, ON_HOLD, SENT, SUCCESS, FAILED, RETURNED or CANCELLED', schema: { type: string } }
+        - { name: needsAction, in: query, schema: { type: boolean } }
+        - { name: loanId, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/payouts/{id}:
+    get:
+      tags: [Integrations]
+      operationId: getPayout
+      summary: A payout with its status history
+      description: 'Permission: payout:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/payouts/{id}/retry:
+    post:
+      tags: [Integrations]
+      operationId: retryPayout
+      summary: Resume a payout on hold, send again one whose outcome is unknown, or make a new attempt after a parked failure
+      description: 'Permission: payout:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/payouts/{id}/refresh:
+    post:
+      tags: [Integrations]
+      operationId: refreshPayout
+      summary: Ask the provider for the status now
+      description: 'Permission: payout:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/loans/{id}/collection-orders:
+    post:
+      tags: [Integrations]
+      operationId: createCollectionOrder
+      summary: Create a payment link or order for a loan
+      description: 'Permission: collection:create.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionOrderInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [Integrations]
+      operationId: listCollectionOrders
+      summary: Payment orders of a loan
+      description: 'Permission: collection:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/collection-orders/{id}:
+    get:
+      tags: [Integrations]
+      operationId: getCollectionOrder
+      summary: A payment order
+      description: 'Permission: collection:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/gateway-payments/reconciliation:
+    get:
+      tags: [Integrations]
+      operationId: getCollectionReconciliation
+      summary: Gateway settlements against postings, unmatched in both directions
+      description: 'Permission: collection:view.'
+      parameters:
+        - { name: category, in: query, description: 'MATCHED, PAYMENT_NOT_POSTED, POSTED_NOT_SETTLED, SETTLED_NOT_RECEIVED, AMOUNT_MISMATCH or REFUND_DUE; without it everything that is not MATCHED', schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/gateway-payments/{id}/resolve:
+    post:
+      tags: [Integrations]
+      operationId: resolveGatewayPayment
+      summary: Unmatched receipts queue - assign a receipt to a loan or mark it for refund
+      description: 'Permission: collection:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentResolution' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/gateway-settlements/upload:
+    post:
+      tags: [Integrations]
+      operationId: uploadGatewaySettlements
+      summary: Load a settlement report (CSV with provider_payment_id, amount, settled_on and optionally fee, utr)
+      description: 'Permission: collection:admin.'
+      parameters:
+        - { name: fileRef, in: query, required: true, schema: { type: string, maxLength: 60 } }
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/loans/{id}/mandates:
+    post:
+      tags: [Integrations]
+      operationId: registerMandate
+      summary: Register an e-mandate for a loan
+      description: 'Permission: mandate:register.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MandateInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [Integrations]
+      operationId: listLoanMandates
+      summary: Mandates of a loan, the one in force first
+      description: 'Permission: mandate:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/loans/{id}/nach-presentations:
+    get:
+      tags: [Integrations]
+      operationId: listLoanNachPresentations
+      summary: NACH presentations of a loan with their outcomes
+      description: 'Permission: mandate:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/mandates:
+    get:
+      tags: [Integrations]
+      operationId: searchMandates
+      summary: The mandate register
+      description: 'Permission: mandate:view.'
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/mandates/{id}:
+    get:
+      tags: [Integrations]
+      operationId: getMandate
+      summary: A mandate with its status history
+      description: 'Permission: mandate:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/mandates/{id}/status:
+    post:
+      tags: [Integrations]
+      operationId: updateMandateStatus
+      summary: Set a mandate status by hand (sponsor bank report, cancellation, suspension)
+      description: 'Permission: mandate:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MandateStatusUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/mandates/status-upload:
+    post:
+      tags: [Integrations]
+      operationId: uploadMandateStatuses
+      summary: Registration statuses from a file (CSV with mandate_ref, status and optionally umrn, reject_code, reject_reason)
+      description: 'Permission: mandate:admin.'
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/return-reasons:
+    get:
+      tags: [Integrations]
+      operationId: listNachReturnReasons
+      summary: NACH return reason codes (indicative until verified)
+      description: 'Permission: mandate:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/files:
+    get:
+      tags: [Integrations]
+      operationId: listNachFiles
+      summary: Presentation and response files
+      description: 'Permission: nach:admin.'
+      parameters:
+        - { name: direction, in: query, description: 'PRESENTATION or RESPONSE', schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/files/{id}/content:
+    get:
+      tags: [Integrations]
+      operationId: getNachFileContent
+      summary: The file itself (it holds account numbers; the download is audited)
+      description: 'Permission: nach:file.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/files/{id}/simulate-response:
+    post:
+      tags: [Integrations]
+      operationId: simulateNachResponse
+      summary: Test and demo only - the response a bank would send for a presentation file
+      description: 'Permission: integration:simulate.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/presentations/generate:
+    post:
+      tags: [Integrations]
+      operationId: generateNachPresentations
+      summary: Generate presentation files for the open business date (the end-of-day step does the same)
+      description: 'Permission: nach:admin.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/presentations/pending:
+    get:
+      tags: [Integrations]
+      operationId: listPendingNachFollowUps
+      summary: Outcomes whose repayment or bounce charge is not yet posted
+      description: 'Permission: nach:admin.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/nach/responses:
+    post:
+      tags: [Integrations]
+      operationId: uploadNachResponse
+      summary: Upload a NACH response file for processing
+      description: 'Permission: nach:admin. 409 when the same file was already received. The file is refused as a whole when its control totals do not match its rows.'
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/event-types:
+    get:
+      tags: [Integrations]
+      operationId: getWebhookEventTypes
+      summary: Event types, their fields, the signature header and the retry schedule
+      description: 'Permission: webhook:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/endpoints:
+    get:
+      tags: [Integrations]
+      operationId: listWebhookEndpoints
+      summary: Webhook endpoints (never their secrets)
+      description: 'Permission: webhook:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Integrations]
+      operationId: proposeWebhookEndpoint
+      summary: Propose a webhook endpoint (maker-checker)
+      description: 'Permission: webhook:admin. The URL must be https with a public DNS name.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookEndpointInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/endpoints/{id}:
+    put:
+      tags: [Integrations]
+      operationId: proposeWebhookEndpointChange
+      summary: Propose a change to an endpoint (maker-checker)
+      description: 'Permission: webhook:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookEndpointInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/endpoints/{id}/actions:
+    post:
+      tags: [Integrations]
+      operationId: proposeWebhookEndpointAction
+      summary: Propose DISABLE, ENABLE or ROTATE_SECRET (maker-checker)
+      description: 'Permission: webhook:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActionInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/endpoints/{id}/secret:
+    post:
+      tags: [Integrations]
+      operationId: collectWebhookSecret
+      summary: Collect the signing secret - once, by the user who proposed the endpoint or the rotation
+      description: 'Permission: webhook:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/endpoints/{id}/replay-dead:
+    post:
+      tags: [Integrations]
+      operationId: replayDeadWebhookDeliveries
+      summary: Replay every dead-lettered delivery of an endpoint
+      description: 'Permission: webhook:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/deliveries:
+    get:
+      tags: [Integrations]
+      operationId: listWebhookDeliveries
+      summary: The delivery log
+      description: 'Permission: webhook:view.'
+      parameters:
+        - { name: endpointId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, description: 'PENDING, RETRY, DELIVERED or DEAD', schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/deliveries/{id}:
+    get:
+      tags: [Integrations]
+      operationId: getWebhookDelivery
+      summary: A delivery with its attempts
+      description: 'Permission: webhook:view.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/webhooks/deliveries/{id}/replay:
+    post:
+      tags: [Integrations]
+      operationId: replayWebhookDelivery
+      summary: Send the event to its endpoint again, as a new delivery
+      description: 'Permission: webhook:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/api-clients:
+    get:
+      tags: [Integrations]
+      operationId: listApiClients
+      summary: OAuth2 API clients of the tenant
+      description: 'Permission: apiclient:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Integrations]
+      operationId: proposeApiClient
+      summary: Propose an API client (maker-checker; two checkers when a money-moving scope is included)
+      description: 'Permission: apiclient:admin.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApiClientInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/api-clients/scopes:
+    get:
+      tags: [Integrations]
+      operationId: listApiClientScopes
+      summary: The scopes an API client may hold and which need two checkers
+      description: 'Permission: apiclient:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/api-clients/{clientId}:
+    get:
+      tags: [Integrations]
+      operationId: getApiClient
+      summary: An API client
+      description: 'Permission: apiclient:view.'
+      parameters:
+        - { name: clientId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/api-clients/{clientId}/scopes:
+    put:
+      tags: [Integrations]
+      operationId: proposeApiClientScopes
+      summary: Propose a scope change (maker-checker)
+      description: 'Permission: apiclient:admin.'
+      parameters:
+        - { name: clientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApiClientScopes' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/api-clients/{clientId}/actions:
+    post:
+      tags: [Integrations]
+      operationId: proposeApiClientAction
+      summary: Propose ROTATE_SECRET, DISABLE or ENABLE (maker-checker)
+      description: 'Permission: apiclient:admin.'
+      parameters:
+        - { name: clientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActionInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/api-clients/{clientId}/secret:
+    post:
+      tags: [Integrations]
+      operationId: collectApiClientSecret
+      summary: Collect the client secret - once, by the user who proposed the client or the rotation
+      description: 'Permission: apiclient:admin. The secret is generated at the identity provider at this moment and is not stored by CoreBanking.'
+      parameters:
+        - { name: clientId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/message-templates:
+    get:
+      tags: [Integrations]
+      operationId: listMessageTemplates
+      summary: SMS and e-mail templates
+      description: 'Permission: message:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Integrations]
+      operationId: proposeMessageTemplate
+      summary: Propose a template (maker-checker)
+      description: 'Permission: message:admin.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageTemplateInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/message-templates/variables:
+    get:
+      tags: [Integrations]
+      operationId: listMessageTemplateVariables
+      summary: Template codes (events) and the placeholders each may use
+      description: 'Permission: message:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/messages:
+    get:
+      tags: [Integrations]
+      operationId: listMessages
+      summary: The delivery log - recipient masked, never the text
+      description: 'Permission: message:view.'
+      parameters:
+        - { name: customerId, in: query, schema: { type: string, format: uuid } }
+        - { name: loanId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, description: 'QUEUED, SENT, FAILED or SUPPRESSED', schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /api/v1/customers/{id}/message-opt-outs:
+    post:
+      tags: [Integrations]
+      operationId: setMessageOptOut
+      summary: Record or lift a customer opt-out of a channel
+      description: 'Permission: message:admin.'
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageOptOut' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /platform/v1/tenants:
     get:
       tags: [Control plane]
@@ -1899,6 +2988,419 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/MigrationResult' }
+        default: { $ref: '#/components/responses/Problem' }
+  # ---- P2-7 platform completion ----
+  /api/v1/custom-fields:
+    get:
+      tags: [Platform]
+      operationId: listCustomFields
+      summary: Custom field definitions for customers, loan accounts and loan products
+      description: Permission `custom-field:view`.
+      parameters:
+        - { name: entity, in: query, schema: { type: string, enum: [CUSTOMER, LOAN_ACCOUNT, LOAN_PRODUCT] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CustomField' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Platform]
+      operationId: proposeCustomField
+      summary: Propose a custom field or a change to one (maker-checker)
+      description: >-
+        Permission `custom-field:propose`. The type and the personal-data flag of an existing field cannot change; a field
+        is deactivated, never deleted. A field flagged `pii` must be TEXT: its values are stored encrypted and returned masked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomFieldInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loan-products/{code}/custom:
+    get:
+      tags: [Lending]
+      operationId: getLoanProductCustom
+      summary: Custom field values of a loan product
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanProductCustom' }
+        default: { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [Lending]
+      operationId: proposeLoanProductCustom
+      summary: Propose the custom field values of a loan product (maker-checker)
+      description: Permission `product:propose`. The body holds the complete set of values.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                custom: { $ref: '#/components/schemas/CustomValues' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/deferred-receipts:
+    get:
+      tags: [Lending]
+      operationId: listLoanDeferredReceipts
+      summary: Receipts of the loan accepted during end of day
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DeferredReceipt' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deferred-receipts:
+    get:
+      tags: [Lending]
+      operationId: listDeferredReceipts
+      summary: Receipts accepted during end of day, in the caller's branch scope
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, APPLIED, FAILED, CANCELLED] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DeferredReceipt' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deferred-receipts/{id}/retry:
+    post:
+      tags: [Lending]
+      operationId: retryDeferredReceipt
+      summary: Queue a failed receipt again
+      description: Permission `loan:admin`. Use it once the cause of the failure (for example a frozen loan) is fixed.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeferredReceipt' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deferred-receipts/{id}/cancel:
+    post:
+      tags: [Lending]
+      operationId: cancelDeferredReceipt
+      summary: Set a failed receipt aside (refunded or handled outside)
+      description: Permission `loan:admin`. The note says what was done with the money.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Note' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeferredReceipt' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/sessions:
+    get:
+      tags: [Session]
+      operationId: listSessions
+      summary: The caller's login sessions, or another user's with session:admin
+      parameters:
+        - { name: user, in: query, description: User name; needs `session:admin`, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LoginSession' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/sessions/{id}:
+    delete:
+      tags: [Session]
+      operationId: terminateSession
+      summary: End a login session
+      description: >-
+        Without `user` the session must be one of the caller's own; with `user` (`session:admin`) one of that user's.
+        Every termination is audited. An access token already issued stays valid until it expires.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: user, in: query, schema: { type: string } }
+      responses:
+        '204': { description: Ended }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/jobs:
+    get:
+      tags: [Jobs]
+      operationId: listJobs
+      summary: Job catalogue with schedules, next fire time and last run
+      description: Permission `job:view`.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Job' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/jobs/runs:
+    get:
+      tags: [Jobs]
+      operationId: listJobRuns
+      summary: Job runs, newest first
+      parameters:
+        - { name: job, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/JobRun' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/jobs/{code}:
+    put:
+      tags: [Jobs]
+      operationId: proposeJobSchedule
+      summary: Propose a job's schedule, on/off switch and parameters (maker-checker)
+      description: >-
+        Permission `job:schedule`. The schedule is a six-field cron (second minute hour day-of-month month day-of-week)
+        in India Standard Time. For a report job the maker needs the report's permission; the scheduled runs use the
+        maker's branch scope and belong to the maker.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobScheduleInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/jobs/{code}/run:
+    post:
+      tags: [Jobs]
+      operationId: runJob
+      summary: Run a job now
+      description: Permission `job:run`. Answers when the job has finished. 409 when the job is already running.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobRun' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/dashboard/trend:
+    get:
+      tags: [Reporting]
+      operationId: getDashboardTrend
+      summary: Whole-book figures per business date (all-branch users)
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, maximum: 366 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DashboardTrendPoint' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/support-access:
+    get:
+      tags: [Platform]
+      operationId: listSupportAccess
+      summary: Support access requests and grants of this tenant
+      description: Permission `support-access:approve`.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [REQUESTED, APPROVED, REJECTED, REVOKED, EXPIRED, LAPSED] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SupportAccess' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/support-access/{id}/approve:
+    post:
+      tags: [Platform]
+      operationId: approveSupportAccess
+      summary: Approve a support access request; it expires after the requested duration
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Note' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportAccess' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/support-access/{id}/reject:
+    post:
+      tags: [Platform]
+      operationId: rejectSupportAccess
+      summary: Reject a support access request (a note is required)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Note' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportAccess' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/support-access/{id}/revoke:
+    post:
+      tags: [Platform]
+      operationId: revokeSupportAccess
+      summary: Revoke a support access grant at once
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Note' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportAccess' }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/usage:
+    get:
+      tags: [Control plane]
+      operationId: listUsage
+      summary: Daily usage per tenant (active loans and customers, API calls, storage, staff users)
+      parameters:
+        - { name: tenant, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UsageDay' }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/usage/monthly:
+    get:
+      tags: [Control plane]
+      operationId: listMonthlyUsage
+      summary: Monthly usage per tenant for billing
+      parameters:
+        - { name: month, in: query, description: YYYY-MM; the previous month when left out, schema: { type: string } }
+        - { name: tenant, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UsageMonth' }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/usage/monthly.csv:
+    get:
+      tags: [Control plane]
+      operationId: exportMonthlyUsage
+      summary: Monthly usage per tenant as CSV
+      parameters:
+        - { name: month, in: query, schema: { type: string } }
+        - { name: tenant, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/usage/snapshot:
+    post:
+      tags: [Control plane]
+      operationId: snapshotUsage
+      summary: Take the usage snapshot now for one tenant or for all
+      parameters:
+        - { name: tenant, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: One entry per tenant
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/support-access:
+    get:
+      tags: [Control plane]
+      operationId: listSupportRequests
+      summary: The engineer's own support access requests (all of them for an operator)
+      parameters:
+        - { name: tenant, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SupportAccess' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Control plane]
+      operationId: requestSupportAccess
+      summary: Ask for time-boxed, read-only access to a tenant
+      description: >-
+        Permission `platform:support` (platform realm). Nothing is granted by this call: the tenant's admin approves in
+        the tenant API. While a grant is in force the engineer may call that tenant's GET endpoints on the support list
+        with the headers `X-Support-Tenant` and `X-Support-Grant`; responses have personal values masked and every call
+        is written to the tenant's audit trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SupportAccessRequest' }
+      responses:
+        '201':
+          description: Requested
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportAccess' }
         default: { $ref: '#/components/responses/Problem' }
 
 components:
@@ -2132,6 +3634,7 @@ components:
       type: object
       required: [customerType, firstName, homeBranch, dateOfBirth, mobile]
       properties:
+        custom: { $ref: '#/components/schemas/CustomValues' }
         customerType: { type: string, enum: [INDIVIDUAL, NON_INDIVIDUAL] }
         firstName: { type: string }
         middleName: { type: string }
@@ -2152,10 +3655,12 @@ components:
             pincode: { type: string, pattern: '^[1-9][0-9]{5}$' }
         overrideDedupe: { type: boolean, description: Proceed despite possible duplicates (requires approval with reason) }
         overrideReason: { type: string }
+        externalRef: { type: string, pattern: '^[A-Za-z0-9._:-]{1,64}$', description: 'The id of the customer in the LOS; repeating it returns the existing customer' }
     CustomerSummary:
       type: object
       required: [id, customerNo, displayName, status]
       properties:
+        custom: { $ref: '#/components/schemas/CustomValues' }
         id: { type: string, format: uuid }
         customerNo: { type: string }
         displayName: { type: string }
@@ -2488,7 +3993,12 @@ components:
       properties:
         code: { type: string, pattern: '^[A-Z0-9_]{2,20}$' }
         name: { type: string }
-        event: { type: string, enum: [DISBURSEMENT, PRECLOSURE, PART_PREPAYMENT, BOUNCE, LATE_PAYMENT, CANCELLATION, ADHOC] }
+        event:
+          type: string
+          enum: [DISBURSEMENT, EVERY_DISBURSEMENT, PRECLOSURE, PART_PREPAYMENT, BOUNCE, LATE_PAYMENT, CANCELLATION, ADHOC]
+          description: >-
+            DISBURSEMENT: once, on the first disbursement, on the sanctioned amount. EVERY_DISBURSEMENT: on each
+            tranche, on that tranche's amount. Only these two may be deducted from the payout.
         calcType: { type: string, enum: [FIXED, PERCENT, SLAB] }
         amount: { type: [number, string, 'null'] }
         percent: { type: [number, string, 'null'] }
@@ -2505,22 +4015,211 @@ components:
         gstRate: { type: [number, string, 'null'], default: 18 }
         taxTreatment: { type: string, enum: [EXCLUSIVE, INCLUSIVE] }
         deductFromDisbursal: { type: boolean }
+    RepaymentMethod:
+      type: string
+      enum: [EQUATED, STEP_EQUATED, FIXED_PRINCIPAL, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST, STRUCTURED]
+      description: >-
+        EQUATED: equal instalments. STEP_EQUATED: instalments that step up or down by stepPercent every stepEvery
+        instalments. FIXED_PRINCIPAL: equal principal plus interest on the balance. BULLET_TOTAL_INTEREST: principal
+        and all interest at maturity. BULLET_PERIODIC_INTEREST: interest every period, principal at maturity.
+        STRUCTURED: principal as assigned to each date on the loan (scheduleRows), with the interest accrued.
+    RepaymentFrequency:
+      type: string
+      enum: [DAILY, WEEKLY, FORTNIGHTLY, MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY]
+      default: MONTHLY
+    LoanProductTemplate:
+      type: object
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        category: { type: string, enum: [RETAIL, BUSINESS, GOLD, MICRO, CONSUMER, HOUSING, AGRI] }
+        product: { type: object, additionalProperties: true, description: 'LoanProduct without code, status and version' }
+    PrincipalRow:
+      type: object
+      required: [dueDate, principal]
+      properties:
+        dueDate: { type: string, format: date }
+        principal: { type: [number, string], description: Principal falling due on the date; zero for an interest-only date }
+    ProductPreviewRequest:
+      type: object
+      required: [product]
+      properties:
+        product: { type: object, additionalProperties: true, description: 'A draft LoanProduct; code, status and version are not needed' }
+        amount: { type: [number, string, 'null'], description: 'Default: the product minimum' }
+        tenorMonths: { type: [integer, 'null'], description: 'Periods of the product frequency; default: the product minimum' }
+        rate: { type: [number, string, 'null'], description: 'Default: the product minimum rate, or benchmark + spread, or the interest table' }
+        disbursalDate: { type: [string, 'null'], format: date }
+        firstDueDate: { type: [string, 'null'], format: date }
+        moratoriumMonths: { type: [integer, 'null'] }
+        balloon: { type: [number, string, 'null'] }
+        instalment: { type: [number, string, 'null'] }
+        maturityAmount: { type: [number, string, 'null'] }
+        scheduleRows: { type: [array, 'null'], items: { $ref: '#/components/schemas/PrincipalRow' } }
+    LoanTranches:
+      type: object
+      properties:
+        sanctionedAmount: { $ref: '#/components/schemas/Money' }
+        disbursedAmount: { $ref: '#/components/schemas/Money' }
+        undrawnAmount: { $ref: '#/components/schemas/Money' }
+        multipleDisbursements: { type: boolean }
+        preEmi: { type: boolean }
+        tranches:
+          type: array
+          items:
+            type: object
+            properties:
+              trancheNo: { type: integer }
+              txnId: { type: string, format: uuid }
+              businessDate: { type: string, format: date }
+              amount: { $ref: '#/components/schemas/Money' }
+              feesDeducted: { $ref: '#/components/schemas/Money' }
+              interestDeducted: { $ref: '#/components/schemas/Money' }
+              netDisbursed: { $ref: '#/components/schemas/Money' }
+              createdBy: { type: string }
+    ChargeBreakup:
+      type: object
+      properties:
+        code: { type: string }
+        name: { type: string }
+        fee: { type: string }
+        cgst: { type: string }
+        sgst: { type: string }
+        igst: { type: string }
+        total: { type: string }
+    DisbursementSimulation:
+      type: object
+      properties:
+        asOf: { type: string, format: date }
+        trancheNo: { type: integer }
+        amount: { $ref: '#/components/schemas/Money' }
+        deductedFees: { type: array, items: { $ref: '#/components/schemas/ChargeBreakup' } }
+        chargedFees: { type: array, items: { $ref: '#/components/schemas/ChargeBreakup' }, description: Fees charged to the account instead of deducted }
+        interestDeducted: { $ref: '#/components/schemas/Money' }
+        netDisbursal: { $ref: '#/components/schemas/Money' }
+        disbursedAfter: { $ref: '#/components/schemas/Money' }
+        undrawnAfter: { $ref: '#/components/schemas/Money' }
+        fullyDrawn: { type: boolean }
+        preEmi: { type: boolean, description: Interest-only instalments continue after this disbursement }
+        instalmentAfter: { $ref: '#/components/schemas/Money' }
+        schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+    TransactionSimulationRequest:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [REPAYMENT, PREPAYMENT, PRECLOSURE] }
+        amount: { type: [number, string, 'null'], description: 'REPAYMENT and PREPAYMENT' }
+        mode: { type: [string, 'null'], enum: [REDUCE_EMI, REDUCE_TENURE, null], description: 'PREPAYMENT; default: the product setting' }
+        onDate: { type: [string, 'null'], format: date, description: 'Today (default) or up to 366 days ahead' }
+    TransactionSimulation:
+      type: object
+      description: Fields depend on type.
+      properties:
+        type: { type: string }
+        asOf: { type: string, format: date }
+        onDate: { type: string, format: date }
+        amount: { type: string }
+        duesBefore: { type: string, description: REPAYMENT }
+        allocations:
+          type: array
+          description: 'REPAYMENT: what the receipt is appropriated to, in order'
+          items:
+            type: object
+            properties:
+              ref: { type: string, description: 'D<n> = instalment n; otherwise a charge id' }
+              component: { type: string, enum: [INTEREST, PRINCIPAL, PENAL, FEE] }
+              amount: { type: string }
+        principal: { type: string }
+        interest: { type: string }
+        fees: { type: string }
+        penal: { type: string }
+        advance: { type: string, description: 'REPAYMENT: excess kept as an advance' }
+        duesAfter: { type: string }
+        principalOutstandingAfter: { type: string }
+        dpdAfter: { type: integer }
+        assetClassAfter: { type: string }
+        statusAfter: { type: string }
+        mode: { type: string, description: PREPAYMENT }
+        feeCharged: { type: string, description: PREPAYMENT }
+        instalmentBefore: { type: string }
+        instalmentAfter: { type: string }
+        remainingBefore: { type: integer }
+        remainingAfter: { type: integer }
+        schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' }, description: 'PREPAYMENT: the schedule after it' }
+        overdueDues: { type: string, description: PRECLOSURE }
+        accruedInterest: { type: string, description: PRECLOSURE }
+        charges: { type: string, description: PRECLOSURE }
+        foreclosureFee: { type: string, description: PRECLOSURE }
+        advanceAdjusted: { type: string, description: PRECLOSURE }
+        total: { type: string, description: 'PRECLOSURE: amount to close the loan on the date' }
+    SanctionChangeRequest:
+      type: object
+      description: Give either newAmount or cancelUndrawn; reason is required when proposing.
+      properties:
+        newAmount: { type: [number, string, 'null'] }
+        cancelUndrawn: { type: [boolean, 'null'], description: Bring the sanctioned amount down to the amount disbursed }
+        reason: { type: string }
+    SanctionChangePreview:
+      type: object
+      properties:
+        asOf: { type: string, format: date }
+        sanctionedBefore: { type: string }
+        sanctionedAfter: { type: string }
+        disbursed: { type: string }
+        undrawnAfter: { type: string }
+        topUp: { type: boolean }
+        schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+        note: { type: string }
+    NpaOverrideRequest:
+      type: object
+      required: [assetClass, until, reason]
+      properties:
+        assetClass: { type: string, enum: [SUBSTANDARD, DOUBTFUL1, DOUBTFUL2, DOUBTFUL3, LOSS] }
+        until: { type: string, format: date, description: Expiry of the override (inclusive); after the business date }
+        reason: { type: string }
     LoanProduct:
       type: object
       required: [code, name, repaymentMethod, minAmount, maxAmount, minTenorMonths, maxTenorMonths, minRate, maxRate]
       properties:
         code: { type: string, pattern: '^[A-Z0-9]{2,12}$' }
         name: { type: string }
-        repaymentMethod: { type: string, enum: [EQUATED, FIXED_PRINCIPAL, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST] }
+        repaymentMethod: { $ref: '#/components/schemas/RepaymentMethod' }
+        frequency: { $ref: '#/components/schemas/RepaymentFrequency' }
+        interestBasis:
+          type: string
+          enum: [DAILY_REDUCING, PERIODIC_REDUCING, FLAT]
+          default: DAILY_REDUCING
+          description: >-
+            DAILY_REDUCING: simple interest per annum on the balance for the actual days, by the day count.
+            PERIODIC_REDUCING: balance x rate / periods per year for every full period. FLAT (EQUATED only):
+            interest = amount x rate x tenor, in equal instalments; the account accrues at the equivalent reducing
+            rate, and the KFS shows that rate and the APR.
+        bpiMode:
+          type: string
+          enum: [NONE, ADD_TO_FIRST_INSTALMENT, SEPARATE_DEMAND, DEDUCT_AT_DISBURSAL]
+          default: NONE
+          description: >-
+            Broken-period interest, for the days between disbursal and the start of the first regular period when
+            the first due date is later than one period: absorbed by the first instalment's split (NONE), added to
+            the first instalment, demanded on its own, or deducted from the payout.
+        stepPercent: { type: [number, string, 'null'], description: 'STEP_EQUATED: change of the instalment at each step, e.g. 10 (step-up) or -10 (step-down); above -50, at most 100' }
+        stepEvery: { type: [integer, 'null'], minimum: 1, description: 'STEP_EQUATED: instalments between steps' }
+        principalEvery: { type: integer, minimum: 1, default: 1, description: 'FIXED_PRINCIPAL: principal falls due every n-th instalment, interest every instalment' }
+        multipleDisbursements: { type: boolean, default: false, description: 'The loan may be disbursed in tranches (EQUATED, FIXED_PRINCIPAL and bullet products on DAILY_REDUCING)' }
+        preEmi: { type: boolean, default: false, description: 'With multipleDisbursements on an EQUATED product: interest only on the amount drawn until the final tranche, then EMIs for the full tenor. Otherwise EMIs on the amount drawn, recomputed on each tranche.' }
+        topUpAllowed: { type: boolean, default: false, description: 'The sanctioned amount of a live account may be raised (same methods as multipleDisbursements)' }
+        benchmarkCode: { type: [string, 'null'], description: 'Floating products: rate = benchmark + spread when the application gives no rate. Needs spread, resetFrequencyMonths and rateType FLOATING.' }
+        spread: { type: [number, string, 'null'] }
+        resetFrequencyMonths: { type: [integer, 'null'], minimum: 1, maximum: 60 }
         minAmount: { type: [number, string] }
         maxAmount: { type: [number, string] }
-        minTenorMonths: { type: integer }
-        maxTenorMonths: { type: integer }
+        minTenorMonths: { type: integer, description: 'Counted in periods of the frequency (months for MONTHLY)' }
+        maxTenorMonths: { type: integer, description: 'Counted in periods of the frequency (months for MONTHLY)' }
         minRate: { type: [number, string] }
         maxRate: { type: [number, string] }
         interestTableCode: { type: [string, 'null'] }
         rateType: { type: string, enum: [FIXED, FLOATING] }
-        dayCount: { type: string, enum: [ACTUAL_365, ACTUAL_360, ACTUAL_ACTUAL, THIRTY_360] }
+        dayCount: { type: string, enum: [ACTUAL_365, ACTUAL_360, ACTUAL_ACTUAL, THIRTY_360, THIRTY_E_360, ACTUAL_366, ACTUAL_364, ACTUAL_336, ACTUAL_372] }
         rounding: { type: string, enum: [RUPEE_HALF_UP, RUPEE_DOWN, RUPEE_UP, PAISE_HALF_UP, PAISE_HALF_EVEN] }
         penalChargeRate: { type: [number, string, 'null'] }
         maxMoratoriumMonths: { type: integer }
@@ -2536,12 +4235,16 @@ components:
       type: object
       required: [productCode, customerId, amount, tenorMonths]
       properties:
+        custom: { $ref: '#/components/schemas/CustomValues' }
         productCode: { type: string }
         customerId: { type: string, format: uuid }
         branch: { type: string, description: Defaults to the customer's home branch }
         amount: { type: [number, string] }
-        tenorMonths: { type: integer }
-        rate: { type: [number, string, 'null'], description: 'Omit to use the product interest table' }
+        tenorMonths: { type: integer, description: 'Instalment periods of the product frequency (months for a monthly product)' }
+        rate: { type: [number, string, 'null'], description: 'Omit to use, in this order, the instalment or maturityAmount given, the product benchmark + spread, or its interest table. For a FLAT product this is the flat rate.' }
+        instalment: { type: [number, string, 'null'], description: 'EQUATED: the agreed instalment; the rate follows from it (rate basis "tenure, amount and instalment"). Not together with rate.' }
+        maturityAmount: { type: [number, string, 'null'], description: 'BULLET_TOTAL_INTEREST: the amount repayable at maturity; the simple annual rate follows from it. Not together with rate.' }
+        scheduleRows: { type: [array, 'null'], items: { $ref: '#/components/schemas/PrincipalRow' }, description: 'STRUCTURED: principal by date, ascending, adding up to the amount; tenorMonths = number of rows' }
         disbursalDate: { type: string, format: date }
         firstDueDate: { type: string, format: date }
         moratoriumMonths: { type: integer }
@@ -2579,11 +4282,20 @@ components:
         productVersion: { type: integer }
         amount: { $ref: '#/components/schemas/Money' }
         tenorMonths: { type: integer }
+        frequency: { type: string }
         repaymentMethod: { type: string }
         rateType: { type: string }
-        interestRate: { type: string }
+        interestBasis: { type: string }
+        interestRate: { type: string, description: The rate as quoted (the flat rate of a flat-rate loan) }
+        effectiveRate: { type: string, description: 'Annual rate on the reducing balance that the account accrues at; differs from interestRate for a flat rate or a given instalment' }
         rateExplanation: { type: string }
-        emi: { type: [string, 'null'] }
+        emi: { type: [string, 'null'], description: 'Regular instalment of an equated loan (the first step of a step loan)' }
+        bpiMode: { type: string }
+        brokenPeriodInterest: { type: string }
+        interestDeductedAtDisbursal: { type: string }
+        aprBasis: { type: string, enum: [NOMINAL_PERIODIC_IRR, XIRR], description: 'Evenly spaced instalments: periodic IRR x periods per year. Bullet, structured or separately collected broken-period interest: XIRR on the dated flows.' }
+        draft: { type: boolean, description: Product preview only }
+        sampleSchedule: { type: boolean, description: 'Product preview only: the schedule rows were made up as an example' }
         instalments: { type: integer }
         totalInterest: { $ref: '#/components/schemas/Money' }
         fees:
@@ -2600,11 +4312,11 @@ components:
               total: { type: string }
         netDisbursal: { $ref: '#/components/schemas/Money' }
         totalRepayable: { $ref: '#/components/schemas/Money' }
-        apr: { type: string, description: 'Annual percentage rate (IRR of net flows, fees ex-GST)' }
+        apr: { type: string, description: 'Annual percentage rate: IRR of the actual cash flows (amount less fees ex-GST and interest deducted upfront, then every instalment). For a flat-rate loan this is the true reducing-balance cost.' }
         penalChargeRate: { type: [string, 'null'] }
         penalChargeNote: { type: string }
         coolingOffDays: { type: integer }
-        placeOfSupply: { type: string }
+        placeOfSupply: { type: [string, 'null'] }
         schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
     LoanSummary:
       type: object
@@ -2627,6 +4339,7 @@ components:
         - $ref: '#/components/schemas/LoanSummary'
         - type: object
           properties:
+            custom: { $ref: '#/components/schemas/CustomValues' }
             customerId: { type: string, format: uuid }
             productVersion: { type: integer }
             rate: { type: string }
@@ -2646,6 +4359,17 @@ components:
             restructuredOn: { type: [string, 'null'], format: date }
             restructureCount: { type: integer }
             upgradeNotBefore: { type: [string, 'null'], format: date, description: 'Restructured and under monitoring: earliest end of the specified period' }
+            frequency: { $ref: '#/components/schemas/RepaymentFrequency' }
+            disbursedAmount: { type: string }
+            undrawnAmount: { type: string, description: Sanctioned amount not yet disbursed }
+            multipleDisbursements: { type: boolean }
+            preEmi: { type: boolean }
+            topUpAllowed: { type: boolean }
+            overrideClass: { type: [string, 'null'], description: 'Manual NPA override: the class the account is held at or below' }
+            overrideUntil: { type: [string, 'null'], format: date }
+            benchmarkCode: { type: [string, 'null'] }
+            spread: { type: [string, 'null'] }
+            nextRateReset: { type: [string, 'null'], format: date }
     LoanSchedule:
       type: object
       properties:
@@ -2698,7 +4422,8 @@ components:
       required: [kind]
       description: Fields used depend on kind; reason is required when proposing.
       properties:
-        kind: { type: string, enum: [RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE] }
+        kind: { type: string, enum: [RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, MATURITY_CHANGE] }
+        newMaturityDate: { type: [string, 'null'], format: date, description: 'MATURITY_CHANGE: the last instalment falls due in this month, on the loan''s due day; the EMI is recomputed' }
         newRatePercent: { type: [number, string], description: 'RATE_CHANGE: new annual rate, within the product band' }
         rateOption:
           type: string
@@ -2796,7 +4521,7 @@ components:
         id: { type: string, format: uuid }
         seq: { type: integer }
         txnId: { type: string, format: uuid }
-        kind: { type: string, enum: [RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, RESTRUCTURE] }
+        kind: { type: string, enum: [RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, MATURITY_CHANGE, SANCTION_CHANGE, NPA_OVERRIDE, RESTRUCTURE] }
         parameters: { type: object, additionalProperties: true, description: The request as proposed }
         emiBefore: { type: string }
         emiAfter: { type: string }
@@ -2907,3 +4632,326 @@ components:
             status: { type: string, enum: [RUNNING, COMPLETED, COMPLETED_WITH_EXCEPTIONS, FAILED] }
             finishedAt: { type: [string, 'null'], format: date-time }
         openEodExceptions: { type: integer, description: Shown to all-branch users; 0 for others }
+    IntegrationRecord:
+      type: object
+      description: A record of the integration module. Money is a decimal string; account numbers appear only masked.
+      additionalProperties: true
+    ProviderConfigInput:
+      type: object
+      required: [kind, provider]
+      properties:
+        kind: { type: string, enum: [PAYOUT, COLLECTION, MANDATE, SMS, EMAIL] }
+        provider: { type: string, examples: [SIMULATOR] }
+        settings: { type: object, additionalProperties: { type: string } }
+        secrets:
+          type: object
+          description: Write-only. Never returned by any API.
+          additionalProperties: { type: string }
+    SimulatedCallback:
+      type: object
+      required: [kind, reference, status]
+      properties:
+        kind: { type: string, enum: [payout, collection, mandate] }
+        reference: { type: string, description: 'Payout reference, order reference or mandate reference' }
+        status: { type: string, description: 'Payout - SUCCESS, FAILED, RETURNED; collection - PAID, FAILED; mandate - ACTIVE, REJECTED, CANCELLED' }
+        amount: { $ref: '#/components/schemas/Money' }
+        reasonCode: { type: string }
+        reason: { type: string }
+        eventId: { type: string, description: 'Repeat an id to test replay protection' }
+    BeneficiaryInput:
+      type: object
+      required: [holderName, accountNumber, ifsc]
+      properties:
+        holderName: { type: string, maxLength: 100 }
+        accountNumber: { type: string, pattern: '^[A-Za-z0-9]{6,35}$' }
+        ifsc: { type: string, pattern: '^[A-Z]{4}0[A-Z0-9]{6}$' }
+    CollectionOrderInput:
+      type: object
+      required: [amount]
+      properties:
+        amount: { $ref: '#/components/schemas/Money' }
+        methods: { type: array, items: { type: string, enum: [UPI, CARD, NETBANKING] } }
+        returnUrl: { type: string, format: uri }
+    PaymentResolution:
+      type: object
+      required: [note]
+      properties:
+        loanId: { type: string, format: uuid }
+        refund: { type: boolean }
+        note: { type: string }
+    MandateInput:
+      type: object
+      required: [holderName, accountNumber, ifsc, maxAmount, startDate]
+      properties:
+        holderName: { type: string, maxLength: 100 }
+        accountNumber: { type: string, pattern: '^[A-Za-z0-9]{6,35}$' }
+        ifsc: { type: string, pattern: '^[A-Z]{4}0[A-Z0-9]{6}$' }
+        accountType: { type: string, enum: [SB, CA, CC, OT], default: SB }
+        maxAmount: { $ref: '#/components/schemas/Money' }
+        frequency: { type: string, enum: [MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY, AS_PRESENTED], default: MONTHLY }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        sponsorBankCode: { type: string }
+        utilityCode: { type: string }
+    MandateStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [SUBMITTED, ACTIVE, REJECTED, SUSPENDED, CANCELLED, EXPIRED] }
+        umrn: { type: string, pattern: '^[A-Z0-9]{20}$' }
+        rejectCode: { type: string }
+        rejectReason: { type: string }
+    WebhookEndpointInput:
+      type: object
+      required: [name, url, eventTypes]
+      properties:
+        name: { type: string, maxLength: 80 }
+        url: { type: string, format: uri, description: 'https, public DNS name, port 443 or 8443' }
+        eventTypes:
+          type: array
+          items: { type: string, enum: [loan.disbursed, payment.received, payment.bounced, loan.closed, loan.npa, mandate.status, payout.status] }
+    ActionInput:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string }
+    ApiClientInput:
+      type: object
+      required: [clientId, name, scopes, homeBranch]
+      properties:
+        clientId: { type: string, description: 'Lower-case letters, digits and hyphens; stored with the prefix ext-' }
+        name: { type: string, maxLength: 80 }
+        scopes: { type: array, items: { type: string } }
+        homeBranch: { type: string }
+        allBranches: { type: boolean, default: false }
+    ApiClientScopes:
+      type: object
+      required: [scopes]
+      properties:
+        scopes: { type: array, items: { type: string } }
+    MessageTemplateInput:
+      type: object
+      required: [code, channel, body]
+      properties:
+        code: { type: string, enum: [LOAN_DISBURSED, PAYMENT_RECEIVED, PAYMENT_BOUNCED, DUE_REMINDER, NOC_ISSUED, RATE_RESET] }
+        channel: { type: string, enum: [SMS, EMAIL] }
+        language: { type: string, default: en }
+        category: { type: string, enum: [TRANSACTIONAL, SERVICE, PROMOTIONAL], default: TRANSACTIONAL }
+        subject: { type: string, description: 'E-mail only' }
+        body: { type: string, description: 'Text with {{placeholders}}' }
+        dltEntityId: { type: string, description: 'SMS - principal entity id on the DLT platform' }
+        dltTemplateId: { type: string, description: 'SMS - registered content template id' }
+        dltHeader: { type: string, description: 'SMS - registered header (sender id)' }
+        status: { type: string, enum: [ACTIVE, RETIRED], default: ACTIVE }
+    MessageOptOut:
+      type: object
+      required: [channel]
+      properties:
+        channel: { type: string, enum: [SMS, EMAIL] }
+        optOut: { type: boolean, default: true }
+        source: { type: string }
+    # ---- P2-7 platform completion ----
+    CustomValues:
+      type: object
+      description: >-
+        The tenant's custom fields by key (see `GET /api/v1/custom-fields`). An unknown key, a value of the wrong type
+        and a missing required field are refused with 422. Personal-data fields are returned masked.
+      additionalProperties: true
+    CustomFieldInput:
+      type: object
+      required: [entity, key, label, dataType]
+      properties:
+        entity: { type: string, enum: [CUSTOMER, LOAN_ACCOUNT, LOAN_PRODUCT] }
+        key: { type: string, pattern: '^[a-z][A-Za-z0-9]{1,39}$' }
+        label: { type: string, maxLength: 80 }
+        dataType: { type: string, enum: [TEXT, NUMBER, DATE, BOOLEAN, ENUM] }
+        enumType: { type: [string, 'null'], description: Enumeration type that lists the choices; ENUM only }
+        widget: { type: [string, 'null'], enum: [TEXT, TEXTAREA, NUMBER, DATE, CHECKBOX, SELECT, RADIO, null] }
+        required: { type: boolean, default: false }
+        regex: { type: [string, 'null'], description: TEXT only; the whole value must match }
+        min: { type: [number, 'null'], description: 'NUMBER: lowest value; TEXT: shortest length' }
+        max: { type: [number, 'null'], description: 'NUMBER: highest value; TEXT: longest length' }
+        pii: { type: boolean, default: false, description: 'Personal data; TEXT only; stored encrypted and returned masked' }
+        active: { type: boolean, default: true }
+        sortOrder: { type: integer, default: 0 }
+    CustomField:
+      type: object
+      properties:
+        entity: { type: string }
+        key: { type: string }
+        label: { type: string }
+        dataType: { type: string }
+        enumType: { type: [string, 'null'] }
+        widget: { type: string }
+        required: { type: boolean }
+        regex: { type: [string, 'null'] }
+        min: { type: [string, 'null'] }
+        max: { type: [string, 'null'] }
+        pii: { type: boolean }
+        active: { type: boolean }
+        sortOrder: { type: integer }
+        updatedBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+    LoanProductCustom:
+      type: object
+      properties:
+        productCode: { type: string }
+        custom: { $ref: '#/components/schemas/CustomValues' }
+    Note:
+      type: object
+      properties:
+        note: { type: string }
+    DeferredReceipt:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        loanId: { type: string, format: uuid }
+        loanNo: { type: string }
+        amount: { $ref: '#/components/schemas/Money' }
+        mode: { type: [string, 'null'] }
+        reference: { type: [string, 'null'] }
+        receivedAt: { type: string, format: date-time }
+        receivedBy: { type: string }
+        cutoffBusinessDate: { type: string, format: date, description: The business date that was being closed }
+        expectedPostingDate: { type: string, format: date }
+        status: { type: string, enum: [PENDING, APPLIED, FAILED, CANCELLED] }
+        postingDate: { type: [string, 'null'], format: date }
+        valueDate: { type: [string, 'null'], format: date, description: Always the posting date }
+        loanTxnId: { type: [string, 'null'], format: uuid }
+        attempts: { type: integer }
+        error: { type: [string, 'null'] }
+        resolvedBy: { type: [string, 'null'] }
+        resolutionNote: { type: [string, 'null'] }
+    DeferredReceiptAccepted:
+      type: object
+      properties:
+        status: { type: string, enum: [ACCEPTED_FOR_NEXT_BUSINESS_DATE] }
+        receipt: { $ref: '#/components/schemas/DeferredReceipt' }
+    LoginSession:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string }
+        ipAddress: { type: [string, 'null'] }
+        startedAt: { type: [string, 'null'], format: date-time }
+        lastAccessAt: { type: [string, 'null'], format: date-time }
+        clients: { type: array, items: { type: string } }
+        current: { type: boolean, description: The session this request's token belongs to }
+    Job:
+      type: object
+      properties:
+        code: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [REPORT, DASHBOARD_REFRESH, KYC_EXPIRY, CONSENT_EXPIRY, EXPORT_CLEANUP, USAGE_SNAPSHOT, DEFERRED_RECEIPTS] }
+        schedule: { type: [string, 'null'], description: Six-field cron in IST }
+        enabled: { type: boolean }
+        parameters: { type: object, additionalProperties: true }
+        builtIn: { type: boolean }
+        updatedBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        runnable: { type: boolean }
+        nextRunAt: { type: [string, 'null'], format: date-time }
+        lastRun:
+          oneOf:
+            - $ref: '#/components/schemas/JobRun'
+            - type: 'null'
+    JobRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        jobCode: { type: string }
+        origin: { type: string, enum: [SCHEDULE, MANUAL] }
+        scheduledFor: { type: [string, 'null'], format: date-time }
+        requestedBy: { type: string }
+        status: { type: string, enum: [RUNNING, COMPLETED, FAILED] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        processed: { type: integer }
+        failed: { type: integer }
+        error: { type: [string, 'null'] }
+        artifact:
+          type: [object, 'null']
+          additionalProperties: true
+          description: What the run produced. A scheduled report carries `reportRunId` and `delivery` (PENDING_PROVIDER until e-mail is built).
+    JobScheduleInput:
+      type: object
+      properties:
+        schedule: { type: [string, 'null'], examples: ['0 0 6 1 * *'] }
+        enabled: { type: boolean }
+        parameters:
+          type: object
+          additionalProperties: true
+          description: >-
+            Report jobs take `period` (BUSINESS_DATE, PREVIOUS_DAY, MONTH_TO_DATE, PREVIOUS_MONTH), `parameters` (the
+            report's own, without dates) and `emailTo`. Other jobs take none.
+    DashboardTrendPoint:
+      type: object
+      properties:
+        businessDate: { type: string, format: date }
+        activeLoans: { type: integer }
+        portfolioOutstanding: { $ref: '#/components/schemas/Money' }
+        overdueAmount: { $ref: '#/components/schemas/Money' }
+        overdueLoans: { type: integer }
+        grossNpa: { $ref: '#/components/schemas/Money' }
+        npaLoans: { type: integer }
+        disbursed: { $ref: '#/components/schemas/Money' }
+        collected: { $ref: '#/components/schemas/Money' }
+        pendingApprovals: { type: integer }
+        refreshedAt: { type: string, format: date-time }
+    SupportAccessRequest:
+      type: object
+      required: [tenant, reason, ticket]
+      properties:
+        tenant: { type: string }
+        reason: { type: string, minLength: 10, maxLength: 500 }
+        ticket: { type: string }
+        durationMinutes: { type: integer, minimum: 15, maximum: 480, default: 60 }
+        scope: { type: string, enum: [READ_ONLY], default: READ_ONLY }
+    SupportAccess:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant: { type: string, description: Present in control-plane responses }
+        engineer: { type: string }
+        reason: { type: string }
+        ticket: { type: string }
+        scope: { type: string }
+        durationMinutes: { type: integer }
+        requestedAt: { type: string, format: date-time }
+        status: { type: string, enum: [REQUESTED, APPROVED, REJECTED, REVOKED, EXPIRED, LAPSED, UNKNOWN] }
+        decidedBy: { type: [string, 'null'] }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        decisionNote: { type: [string, 'null'] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        revokedBy: { type: [string, 'null'] }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        revokeReason: { type: [string, 'null'] }
+    UsageDay:
+      type: object
+      properties:
+        tenant: { type: string }
+        day: { type: string, format: date }
+        activeLoans: { type: [integer, 'null'] }
+        activeCustomers: { type: [integer, 'null'] }
+        staffUsers: { type: [integer, 'null'] }
+        apiCalls: { type: integer }
+        documentBytes: { type: [integer, 'null'] }
+        databaseBytes: { type: [integer, 'null'] }
+        storageBytes: { type: integer }
+        capturedAt: { type: [string, 'null'], format: date-time }
+    UsageMonth:
+      type: object
+      properties:
+        tenant: { type: string }
+        legalName: { type: string }
+        edition: { type: string }
+        month: { type: string }
+        daysMeasured: { type: integer }
+        peakActiveLoans: { type: [integer, 'null'] }
+        closingActiveLoans: { type: [integer, 'null'] }
+        peakActiveCustomers: { type: [integer, 'null'] }
+        closingActiveCustomers: { type: [integer, 'null'] }
+        peakStaffUsers: { type: [integer, 'null'] }
+        apiCalls: { type: integer }
+        peakStorageBytes: { type: [integer, 'null'] }
+        closingStorageBytes: { type: [integer, 'null'] }

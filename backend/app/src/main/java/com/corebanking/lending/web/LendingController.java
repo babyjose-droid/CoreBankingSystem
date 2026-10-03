@@ -5,7 +5,6 @@ import com.corebanking.lending.internal.ProductService;
 import com.corebanking.platform.ApprovalView;
 import com.corebanking.platform.BranchScope;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -21,13 +20,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Loan products and loan accounts (Phase 2). Module: LENDING. */
+/**
+ * Loan products and loan accounts (Phase 2). Module: LENDING. Loan creation, the loan detail and repayments are in
+ * {@link LoanEntryController} (custom fields, US-014; repayments during end of day, US-111).
+ */
 @RestController
 @RequestMapping("/api/v1")
 class LendingController {
 
     record KfsAcceptance(String channel, String evidenceRef) {}
-    record Receipt(BigDecimal amount, LocalDate valueDate, String mode, String reference) {}
     record Prepayment(BigDecimal amount, String mode) {}
     record Amount(BigDecimal amount) {}
     record ChargeRequest(String feeCode, BigDecimal base) {}
@@ -70,6 +71,20 @@ class LendingController {
         return ApprovalView.of(products.propose(p));
     }
 
+    /** Starting points for the product wizard (US-038). */
+    @GetMapping("/loan-product-templates")
+    @PreAuthorize("hasAuthority('product:view')")
+    List<Map<String, Object>> productTemplates() {
+        return products.templates();
+    }
+
+    /** Simulates an account on a draft product: schedule, fees, APR (US-044). Nothing is stored. */
+    @PostMapping("/loan-products/preview")
+    @PreAuthorize("hasAuthority('product:view')")
+    Map<String, Object> previewProduct(@RequestBody LoanService.ProductPreview p) {
+        return loans.previewProduct(p);
+    }
+
     // ---- origination -------------------------------------------------------------------------
     @PostMapping("/loans/preview")
     @PreAuthorize("hasAuthority('loan:view')")
@@ -77,24 +92,11 @@ class LendingController {
         return loans.preview(a);
     }
 
-    @PostMapping("/loans")
-    @PreAuthorize("hasAuthority('loan:create') or hasAuthority('loan:stp')")
-    @ResponseStatus(HttpStatus.CREATED)
-    Map<String, Object> create(@RequestBody LoanService.Application a) {
-        return loans.create(a);
-    }
-
     @GetMapping("/loans")
     @PreAuthorize("hasAuthority('loan:view')")
     List<Map<String, Object>> search(@RequestParam(required = false) String q, @RequestParam(required = false) String status,
                                      @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
         return loans.search(q, status, page, size);
-    }
-
-    @GetMapping("/loans/{id}")
-    @PreAuthorize("hasAuthority('loan:view')")
-    Map<String, Object> get(@PathVariable UUID id) {
-        return loans.get(visible(id));
     }
 
     @GetMapping("/loans/{id}/schedule")
@@ -135,13 +137,26 @@ class LendingController {
         return ResponseEntity.status(r.containsKey("entityType") ? HttpStatus.ACCEPTED : HttpStatus.OK).body(r);
     }
 
-    // ---- servicing ---------------------------------------------------------------------------
-    @PostMapping("/loans/{id}/repayments")
-    @PreAuthorize("hasAuthority('loan:repay') or hasAuthority('loan:stp')")
-    Map<String, Object> repay(@PathVariable UUID id, @RequestBody Receipt r) {
-        return loans.repay(visible(id), r.amount(), r.valueDate(), r.mode(), r.reference());
+    @GetMapping("/loans/{id}/tranches")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> tranches(@PathVariable UUID id) {
+        return loans.tranches(visible(id));
     }
 
+    // ---- simulations (US-060): nothing is posted or stored -------------------------------------
+    @PostMapping("/loans/{id}/simulations/disbursement")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> simulateDisbursement(@PathVariable UUID id, @RequestBody(required = false) Amount a) {
+        return loans.simulateDisbursement(visible(id), a == null ? null : a.amount());
+    }
+
+    @PostMapping("/loans/{id}/simulations/transaction")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> simulateTransaction(@PathVariable UUID id, @RequestBody LoanService.TransactionSimulation t) {
+        return loans.simulateTransaction(visible(id), t);
+    }
+
+    // ---- servicing ---------------------------------------------------------------------------
     @PostMapping("/loans/{id}/prepayments")
     @PreAuthorize("hasAuthority('loan:repay')")
     Map<String, Object> prepay(@PathVariable UUID id, @RequestBody Prepayment p) {
@@ -212,6 +227,34 @@ class LendingController {
     @PreAuthorize("hasAuthority('loan:view')")
     List<Map<String, Object>> amendments(@PathVariable UUID id) {
         return loans.amendments(visible(id));
+    }
+
+    // ---- sanctioned amount and asset-class override (P2-6) ---------------------------------------
+    @PostMapping("/loans/{id}/sanction-change/preview")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> previewSanctionChange(@PathVariable UUID id, @RequestBody LoanService.SanctionChangeRequest r) {
+        return loans.previewSanctionChange(visible(id), r);
+    }
+
+    @PostMapping("/loans/{id}/sanction-change")
+    @PreAuthorize("hasAuthority('loan:amend')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> proposeSanctionChange(@PathVariable UUID id, @RequestBody LoanService.SanctionChangeRequest r) {
+        return loans.proposeSanctionChange(visible(id), r);
+    }
+
+    @PostMapping("/loans/{id}/npa-override")
+    @PreAuthorize("hasAuthority('loan:classify')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> proposeNpaOverride(@PathVariable UUID id, @RequestBody LoanService.NpaOverrideRequest r) {
+        return loans.proposeNpaOverride(visible(id), r);
+    }
+
+    @PostMapping("/loans/{id}/npa-override/release")
+    @PreAuthorize("hasAuthority('loan:classify')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> proposeNpaRelease(@PathVariable UUID id, @RequestBody Reason r) {
+        return loans.proposeNpaRelease(visible(id), r == null ? null : r.reason());
     }
 
     @PostMapping("/loans/{id}/restructure/simulation")

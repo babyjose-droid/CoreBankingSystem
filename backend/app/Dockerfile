@@ -11,6 +11,8 @@ ENV GRADLE_USER_HOME=/cache/gradle
 COPY settings.gradle.kts build.gradle.kts ./
 COPY gradle/ gradle/
 COPY backend/ backend/
+# The API contract and the developer portal page are packaged into the jar by processResources (US-119).
+COPY docs/api/ docs/api/
 
 RUN --mount=type=cache,target=/cache/gradle \
     gradle :backend:app:bootJar --no-daemon --console=plain \

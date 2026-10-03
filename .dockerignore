@@ -16,7 +16,9 @@ out
 **/out
 infra
 deploy
-docs
+# docs/api is packaged into the backend jar (developer portal); the rest of docs is not needed in the image build
+docs/*
+!docs/api
 tools
 *.tfstate
 *.tfstate.*

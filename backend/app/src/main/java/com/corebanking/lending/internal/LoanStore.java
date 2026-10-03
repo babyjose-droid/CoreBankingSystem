@@ -39,6 +39,15 @@ public class LoanStore {
         return toLoaded(rows.get(0));
     }
 
+    /** The loan as it is, without taking the row lock (read-only uses: what falls due, documents). */
+    public Loaded read(JdbcTemplate jdbc, UUID loanId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state "
+                        + "FROM lending.loan_account WHERE id = ?", loanId);
+        if (rows.isEmpty()) throw ApiException.notFound("loan " + loanId);
+        return toLoaded(rows.get(0));
+    }
+
     public Loaded lockByNo(JdbcTemplate jdbc, String loanNo) {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state "
@@ -73,12 +82,15 @@ public class LoanStore {
                        dpd = ?, asset_class = ?, npa_since = ?, suspense = ?, provision_held = ?,
                        closed_on = CASE WHEN ? IN ('CLOSED','CANCELLED') AND closed_on IS NULL THEN ?::date ELSE closed_on END,
                        current_rate = ?, restructured_on = ?, restructure_count = ?, upgrade_not_before = ?,
-                       restructure_defaulted = ?, version = version + 1
+                       restructure_defaulted = ?, sanctioned_amount = ?, disbursed_amount = ?, undrawn_amount = ?,
+                       class_floor = ?, class_floor_until = ?, version = version + 1
                  WHERE id = ?
                 """, json.write(a.snapshot()), status, a.principalOutstanding(), a.overdueAmount(asOf), a.nextDueDate(),
                 a.dpd(), a.assetClass().name(), a.npaSince(), a.suspense(), a.provisionHeld(), status, Date.valueOf(asOf),
                 a.ratePercent(), rs == null ? null : rs.restructuredOn(), rs == null ? 0 : rs.count(),
-                rs == null || !rs.underMonitoring() ? null : rs.specifiedPeriodMinEnd(), rs != null && rs.defaulted(), loanId);
+                rs == null || !rs.underMonitoring() ? null : rs.specifiedPeriodMinEnd(), rs != null && rs.defaulted(),
+                a.sanctioned(), a.disbursedAmount(), a.undrawn(), a.classFloor() == null ? null : a.classFloor().name(),
+                a.classFloorUntil(), loanId);
     }
 
     /** Records a financial event with the state before it (for reversal) and the lots it posted. */

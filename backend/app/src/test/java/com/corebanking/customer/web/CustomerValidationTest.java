@@ -12,7 +12,7 @@ class CustomerValidationTest {
 
     static CustomerService.Input person(LocalDate dob, String pan, String mobile) {
         return new CustomerService.Input("INDIVIDUAL", "Anita", null, "CLAUDE-TEST", dob, "FEMALE", pan, mobile, null, "HO",
-                new CustomerService.Address("1 Test Street", null, "Kochi", "32", "682001"), null, null);
+                new CustomerService.Address("1 Test Street", null, "Kochi", "32", "682001"), null, null, null, null);
     }
 
     @Test

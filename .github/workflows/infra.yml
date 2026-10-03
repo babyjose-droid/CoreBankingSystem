@@ -183,7 +183,7 @@ jobs:
           perms = {x["name"] for x in r["roles"]["client"]["api"]}
           # Realm permissions must match the console's list (plus loan:stp, which is API-only), so they never drift.
           import re
-          console = set(re.findall(r"'([a-z]+:[a-z-]+)'", open("frontend/console/src/auth/permissions.ts").read()))
+          console = set(re.findall(r"'([a-z-]+:[a-z-]+)'", open("frontend/console/src/auth/permissions.ts").read()))
           expected = console | {"loan:stp"}
           assert perms == expected, {"missing_in_realm": sorted(expected - perms), "not_in_console": sorted(perms - expected)}
           for role in r["roles"]["realm"]:

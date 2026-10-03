@@ -85,6 +85,36 @@ class DashboardController {
         return m;
     }
 
+    /**
+     * Whole-book figures per business date, as stored by the DASHBOARD_REFRESH job (V19): the trend behind the
+     * dashboard. For users who see every branch, because the history is not kept per branch.
+     * openapi.yaml#/components/schemas/DashboardTrendPoint.
+     */
+    @GetMapping("/trend")
+    @PreAuthorize("hasAuthority('dashboard:view')")
+    List<Map<String, Object>> trend(@org.springframework.web.bind.annotation.RequestParam(defaultValue = "30") int days) {
+        scope.requireAll();
+        return jdbc.query("""
+                SELECT business_date::text, active_loans, portfolio_outstanding, overdue_amount, overdue_loans, gross_npa, npa_loans,
+                       disbursed, collected, pending_approvals, to_char(refreshed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                  FROM reporting.dashboard_snapshot ORDER BY business_date DESC LIMIT ?
+                """, (rs, i) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("businessDate", rs.getString(1));
+                    m.put("activeLoans", rs.getLong(2));
+                    m.put("portfolioOutstanding", money(rs.getBigDecimal(3)));
+                    m.put("overdueAmount", money(rs.getBigDecimal(4)));
+                    m.put("overdueLoans", rs.getLong(5));
+                    m.put("grossNpa", money(rs.getBigDecimal(6)));
+                    m.put("npaLoans", rs.getLong(7));
+                    m.put("disbursed", money(rs.getBigDecimal(8)));
+                    m.put("collected", money(rs.getBigDecimal(9)));
+                    m.put("pendingApprovals", rs.getLong(10));
+                    m.put("refreshedAt", rs.getString(11));
+                    return m;
+                }, Math.min(Math.max(days, 1), 366));
+    }
+
     /** Plain decimal text without trailing zeros (1250.5000 → "1250.5"); null stays null. */
     static String money(Object v) {
         if (v == null) return null;

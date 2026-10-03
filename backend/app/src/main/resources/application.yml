@@ -31,6 +31,37 @@ corebanking:
   eod:
     partitions: 4
     scheduler-enabled: true
+  jobs:
+    # Tenant job catalogue (US-112): every instance polls; the database settles which one runs a job.
+    scheduler-enabled: ${COREBANKING_JOBS_SCHEDULER_ENABLED:true}
+    scheduler-interval-ms: 30000
+  reports:
+    # Report files older than this are removed by the EXPORT_CLEANUP job; a tenant overrides it with the
+    # system property reports.retention-days.
+    retention-days: ${COREBANKING_REPORTS_RETENTION_DAYS:90}
+  usage:
+    flush-interval-ms: 60000        # API call counts go from memory to the control plane this often (US-004)
+  keycloak:
+    admin:
+      # Session management (US-027). The client lives in each tenant realm (service account with view-users and
+      # manage-users). Its secret per tenant: COREBANKING_TENANT_<CODE>_KEYCLOAK_ADMIN_SECRET; or one for all here.
+      base-url: ${COREBANKING_KEYCLOAK_ADMIN_BASE_URL:}
+      client-id: ${COREBANKING_KEYCLOAK_ADMIN_CLIENT_ID:corebanking-admin}
+      client-secret: ${COREBANKING_KEYCLOAK_ADMIN_CLIENT_SECRET:}
+
+  integration:
+    # Providers a tenant may configure, comma separated. Empty by default: the SIMULATOR reports success without
+    # moving money (dev, test and demo only) and EASEBUZZ / GENERIC_HTTP are unverified against the provider.
+    providers-enabled: ${COREBANKING_INTEGRATION_PROVIDERS:}
+    worker-enabled: ${COREBANKING_INTEGRATION_WORKER:true}
+    worker-interval-ms: 5000
+    # Keycloak Admin REST for API clients (US-120). Off until an admin service account exists; see docs/runbooks/integrations.md.
+    keycloak-admin:
+      enabled: ${COREBANKING_KEYCLOAK_ADMIN_ENABLED:false}
+      base-url: ${COREBANKING_KEYCLOAK_ADMIN_URL:http://localhost:8081}
+      realm: ${COREBANKING_KEYCLOAK_ADMIN_REALM:master}
+      client-id: ${COREBANKING_KEYCLOAK_ADMIN_CLIENT_ID:corebanking-admin}
+      client-secret: ${COREBANKING_KEYCLOAK_ADMIN_CLIENT_SECRET:}
 
 management:
   endpoints:

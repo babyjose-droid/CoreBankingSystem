@@ -10,6 +10,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -74,6 +75,25 @@ public class FileDocumentStore implements DocumentStore {
     @Override
     public boolean exists(String key) {
         return Files.isRegularFile(resolve(key));
+    }
+
+    @Override
+    public long bytesUnder(String prefix) {
+        Path dir = resolve(prefix);
+        if (!Files.isDirectory(dir)) return 0;
+        try (Stream<Path> files = Files.walk(dir)) {
+            return files.filter(Files::isRegularFile).mapToLong(FileDocumentStore::sizeOf).sum();
+        } catch (IOException e) {
+            throw new UncheckedIOException("could not measure the document store", e);
+        }
+    }
+
+    private static long sizeOf(Path file) {
+        try {
+            return Files.size(file);
+        } catch (IOException e) {
+            return 0;                               // removed while we were counting
+        }
     }
 
     /** The file for a key, always inside the root. */

@@ -81,13 +81,52 @@ class LoanStateJsonTest {
                 null, null, null, null, 3, BigDecimal.ZERO, null, List.of());
         LoanAccount a = LoanAccount.disburse(params, LoanTerms.equated(new BigDecimal("100000"), new BigDecimal("18"), 12, open), open).account();
         for (LocalDate d = open; !d.isAfter(LocalDate.of(2026, 8, 3)); d = d.plusDays(1)) a.endOfDay(d, Provisioning.starter());
-        String json = mapper.writeValueAsString(a.snapshot())
+        // state stored before P2-6 has no terms, sanctioned amount, tranches, pre-EMI flag, advance interest or override
+        java.util.Map<?, ?> old = mapper.readValue(mapper.writeValueAsString(a.snapshot()), java.util.Map.class);
+        for (String key : List.of("terms", "sanctioned", "tranches", "preEmi", "interestInAdvance", "classFloor", "classFloorUntil")) {
+            assertTrue(old.containsKey(key), key);
+            old.remove(key);
+        }
+        String json = mapper.writeValueAsString(old)
                 .replace(",\"ratePercent\":18", "").replace(",\"capitalisedSuspense\":0", "").replace(",\"restructure\":null", "")
                 .replace(",\"principalRescheduled\":0", "").replace(",\"interestCapitalised\":0", "");
         assertTrue(!json.contains("ratePercent") && !json.contains("principalRescheduled") && !json.contains("restructure"), json);
+        assertTrue(!json.contains("terms") && !json.contains("tranches") && !json.contains("classFloor"), json);
         LoanAccount b = LoanAccount.restore(params, mapper.readValue(json, LoanAccount.Snapshot.class));
         assertEquals(new BigDecimal("18"), b.ratePercent());
         assertEquals(a.demands(), b.demands());
         assertEquals(a.principalOutstanding(), b.principalOutstanding());
+        assertEquals(new BigDecimal("100000"), b.sanctioned());
+        assertTrue(b.fullyDrawn() && b.tranches().isEmpty() && b.terms() == null);
+    }
+
+    /** P2-6 fields: terms with their options, tranches, pre-EMI flag, interest in advance and the class override. */
+    @Test
+    void tranche_and_override_state_round_trips_exactly() {
+        LocalDate open = LocalDate.of(2026, 6, 30);
+        var params = new LoanAccount.Params("10010000000018", "HO", "32", "32", new BigDecimal("12"), new BigDecimal("24"),
+                null, null, null, null, 3, BigDecimal.ZERO, null, List.of());
+        LoanTerms terms = new LoanTerms(new BigDecimal("300000"), new BigDecimal("12"), 24, open, LocalDate.of(2026, 8, 5),
+                com.corebanking.lending.engine.RepaymentMethod.EQUATED, 0, null, null, null, false,
+                LoanTerms.Options.NONE.withBpi(LoanTerms.BpiMode.DEDUCT_AT_DISBURSAL));
+        LoanTerms t2 = mapper.readValue(mapper.writeValueAsString(terms), LoanTerms.class);
+        assertEquals(terms, t2);
+        LoanAccount a = LoanAccount.open(params, terms, new BigDecimal("100000"), true, open).account();
+        a.endOfDay(open, Provisioning.starter());
+        a.drawTranche(new BigDecimal("50000"), open.plusDays(1));
+        a.overrideAssetClass(com.corebanking.lending.engine.Delinquency.AssetClass.SUBSTANDARD, open.plusDays(90), open.plusDays(1));
+
+        LoanAccount.Snapshot s2 = mapper.readValue(mapper.writeValueAsString(a.snapshot()), LoanAccount.Snapshot.class);
+        assertEquals(a.snapshot(), s2);
+        LoanAccount b = LoanAccount.restore(params, s2);
+        assertEquals(2, b.tranches().size());
+        assertEquals(new BigDecimal("150000"), b.undrawn());
+        assertTrue(b.preEmi());
+        assertEquals(a.interestInAdvance(), b.interestInAdvance());
+        assertEquals(a.classFloor(), b.classFloor());
+        var r1 = a.endOfDay(open.plusDays(1), Provisioning.starter());
+        var r2 = b.endOfDay(open.plusDays(1), Provisioning.starter());
+        assertEquals(r1.summary(), r2.summary());
+        assertEquals(a.snapshot(), b.snapshot());
     }
 }

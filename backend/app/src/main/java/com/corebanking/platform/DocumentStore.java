@@ -20,4 +20,10 @@ public interface DocumentStore {
     void delete(String key);
 
     boolean exists(String key);
+
+    /**
+     * Total size in bytes of everything stored under a prefix such as {@code tenants/<code>}; 0 when nothing is.
+     * Used for usage metering (US-004), so it may be approximate while files are being written.
+     */
+    long bytesUnder(String prefix);
 }

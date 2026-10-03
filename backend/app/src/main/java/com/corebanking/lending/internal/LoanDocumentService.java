@@ -70,8 +70,11 @@ public class LoanDocumentService {
     private final AuditLog audit;
     private final BusinessDays days;
     private final PiiKeys keys;
+    private final LoanEventPublisher events;
 
-    public LoanDocumentService(JdbcTemplate jdbc, Json json, AuditLog audit, BusinessDays days, PiiKeys keys) {
+    public LoanDocumentService(JdbcTemplate jdbc, Json json, AuditLog audit, BusinessDays days, PiiKeys keys,
+                               LoanEventPublisher events) {
+        this.events = events;
         this.jdbc = jdbc;
         this.json = json;
         this.audit = audit;
@@ -226,6 +229,8 @@ public class LoanDocumentService {
                 days.current().businessDate(), "NOC/" + l.loanNo());
         byte[] pdf = LoanDocuments.noc(data, Render.DEFAULT);
         audited(l, "NOC", Map.of());
+        // the borrower is told that the letter is ready (P2-2 messaging; sent once per loan however often it is printed)
+        events.nocIssued(jdbc, loanId, days.current().businessDate());
         return new Document(DocumentKey.safeFileName("noc-" + l.loanNo() + ".pdf"), pdf);
     }
 

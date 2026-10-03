@@ -207,7 +207,20 @@
               "kyc:upload",
               "kyc:view-document",
               "report:run",
-              "dashboard:view"
+              "dashboard:view",
+              "apiclient:view",
+              "collection:view",
+              "custom-field:view",
+              "integration:view",
+              "job:view",
+              "mandate:view",
+              "message:view",
+              "payout:view",
+              "webhook:view",
+              "collection:create",
+              "mandate:register",
+              "payout:beneficiary",
+              "loan:classify"
             ]
           }
         }
@@ -238,7 +251,16 @@
               "kyc:verify",
               "kyc:view-document",
               "report:run",
-              "dashboard:view"
+              "dashboard:view",
+              "apiclient:view",
+              "collection:view",
+              "custom-field:view",
+              "integration:view",
+              "job:view",
+              "mandate:view",
+              "message:view",
+              "payout:view",
+              "webhook:view"
             ]
           }
         }
@@ -258,7 +280,20 @@
               "loan:view",
               "loan:repay",
               "report:run",
-              "dashboard:view"
+              "dashboard:view",
+              "payout:view",
+              "payout:admin",
+              "collection:view",
+              "collection:admin",
+              "mandate:view",
+              "mandate:admin",
+              "nach:admin",
+              "nach:file",
+              "job:view",
+              "job:run",
+              "integration:view",
+              "message:view",
+              "webhook:view"
             ]
           }
         }
@@ -288,7 +323,16 @@
               "consent:view",
               "kyc:view-document",
               "report:run",
-              "dashboard:view"
+              "dashboard:view",
+              "apiclient:view",
+              "collection:view",
+              "custom-field:view",
+              "integration:view",
+              "job:view",
+              "mandate:view",
+              "message:view",
+              "payout:view",
+              "webhook:view"
             ]
           }
         }
@@ -345,7 +389,35 @@
               "report:run",
               "report:admin",
               "bureau:export",
-              "dashboard:view"
+              "dashboard:view",
+              "apiclient:view",
+              "apiclient:admin",
+              "collection:view",
+              "collection:create",
+              "collection:admin",
+              "custom-field:view",
+              "custom-field:propose",
+              "integration:view",
+              "integration:admin",
+              "integration:simulate",
+              "job:view",
+              "job:run",
+              "job:schedule",
+              "loan:classify",
+              "mandate:view",
+              "mandate:register",
+              "mandate:admin",
+              "message:view",
+              "message:admin",
+              "nach:admin",
+              "nach:file",
+              "payout:view",
+              "payout:beneficiary",
+              "payout:admin",
+              "webhook:view",
+              "webhook:admin",
+              "session:admin",
+              "support-access:approve"
             ]
           }
         }
@@ -628,6 +700,174 @@
           "description": "View the operational dashboard",
           "composite": false,
           "clientRole": true
+        },
+        {
+          "name": "apiclient:view",
+          "description": "View API clients",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "apiclient:admin",
+          "description": "Propose API client changes and collect secrets",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "collection:view",
+          "description": "View gateway collections",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "collection:create",
+          "description": "Create payment links",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "collection:admin",
+          "description": "Reconcile and repair collections",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "custom-field:view",
+          "description": "View custom field definitions",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "custom-field:propose",
+          "description": "Propose custom field definitions",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "integration:view",
+          "description": "View integration providers",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "integration:admin",
+          "description": "Propose provider configuration",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "integration:simulate",
+          "description": "Drive the simulator provider (never in production)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "job:view",
+          "description": "View jobs and runs",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "job:run",
+          "description": "Run a job now",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "job:schedule",
+          "description": "Propose job schedules",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "loan:classify",
+          "description": "Propose manual NPA mark or release",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "mandate:view",
+          "description": "View mandates",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "mandate:register",
+          "description": "Register mandates",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "mandate:admin",
+          "description": "Cancel or repair mandates",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "message:view",
+          "description": "View message templates and delivery log",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "message:admin",
+          "description": "Propose message templates",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "nach:admin",
+          "description": "Generate and manage NACH presentations",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "nach:file",
+          "description": "Upload NACH response files",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "payout:view",
+          "description": "View payouts",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "payout:beneficiary",
+          "description": "Set payout beneficiary accounts",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "payout:admin",
+          "description": "Retry or park payouts",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "webhook:view",
+          "description": "View webhook endpoints and deliveries",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "webhook:admin",
+          "description": "Propose webhook endpoints, rotate secrets, replay",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "session:admin",
+          "description": "List and end any user session",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "support-access:approve",
+          "description": "Approve or revoke platform support access",
+          "composite": false,
+          "clientRole": true
         }
       ]
     }
@@ -869,7 +1109,35 @@
           "report:run",
           "report:admin",
           "bureau:export",
-          "dashboard:view"
+          "dashboard:view",
+          "apiclient:view",
+          "apiclient:admin",
+          "collection:view",
+          "collection:create",
+          "collection:admin",
+          "custom-field:view",
+          "custom-field:propose",
+          "integration:view",
+          "integration:admin",
+          "integration:simulate",
+          "job:view",
+          "job:run",
+          "job:schedule",
+          "loan:classify",
+          "mandate:view",
+          "mandate:register",
+          "mandate:admin",
+          "message:view",
+          "message:admin",
+          "nach:admin",
+          "nach:file",
+          "payout:view",
+          "payout:beneficiary",
+          "payout:admin",
+          "webhook:view",
+          "webhook:admin",
+          "session:admin",
+          "support-access:approve"
         ]
       },
       {
@@ -920,7 +1188,35 @@
           "report:run",
           "report:admin",
           "bureau:export",
-          "dashboard:view"
+          "dashboard:view",
+          "apiclient:view",
+          "apiclient:admin",
+          "collection:view",
+          "collection:create",
+          "collection:admin",
+          "custom-field:view",
+          "custom-field:propose",
+          "integration:view",
+          "integration:admin",
+          "integration:simulate",
+          "job:view",
+          "job:run",
+          "job:schedule",
+          "loan:classify",
+          "mandate:view",
+          "mandate:register",
+          "mandate:admin",
+          "message:view",
+          "message:admin",
+          "nach:admin",
+          "nach:file",
+          "payout:view",
+          "payout:beneficiary",
+          "payout:admin",
+          "webhook:view",
+          "webhook:admin",
+          "session:admin",
+          "support-access:approve"
         ]
       }
     ]

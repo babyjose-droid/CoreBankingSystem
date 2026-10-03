@@ -40,6 +40,20 @@ class FileDocumentStoreTest {
         assertEquals(404, e.status().value());
     }
 
+    /** Usage metering (US-004): the size of one tenant's files, not of its neighbours. */
+    @Test
+    void bytes_under_a_prefix_count_only_that_tenant() throws Exception {
+        FileDocumentStore s = store();
+        assertEquals(0L, s.bytesUnder("tenants/claude-test"));
+        s.put(KEY, CONTENT, "application/pdf");
+        s.put("tenants/claude-test/reports/2026-10-02/LOAN_BOOK-1.csv", new byte[100], "text/csv");
+        s.put("tenants/claude-other/reports/2026-10-02/LOAN_BOOK-1.csv", new byte[7000], "text/csv");
+        assertEquals(CONTENT.length + 100L, s.bytesUnder("tenants/claude-test"));
+        assertEquals(7000L, s.bytesUnder("tenants/claude-other"));
+        assertEquals(0L, s.bytesUnder("tenants/claude-none"));
+        assertThrows(IllegalArgumentException.class, () -> s.bytesUnder("tenants/claude-test/../claude-other"));
+    }
+
     @Test
     void files_and_directories_are_owner_only() throws Exception {
         FileDocumentStore s = store();

@@ -1,0 +1,30 @@
+/* Developer portal (US-119). Self-contained: no external fonts, scripts or styles. */
+:root { color-scheme: light dark; --fg: #1b1f24; --muted: #5c6670; --bg: #ffffff; --line: #d8dee4; --code: #f3f5f7; --link: #0b5cad; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #e6e9ec; --muted: #9aa4ae; --bg: #14171a; --line: #2e353c; --code: #1e2327; --link: #7ab7ff; }
+}
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 72rem; padding: 1rem 1.5rem 4rem; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+       color: var(--fg); background: var(--bg); }
+h1 { margin: 1rem 0 0; font-size: 1.6rem; }
+h2 { margin: 2.5rem 0 .5rem; font-size: 1.3rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; }
+h3 { margin: 1.8rem 0 .4rem; font-size: 1.1rem; }
+h4 { margin: 1.2rem 0 .3rem; font-size: 1rem; }
+a { color: var(--link); }
+nav a { margin-right: 1.2rem; }
+.muted { color: var(--muted); }
+code, pre { font: 0.875rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code); border-radius: 4px; }
+code { padding: .1rem .3rem; }
+pre { padding: .8rem 1rem; overflow-x: auto; }
+pre code { padding: 0; background: none; }
+label { display: block; margin-top: 1rem; font-weight: 600; }
+input[type=search] { width: 100%; max-width: 32rem; padding: .45rem .6rem; font: inherit; color: inherit; background: var(--bg);
+                     border: 1px solid var(--line); border-radius: 4px; }
+table { border-collapse: collapse; width: 100%; margin: .4rem 0 1rem; }
+th, td { text-align: left; vertical-align: top; padding: .35rem .6rem; border-bottom: 1px solid var(--line); }
+th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+td.method { width: 5rem; font: 600 .8rem ui-monospace, Menlo, Consolas, monospace; }
+td.path { font: .875rem ui-monospace, Menlo, Consolas, monospace; word-break: break-all; width: 38%; }
+td.codes { width: 9rem; color: var(--muted); font-size: .85rem; }
+.GET { color: #1a7f37; } .POST { color: #0b5cad; } .PUT { color: #9a6700; } .DELETE { color: #b42318; } .PATCH { color: #6f42c1; }
+ul { padding-left: 1.3rem; }

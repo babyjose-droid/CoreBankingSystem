@@ -1,5 +1,6 @@
 package com.corebanking.platform;
 
+import com.corebanking.platform.tenancy.SupportAuthentication;
 import com.corebanking.platform.tenancy.TenantContext;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -13,7 +14,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 /**
- * The authenticated staff user of the current request. Batch jobs run as the service account.
+ * The authenticated staff user of the current request. Batch jobs run as the service account. A platform engineer
+ * under support access (US-007) appears as {@code support:<name>}.
  *
  * @param permissions fine-grained permissions (the {@code permissions} claim), checked by {@code @PreAuthorize}
  * @param roles       realm roles (MAKER, CHECKER …) used only for role amount limits (US-021). Read from a
@@ -27,6 +29,12 @@ public record CurrentUser(String subject, String login, String displayName, Stri
 
     public static CurrentUser get() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof SupportAuthentication support) {
+            // Time-boxed support access (US-007): the engineer acts as support:<name> with read-only authorities
+            // and no roles; the token's own name and permissions are not used inside the tenant.
+            return new CurrentUser(support.getToken().getSubject(), support.login(), "Support engineer " + support.engineer(),
+                    TenantContext.currentOrNull(), authorities(auth.getAuthorities()), Set.of());
+        }
         if (auth instanceof JwtAuthenticationToken jwt) {
             Jwt t = jwt.getToken();
             String username = t.getClaimAsString("preferred_username");
@@ -50,6 +58,11 @@ public record CurrentUser(String subject, String login, String displayName, Stri
 
     public boolean has(String permission) {
         return permissions.contains(permission);
+    }
+
+    /** True for a platform engineer acting under time-boxed support access. */
+    public boolean isSupport() {
+        return login != null && login.startsWith(com.corebanking.kernel.SupportAccess.LOGIN_PREFIX);
     }
 
     /** True for batch work (end of day, schedulers): no person is acting. */

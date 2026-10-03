@@ -306,8 +306,8 @@ Built 02-Oct-2026. Stories: US-048 (KFS as PDF), US-106 (invoices and reports), 
 
 ### Not yet built in P2-1
 - **P2-1d:** console screens — built, see the P2-1d section below.
-- **P2-2:** payout gateway, NACH presentation and responses, collection webhooks, SMS and email, signed webhooks, OAuth clients, LOS integration.
-  - These need decision D-09 and sandbox credentials from the partners.
+- **P2-2:** integrations — built with a simulator; see the P2-2 section below.
+  - Real partners still need decision D-09 and sandbox credentials.
 - **P2-3:** amendments and restructure — built, see the P2-3 section above.
 - **P2-4:** documents and reports — built, see the P2-4 section above.
 - **Other stories:**
@@ -447,3 +447,314 @@ These are the product's reading and need confirmation by the lender's compliance
 - Consent: no "can be withdrawn" flag; `expiresAt` is a date-time though staff enter a date.
 - Relationships and loan parties cannot be ended or changed after creation.
 - Dashboard: `lastEod` has no run id; `pendingApprovals` scope is not stated.
+
+
+## P2-6 lending completion
+
+Stories: US-038 (templates), US-039 / US-054 (repayment methods, rate bases, schedules), US-044 (product preview), US-050 (tranches), US-059 (remaining amendments), US-060 (simulations). Migration `V18__product_completion.sql`.
+
+### What was built
+- **Engine (`lending-core`, `calc`):**
+  - Repayment methods `EQUATED`, `STEP_EQUATED`, `FIXED_PRINCIPAL` (optionally with principal every n-th instalment), `BULLET_TOTAL_INTEREST`, `BULLET_PERIODIC_INTEREST`, `STRUCTURED`.
+  - Every method at seven frequencies: daily, weekly, fortnightly, monthly, quarterly, half-yearly, yearly. The tenor counts periods of the frequency.
+  - Interest bases: daily-reducing (actual days by day count), periodic-reducing (rate / periods per year) and flat. Nine day-count conventions.
+  - Step-up and step-down EMI: the instalment changes by a percentage every n instalments; a step so steep that an instalment would not cover its interest is refused.
+  - Broken-period interest (BPI): absorbed by the first instalment, added to it, demanded on its own, or deducted from the payout. Deducted BPI is held as an advance and settles its demand on the due date, so the income is still earned day by day.
+  - APR: periodic IRR × periods per year for evenly spaced instalments; XIRR on dated flows for bullet, structured and separately collected BPI. A flat-rate loan needs nothing special: its instalments are the flows.
+- **Products:** frequency, interest basis, BPI mode, step settings, principal interval, tranche / pre-EMI / top-up flags and a benchmark link. The engine and the database enforce the same combinations.
+- **Templates (US-038):** eight seeded templates, `GET /api/v1/loan-product-templates`.
+- **Product preview (US-044):** `POST /api/v1/loan-products/preview` runs a sample loan on a draft product (no code or approval needed) through the booking engine and returns the KFS figures.
+- **KFS:** now also shows frequency, interest basis, the effective (reducing) rate, BPI and the APR basis. A flat-rate product discloses its true APR.
+- **Tranches (US-050):** `POST /loans/{id}/disbursement` takes an `amount`.
+  - Interest accrues only on the amount drawn.
+  - Product option `preEmi`: interest-only instalments until the final tranche, then EMIs for the full tenor. Without it: EMIs on the amount drawn, recomputed on each tranche over the instalments left.
+  - `DISBURSEMENT` fees once on the sanctioned amount; `EVERY_DISBURSEMENT` fees on each tranche. Deducted BPI comes off the first tranche only (later tranches start accruing on their own date, so they have no broken period).
+  - No tranche while the account has unpaid dues or is NPA.
+  - Cancelling the undrawn amount is a sanction change to the amount disbursed; it starts the EMIs of a pre-EMI loan.
+  - `GET /loans/{id}/tranches` lists them; `lending.loan_tranche` is the queryable copy.
+- **Amendments (US-059):**
+  - `MATURITY_CHANGE` through the existing amendment endpoints (a tenure change expressed as a date).
+  - Sanctioned amount: `POST /loans/{id}/sanction-change` (and `/preview`). Reduction only of the undrawn part. Top-up on the same account needs a product that allows it, a standard account without dues, and room in the product maximum and the customer's exposure limit; the extra amount is then disbursed as a tranche. One checker.
+  - Manual NPA mark: `POST /loans/{id}/npa-override` downgrades the account to an NPA class or holds it there until a date. It never upgrades.
+  - Un-mark: `POST /loans/{id}/npa-override/release`. Refused while dues are unpaid, at proposal and again at approval. Nothing is posted; the next day-end upgrades the account by the normal rule.
+  - Mark and un-mark each need two checkers. Neither they, nor a tranche, nor a sanction change can be reversed, and no transaction before one of them can be reversed.
+- **Simulations (US-060):** `POST /loans/{id}/simulations/disbursement` and `/simulations/transaction` (receipt, part-prepayment, pre-closure, today or up to 366 days ahead). They run the posting code on a copy; nothing is stored.
+- **Also in V18 (from the first pass of this increment):** GST credit notes for fees waived or reversed after their invoice (CGST Act s.34), benchmark and benchmark-rate tables, and the `rate_reset_due` view.
+
+### Repayment methods of the reference system (18)
+| # | Reference method | Status | How |
+|---|---|---|---|
+| 1 | Bullet Total Interest | Built | `BULLET_TOTAL_INTEREST` |
+| 2 | Equated | Built | `EQUATED` (moratorium, balloon, step variant `STEP_EQUATED`) |
+| 3 | Overdraft | Not built | Revolving limit, not a term loan. Needs the line-of-credit design (BR-LPR-02). |
+| 4 | Bullet Periodic Interest | Built | `BULLET_PERIODIC_INTEREST` |
+| 5 | Periodic Fixed Principal And Accrued Interest | Built | `FIXED_PRINCIPAL` |
+| 6 | Periodic Fixed Principal And No Interest | Built, as read | `FIXED_PRINCIPAL` at a 0% rate. Open question 1. |
+| 7 | Periodic Fixed Principal … With Differing Interval | Built | `FIXED_PRINCIPAL` with `principalEvery` > 1 |
+| 8 | Periodic Assigned Principal And Accrued Interest | Built | `STRUCTURED` |
+| 9 | Periodic Full Principal And Accrued Interest | Not built | Meaning unclear. Open question 2. |
+| 10 | Periodic Full Principal And No Interest | Not built | Open question 2. |
+| 11 | Periodic Full Principal … With Differing Interval | Not built | Open question 2. |
+| 12 | Tranche Bullet Total Interest | Built | `BULLET_TOTAL_INTEREST` with `multipleDisbursements` |
+| 13 | Tranche Principal And No Interest | Built, as read | `FIXED_PRINCIPAL` at 0% with `multipleDisbursements`. Open question 1. |
+| 14 | Tranche Principal And Periodic Interest | Built, as read | `FIXED_PRINCIPAL` with `multipleDisbursements`. Open question 3. |
+| 15 | Dropline Overdraft With Differing Interval | Not built | Revolving limit that reduces on a schedule. With 3. |
+| 16 | Tranche Bullet Periodic Interest | Built | `BULLET_PERIODIC_INTEREST` with `multipleDisbursements` |
+| 17 | Tranche Equated Loan | Built | `EQUATED` with `multipleDisbursements`, with or without `preEmi` |
+| 18 | Tranche Bullet Tranche Repayment | Not built | Each tranche repaid as its own bullet. Open question 4. |
+
+11 built (three of them on our reading of the name), 7 not built.
+
+### Rate bases of the reference system (10)
+| # | Reference rate basis | Status | How |
+|---|---|---|---|
+| 1 | Configured Rate Fixed | Built | Rate on the application, within the product band |
+| 2 | Simple Interest Rate Annual | Built | `interestBasis` `DAILY_REDUCING` (or `PERIODIC_REDUCING`) |
+| 3 | Simple Interest Rate Flat | Built | `interestBasis` `FLAT`; accrues at the equivalent reducing rate |
+| 4 | Tenure Amount and Installment | Built | Application `instalment`; the rate follows from it |
+| 5 | Simple Interest Rate Annual From Future Value | Built | Application `maturityAmount` on a bullet loan |
+| 6 | Customer Limit | Not built | Meaning unclear. Open question 5. |
+| 7 | Configured Rate Floating | Partly built | Booking rate = benchmark + spread; resets are not automatic (see below) |
+| 8 | Fixed Interest Rate Slab | Built | Product interest table (`lending.resolve_rate`, Phase 1) |
+| 9 | Floating Interest Rate Slab | Not built | Slab table on top of a benchmark. With the floating reset work. |
+| 10 | Elapsed-Tenure Interest Rate Slab | Not built | Rate that changes with the age of the loan. Open question 6. |
+
+6 built, 1 partly, 3 not built.
+
+### Open questions
+1. **"No Interest" methods (6, 10, 13):** read as principal-only instalments at a 0% rate. If the reference means interest collected upfront or by another account, this is wrong.
+2. **"Periodic Full Principal" (9, 10, 11):** the full principal falling due every period is not a term loan as we understand it (a rolling bullet? a renewable loan?). Needs a look at a live reference account.
+3. **"Tranche Principal And Periodic Interest" (14):** read as equal principal plus interest with tranches. It may instead mean each tranche's principal repaid separately.
+4. **"Tranche Bullet Tranche Repayment" (18):** needs a maturity per tranche; today the loan has one schedule.
+5. **"Customer Limit" rate basis:** rate taken from the customer's limit record? There is no such record yet.
+6. **"Elapsed-Tenure" slab:** does the rate step by loan age automatically, and is that a fixed or a floating rate for the RBI reset circular?
+7. **Mark needs two checkers too:** the brief asks two checkers for the un-mark; the mark is also set to two. Confirm or lower it in `platform.approval_rule`.
+8. **Un-mark timing:** the release posts nothing and the upgrade happens at the next day-end. Confirm that a same-day upgrade is not required.
+9. **Top-up and evergreening:** a top-up is refused for any account that is not STANDARD (so also SMA). Confirm.
+10. **KFS of a tranche loan:** figures assume the whole amount is disbursed on day one. Confirm that this is the disclosure wanted for pre-EMI loans.
+
+### Tests
+- **Engine:** 174 tests pass in the pure modules (calc 22, lending-core 78, kernel 66, ledger-core 8). New in this increment: `RepaymentMethodsTest` 14, `TrancheAndServicingTest` 11, `RateBasisTest` 3 (28 tests).
+  - Golden values: weekly micro-loan, step-up and step-down, each BPI mode, flat rate, periodic-reducing, given instalment, future value, differing interval, structured, no-interest.
+  - Whole-life GL reconciliation for each method and frequency, with tranches, pre-EMI, cancellation of the undrawn amount, top-up, maturity change, override and release.
+  - APR checked as the IRR (the net present value of the flows at the APR is zero) for step, broken-period, flat-rate and structured schedules.
+- **Database rules:** 98 SQL checks in `product_completion_test.sql`. The other seven suites still pass (amendments 23, customer 110, documents and reports 66, ledger 19, lending rules 21, phase 1 gaps 22, phase 1 rules 39).
+- **App unit test:** `LoanStateJsonTest` has 4 cases, one new for tranche and override state, and the pre-P2-6 state case now removes the new fields.
+- **OpenAPI:** lint clean.
+- **Not verified here:** the Spring module is compiled only in CI. In the build sandbox the lending services and controller were type-checked with `-Xlint:all -Werror` against hand-written API stubs, every SQL statement they send was checked with `PREPARE` on a migrated database, and `LoanStateJsonTest` was run on Jackson 2.16 through an adapter. No endpoint has been called end to end.
+
+### Needs action
+- **Console API types:** regenerate `frontend/console/src/api/schema.d.ts` (`npm run gen:api`).
+- **New permission:** `loan:classify` (NPA mark and un-mark). Sanction changes use `loan:amend`, tranches `loan:disburse`, simulations and tranche list `loan:view`, templates and product preview `product:view`.
+
+### Not yet built in P2-6
+- Reference methods 3, 9, 10, 11, 15, 18 and rate bases 6, 9, 10 (tables above).
+- Benchmark rates: no endpoint to record a rate (table, approval rule and view exist), and no day-end job that proposes the reset. A reset is a manual `RATE_CHANGE` amendment.
+- Amendments, restructures and `REDUCE_TENURE` prepayment apply to monthly equated loans on the daily-reducing basis only. Other methods take part-prepayment with `REDUCE_EMI`; structured and differing-interval loans take none.
+- Tranches and top-up: equated, fixed-principal and bullet products on the daily-reducing basis only; not step or structured loans.
+- Sanction change of a loan that is not yet disbursed.
+- Simulation download (CSV / PDF); the endpoints return JSON.
+- Credit-note PDF and the GST summary report reading `lending.gst_output_document`.
+- Console screens for everything in this increment.
+- A differing-interval loan at 0% has instalments of zero in the interest-only periods; its schedule is tested, its whole life is not.
+
+## P2-2 integrations
+
+**Read this first.** No partner has been chosen (decision D-09) and there are no sandbox credentials. What is
+built is the provider-independent machinery and a built-in **SIMULATOR** that makes every flow run end to end
+without a partner. The Easebuzz and generic SMS adapters are skeletons marked **UNVERIFIED-AGAINST-PROVIDER**:
+written from recollection of public documentation, never run against the provider. Nothing here is certified by,
+or has been exchanged with, any gateway, bank, NPCI, SMS aggregator or DLT platform.
+
+The Spring code of this increment was type-checked against hand-written API stubs and has **not been started or
+run**: there is no application test of these flows yet. What was executed: the pure module's tests and the SQL
+checks. `tools/integration/los_contract_test.py` is the first thing to run on a local stack.
+
+### Story by story
+| Story | State | Built | Needed from the partner (or still open) |
+|-------|-------|-------|------------------------------------------|
+| US-051 Payout via gateway | Simulator-only | Beneficiary account (encrypted, masked, validation hook); payout instruction from the outbox; send, poll and callbacks through one lifecycle; idempotent on our reference; failed or returned payout reverses the disbursement (straight-through), proposes the reversal (staff) or parks it (`payout.failure-action`); reconciliation query; operations retry and refresh | Payout provider: credentials, sandbox, the status-enquiry and callback specifications and callback signature scheme, penny-drop API, IMPS/NEFT limits, return handling |
+| US-070 Mandate registration status | Simulator-only | Mandate register (UMRN, lifecycle, limit, frequency, validity, masked account, sponsor bank and utility codes); status by callback, poll, operator or CSV upload; mandate status on the loan | e-Mandate provider or sponsor bank: registration API or file specification, callback specification, utility code, sponsor bank code |
+| US-071 Presentation file | Built for the GENERIC layout only | End-of-day step; T-n working days by the holiday calendar; mandate limit and validity respected; one file per sponsor bank and utility code; file kept in the document store | **The sponsor bank's file layout** (GENERIC is ours and no bank accepts it), file naming, encryption or signing, delivery channel, cut-off times |
+| US-072 Response file | Built for the GENERIC layout only | Whole-file refusal on bad control totals; file, control-total and row idempotency; success posts the repayment; bounce records the reason, charges the product's bounce fee through the fee engine, posts no receipt (DPD runs on) and schedules a re-presentation within the tenant's limits | The sponsor bank's response layout; **NPCI return reason list to verify** (27 codes shipped as indicative, all `verified = false`); which reasons may be re-presented |
+| US-073 Gateway collections | Simulator-only | Payment order with methods passed through; verified callback, idempotent on the provider payment id; repayment through the loan engine with the value-date rule; unmatched receipts queue; settlement CSV upload; reconciliation view in both directions | Gateway: credentials, sandbox, callback specification, settlement report format, refund API |
+| US-120 OAuth2 clients | Built, not run against Keycloak | Maker-checker for create, scope change, secret rotation, disable, enable; two checkers for money-moving scopes; scope allow-list; secret collected once by the proposer and never stored; staff profile with branch scope | An admin service account in Keycloak with the right to manage clients and role mappings in tenant realms; a test against a live Keycloak |
+| US-121 Signed webhooks | Built | Endpoints through maker-checker; SSRF guard at registration and before each delivery; HMAC-SHA256 over `timestamp.body` with key id; rotation with overlap; backoff with jitter; dead letter; delivery log; replay; payload allow-list and redaction | A pilot subscriber to verify against (the sample verifier is `tools/integration/verify_webhook.py`) |
+| US-122 Gateway adapters | Skeleton, unverified | Easebuzz collections (initiate, status, callback hash) and payout (transfer request) isolated in `EasebuzzSpec` and two adapters, with contract tests of what they send; off unless the deployment enables it. Razorpay and Cashfree: not started | Easebuzz: current documentation to confirm every constant in `EasebuzzSpec`, sandbox credentials, payout status and callback specifications |
+| US-123 SMS and e-mail | Simulator-only | Templates per tenant with DLT ids through maker-checker; strict rendering; consent and opt-out check; queue with retries and a per-tenant rate limit; delivery log with masked recipient; events: disbursement, due reminder, payment received, bounce, NOC issued, rate reset | SMS aggregator and e-mail provider (credentials, API, delivery reports); the tenant's **DLT registration**: principal entity id, headers, content template ids |
+| US-124 Pilot LOS integration | Guide and script written, not run | `docs/integration/los-integration-guide.md`; `tools/integration/los_contract_test.py`; customer create-or-get by `externalRef`; beneficiary, mandate, payout status and collection calls | A pilot LOS; a run of the script on a local stack |
+
+### How it fits together
+- **Outbox (ADR-008):** lending writes `loan.disbursed`, `payment.received`, `loan.closed`, `loan.npa`,
+  `loan.noc_issued`, `loan.rate_reset` and `loan.disbursement_reversed` in the transaction of the change. The
+  integration module adds `payout.status`, `mandate.status` and `payment.bounced`. A relay takes events in order,
+  one transaction each, and fans them out to payout instructions, webhook deliveries and queued messages. SQS is
+  not in between yet: the relay runs in process, on a timer (5 seconds).
+- **No provider call inside a posting transaction.** Senders claim rows with a lease, call the provider, then
+  record the outcome.
+- **Unknown outcomes stay unknown.** A payout call without an answer is retried with the same reference and,
+  when retries run out, flagged for operations; it is never marked FAILED by us.
+- **New pure module** `backend/integration-core` (113 tests): signature, SSRF guard, retry schedule, templates,
+  lifecycles, value-date rule, simulator, Easebuzz skeletons, NACH GENERIC layout, Keycloak admin requests.
+
+### Interpretations to confirm
+- **Failed payout:** the disbursement is reversed as a whole (principal, fees deducted, GST, day-end accruals) and
+  the loan returns to SANCTIONED; nothing is kept from a borrower who never received the money. The existing
+  cooling-off cancellation was not used because it keeps fees and interest. Refused once the loan has another
+  transaction.
+- **Value date of a gateway or NACH receipt:** the payment (settlement) date when it is the business date or up to
+  `collections.max-back-value-days` (3) before it; otherwise the business date, flagged for review when older.
+- **Messages and consent:** transactional messages about the customer's own loan are sent under legitimate use
+  (DPDP s.7) even after a channel opt-out; service messages respect the opt-out; promotional ones also need a
+  MARKETING consent. For the lender's counsel to confirm.
+- **Second payment on one order** is not posted automatically; it goes to the unmatched receipts queue.
+- **Beneficiary account** is recorded without maker-checker (it is validated by the gateway and audited; the
+  disbursement itself is approved). `payout:beneficiary` is a two-checker scope for API clients.
+
+### Security decisions
+- **Secrets at rest:** provider secrets, webhook signing secrets, account numbers, message recipients and texts
+  and the raw body of provider callbacks are AES-256-GCM ciphertext under the tenant's data key, with the column
+  as associated data. Provider secrets are also sealed inside the approval payload. No API returns a secret:
+  only its name, "set" and the last four characters. API client secrets are never stored.
+- **SSRF:** https only, public DNS names, no IP literals, ports 443 and 8443, no redirects; the host is resolved
+  and every address checked before each request. Not closed: a DNS answer that changes between the check and the
+  connection (see the runbook for the DNS cache setting and the egress policy).
+- **Outbound signature:** `X-CoreBanking-Signature: t=…,v1=<key id>:<hex>`; receiver tolerance 300 seconds.
+- **Inbound:** verified over the raw body by the provider's adapter, only for the tenant's active provider; one
+  row per provider event id (replay protection); 2xx only after the row is committed; processing afterwards.
+- **Deployment gate:** no provider can be configured unless `corebanking.integration.providers-enabled` lists it.
+  The default is empty; the simulator must never be listed in production.
+
+### Tests
+- **integration-core:** 113 tests (signature vectors computed independently, SSRF address ranges, retry
+  schedule, template strictness, payload redaction, lifecycles, simulator outcomes, Easebuzz request and hash
+  contract tests, NACH round trips and control totals, Keycloak requests, scope allow-list).
+- **Database rules:** 104 SQL checks in `integrations_test.sql`.
+- **Not tested:** the Spring services, controllers and the worker (never started); the LOS contract script.
+
+### What is needed before this is used
+- **Console API types:** `frontend/console/src/api/schema.d.ts` must be regenerated (`npm run gen:api`), otherwise
+  the console CI job fails.
+- **New permissions** to add to the realm template and the console list: `integration:view`, `integration:admin`,
+  `integration:simulate` (never in production), `payout:view`, `payout:beneficiary`, `payout:admin`,
+  `collection:view`, `collection:create`, `collection:admin`, `mandate:view`, `mandate:register`, `mandate:admin`,
+  `nach:admin`, `nach:file`, `webhook:view`, `webhook:admin`, `apiclient:view`, `apiclient:admin`, `message:view`,
+  `message:admin`.
+- **Ingress:** route `POST /hooks/v1/**` to the app.
+- **Migrations:** this increment is V20; V18 and V19 come from other increments. Flyway is not configured for
+  out-of-order migrations, so a database that already has V20 will refuse V18 or V19 arriving later: merge the
+  three before any shared database is migrated.
+
+### Not yet built in P2-2
+- Console screens for any of this.
+- Razorpay and Cashfree adapters; a real mandate provider; a real e-mail provider; SMS delivery reports.
+- SQS between the outbox and the consumers.
+- Automatic pick-up of bank files (the document store has no listing) and automatic submission of presentations.
+- Refunds through the gateway (a receipt is only marked REFUND_DUE).
+- Rate limits on the callback endpoint and per API client; mTLS and IP allow-lists for API clients.
+- Straight-through customer creation for an LOS.
+- Messages in languages other than English; mandate suspension after repeated bounces.
+- Application tests of the integration services.
+
+
+## P2-7 platform completion
+
+Built 03-Oct-2026. Stories: US-014, US-027, US-111, US-112, US-113 (scheduling and retention), US-004, US-007, US-119. Migrations: tenant `V19`, control `V3`.
+
+### What was built
+
+**Custom fields (US-014)**
+- Definitions in `platform.custom_field` for customers, loan accounts and loan products: key, label, type (TEXT, NUMBER, DATE, BOOLEAN, ENUM with an enumeration type), widget, required, pattern, minimum and maximum, personal-data flag, active.
+- Definitions change through maker-checker (entity `CUSTOM_FIELD`). A field is deactivated, never deleted; its type and personal-data flag cannot change.
+- Values are a JSON object `custom` on the record. They are checked twice: by the pure `CustomFields` (kernel), which reports every problem at once, and by the database (`platform.validate_custom`, a deferred trigger on the three tables).
+- Unknown key, wrong type and missing required field are errors. On an update, values that did not change are not judged again.
+- **Personal-data fields are encrypted.** A field flagged `pii` must be TEXT. Its value is sealed with the tenant PII cipher, stored as ciphertext plus mask, and returned masked. The database refuses a clear value for such a field.
+- **API:** `GET` and `POST /api/v1/custom-fields`. Customer create and read, and loan create and read, accept and return `custom`. Loan product values have their own calls (`GET` and `PUT /api/v1/loan-products/{code}/custom`, maker-checker) so the product factory is unchanged.
+
+**Session management (US-027)**
+- `GET /api/v1/sessions` lists the caller's sessions; with `?user=` and `session:admin`, another user's. `DELETE /api/v1/sessions/{id}` ends one. Every termination is audited.
+- Sessions live in Keycloak. The port is `SessionAdmin`; `KeycloakSessionAdmin` uses the JDK HTTP client and a service-account client in each tenant realm.
+- Requests and reply parsing are pure code in the kernel (`KeycloakAdmin`, `MiniJson`) and tested there.
+
+**Posting during end of day (US-111, ADR-015)**
+- Cut-off is the start of end of day. After it, a repayment from a client with `loan:stp` is accepted (202) as a deferred receipt and booked and valued on the next business date once that date opens. Staff postings stay blocked.
+- Receipts are booked right after end of day and by the job `DEFERRED_RECEIPTS`. A receipt that cannot be booked becomes FAILED and waits for a person (`loan:admin`: retry or cancel with a note).
+- The database now refuses a ledger lot for a closed date or for a date not yet open.
+
+**Job catalogue and report scheduling (US-112, US-113)**
+- `platform.job_definition` and `platform.job_run`. A scheduler polls every tenant; a job runs under a PostgreSQL advisory lock and a fire time is unique per job, so two instances never run it twice.
+- Jobs: booking of deferred receipts, dashboard metrics refresh, KYC expiry, consent expiry, removal of report files past retention, usage snapshot, and one job per report.
+- A scheduled report runs with the branch scope of the user who scheduled it and belongs to that user. Its dates come from a period relative to the business date.
+- **E-mail delivery is not built.** The file is stored and the run says `delivery: PENDING_PROVIDER` (OI-06).
+- Schedules (six-field cron in IST), the on/off switch and parameters change through maker-checker (entity `JOB_SCHEDULE`).
+- **API:** `GET /api/v1/jobs`, `POST /api/v1/jobs/{code}/run`, `PUT /api/v1/jobs/{code}`, `GET /api/v1/jobs/runs`, `GET /api/v1/dashboard/trend`.
+
+**Usage metering (US-004)**
+- `control.usage_daily`: per tenant and day, active loans, active customers, staff users, API calls, document bytes and database bytes.
+- API calls are counted in memory in `TenantFilter` and written to the control plane every minute and at shutdown. No request waits for a database write.
+- **API:** `GET /platform/v1/usage`, `GET /platform/v1/usage/monthly`, `GET /platform/v1/usage/monthly.csv`, `POST /platform/v1/usage/snapshot`.
+
+**Support access (US-007, ADR-016)**
+- An engineer with `platform:support` asks for read-only access of 15 minutes to 8 hours. The tenant admin approves, rejects or revokes in the tenant API.
+- While a grant is in force, the engineer may call listed GET endpoints of that tenant with the headers `X-Support-Tenant` and `X-Support-Grant`. Expiry is checked on every request.
+- Responses have personal values masked, files are withheld, and every call is audited under `support:<username>` with the grant id.
+- The decision is one pure function, `SupportAccess` (kernel).
+
+**Developer portal (US-119)**
+- `/developer` serves a static page, the guide and `/developer/openapi.yaml`, public on the API host, with `Cache-Control` and a Content-Security-Policy that allows this origin only.
+- The page and the guide are in `docs/api/portal`. The build copies them and the contract into the application's resources (`processResources` in `backend/app/build.gradle.kts`), so the repository holds one copy of the contract.
+
+### Tests
+- **Kernel:** 46 new tests (112 in the module): custom fields (10), cron schedules (7), support access decisions and masking (15), posting cut-off, JSON reader, Keycloak calls, usage meter and report periods (14).
+- **Tenant database:** 151 checks in `platform_p27_test.sql`. The other seven tenant suites still pass.
+- **Control database:** 18 checks in `control/control_p27_test.sql`. CI and `tools/db/run-sql-tests.sh` now run control tests too.
+- **App:** one new case in `FileDocumentStoreTest`.
+- **OpenAPI:** lint clean, 130 operations.
+
+### Not verified here
+- **Spring code:** compiled only in CI. Here it was type-checked against hand-written API stubs with the CI lint options. `SecurityConfig` and the files that need Boot, Flyway or Hikari were not type-checked.
+- **Keycloak admin calls:** never run against a live Keycloak.
+- **Gradle change:** tried on a small stand-in project with the same structure, not on the real build.
+- **No endpoint has been called end to end.**
+
+### Needs action
+- **Console API types:** `frontend/console/src/api/schema.d.ts` must be regenerated (`npm run gen:api`), otherwise the console CI job fails.
+- **Permissions to add to the tenant realm and the console list:** `custom-field:view`, `custom-field:propose`, `session:admin`, `job:view`, `job:run`, `job:schedule`, `support-access:approve`.
+- **Platform realm:** add `platform:support`.
+- **Keycloak:** a client `corebanking-admin` in each tenant realm with service accounts on and the realm-management roles `view-users` and `manage-users`.
+
+### Not yet built in P2-7
+- E-mail delivery of scheduled reports and of support access requests (OI-06).
+- Editing the custom values of an existing customer or loan (there is no update API for them yet).
+- Support access scopes other than READ_ONLY.
+- Value-dating a deferred receipt on the date that was being closed (D-15).
+- Rate limits; the portal says "to be published".
+
+## Integration of P2-6, P2-2 and P2-7
+
+The three increments were built in parallel and merged on 03-Oct-2026. Migrations: tenant `V18` (P2-6), `V19` (P2-7), `V20` (P2-2), `V21` (this merge); control `V3` (P2-7).
+
+### What the merge changed
+- **Loan endpoints:** loan creation, the loan detail and repayments are served by `LoanEntryController` only. It calls the `LoanService` methods of P2-6 and P2-2, so parties, `externalRef`, tranches, events, custom fields and deferred receipts all apply to the same request.
+- **Customer creation:** the request carries both `externalRef` and `custom`.
+- **Payout per tranche:** every disbursement raises `loan.disbursed` with `trancheNo`, and each tranche gets its own payout. `V21` makes the one-live-payout rule per disbursement. A new attempt after a failed payout keeps the disbursement it pays.
+- **Disbursement reversal and tranches:** a reversed disbursement leaves its tranche row as history (`reversed_by`, `V21`) and restores the undrawn amount, so the loan can be disbursed again. A loan with more than one tranche drawn is not reversed as a whole; the failed payout is parked for operations.
+- **Module entitlement:** `/api/v1/deferred-receipts` and `/api/v1/loan-product-templates` need the LENDING module.
+- **Docker image:** the build context now includes `docs/api`, which the developer portal is packaged from.
+- **Loan creation:** a value of the wrong type in the body is answered with 422, not 500.
+
+### Checks
+- `tools/api/check-handlers.py`: 199 handlers, no duplicate method and path, every OpenAPI operation (193) has a handler and the reverse. The `/developer` static files are not in the contract, on purpose.
+- Every constant SQL statement in the application (491) was prepared against databases migrated to `V21` and control `V3`: none fails. Two provider-callback lookups compared an untyped parameter with NULL, which PostgreSQL refuses when the value is null; they now cast it (`?::text`). 48 statements built at run time were not covered.
+- No module depends on `integration`; the module graph has no cycle.
+- SQL: 12 suites pass, among them `lending_integration_alignment_test.sql` (13 checks) for `V21`.
+
+### Left open
+- **A later tranche whose payout fails** cannot be taken back in the books on its own: the engine has no reversal of a single tranche. The payout is parked; operations retry it.
+- **Gateway and NACH receipts during end of day** wait in the integration queue and are posted when the day opens, valued on the payment date within the back-value limit. They do not go through deferred receipts, which value on the next business date. One rule should be chosen.
+- **Two Keycloak admin configurations:** `corebanking.integration.keycloak-admin.*` (API clients) and `corebanking.keycloak.admin.*` (sessions).
+- **Integration endpoints** (payouts, mandates, NACH, collections, webhooks) are not tied to a licensable module.
+- **Provider callbacks** (`/hooks/v1/**`) are not counted as API calls in usage metering.
+- **Custom fields** cannot be searched by an LOS; `externalRef` is the lookup key.
+- **Support access** is closed to every P2-2 and P2-6 endpoint added in this phase (allow-list in `SupportAccess`).
+- **Console:** API types and the permission list must be brought up to date.

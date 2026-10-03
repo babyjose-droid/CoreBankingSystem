@@ -46,6 +46,15 @@ export type LoanStatus = S['LoanStatus'];
 export type AssetClass = S['AssetClass'];
 export type FeeRule = S['FeeRule'];
 export type LoanProduct = S['LoanProduct'];
+/** Contract defaults of the product options added with the lending completion (P2-6). */
+export const LOAN_PRODUCT_DEFAULTS = {
+  interestBasis: 'DAILY_REDUCING',
+  bpiMode: 'NONE',
+  principalEvery: 1,
+  multipleDisbursements: false,
+  preEmi: false,
+  topUpAllowed: false,
+} as const satisfies Partial<LoanProduct>;
 export type LoanApplication = S['LoanApplication'];
 export type ScheduleRow = S['ScheduleRow'];
 export type LoanKfs = S['LoanKfs'];

@@ -61,6 +61,15 @@ public final class LoanPostings {
      * Dr loan principal (gross) / Cr disbursement bank (net) / Cr fee income / Cr GST.
      */
     public TransactionLot disbursement(BigDecimal gross, List<FeeRule.Charge> deducted, LocalDate valueDate) {
+        return disbursement(gross, deducted, BigDecimal.ZERO, valueDate);
+    }
+
+    /**
+     * As {@link #disbursement(BigDecimal, List, LocalDate)}, also deducting broken-period interest collected in
+     * advance: it is held with the borrower's advances (Cr excess receipts) until its demand date, so the interest
+     * is earned by the daily accrual and not on the day of disbursal.
+     */
+    public TransactionLot disbursement(BigDecimal gross, List<FeeRule.Charge> deducted, BigDecimal interestInAdvance, LocalDate valueDate) {
         var b = lot("DISBURSEMENT", valueDate);
         BigDecimal net = gross;
         dr(b, branch, gl.principal(), loanNo, gross, "Disbursement");
@@ -69,6 +78,8 @@ public final class LoanPostings {
             gst(b, c.gst(), c.name() + " " + loanNo);
             net = net.subtract(c.total());
         }
+        cr(b, branch, gl.excessReceipts(), loanNo, interestInAdvance, "Broken-period interest collected in advance");
+        net = net.subtract(interestInAdvance == null ? BigDecimal.ZERO : interestInAdvance);
         if (net.signum() < 0) throw new IllegalArgumentException("deducted fees exceed the disbursement");
         cr(b, branch, gl.disbursementBank(), gl.disbursementBank(), net, "Net disbursal " + loanNo);
         return b.build();
@@ -185,6 +196,29 @@ public final class LoanPostings {
                 };
         dr(b, branch, income, income, amount, component + " waiver " + loanNo);
         cr(b, branch, receivable, loanNo, amount, component + " waiver");
+        return b.build();
+    }
+
+    /**
+     * Waiver of an unpaid fee that carried GST, with a credit note (CGST Act s.34): the taxable part reduces fee
+     * income and the tax part reduces the output tax. The receivable line names the charge so that the credit note
+     * can be issued from the ledger (V18 lending.issue_fee_credit_notes).
+     */
+    public TransactionLot feeWaiver(String chargeId, String feeName, BigDecimal amount, Gst.Inclusive parts) {
+        var b = lot("WAIVER", businessDate);
+        dr(b, branch, gl.feeIncome(), gl.feeIncome(), parts.taxable(), feeName + " " + loanNo);
+        dr(b, branch, gl.cgst(), gl.cgst(), parts.tax().cgst(), "CGST " + feeName + " " + loanNo);
+        dr(b, branch, gl.sgst(), gl.sgst(), parts.tax().sgst(), "SGST " + feeName + " " + loanNo);
+        dr(b, branch, gl.igst(), gl.igst(), parts.tax().igst(), "IGST " + feeName + " " + loanNo);
+        cr(b, branch, gl.feeReceivable(), loanNo, amount, "FEE waiver " + chargeId);
+        return b.build();
+    }
+
+    /** Broken-period interest collected at disbursal settles its demand: Dr advance / Cr interest receivable. */
+    public TransactionLot advanceInterestAdjustment(BigDecimal amount, LocalDate valueDate) {
+        var b = lot("EXCESS_ADJUSTMENT", valueDate);
+        dr(b, branch, gl.excessReceipts(), loanNo, amount, "Broken-period interest collected in advance");
+        cr(b, branch, gl.interestReceivable(), loanNo, amount, "Interest");
         return b.build();
     }
 

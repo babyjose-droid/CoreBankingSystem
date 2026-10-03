@@ -28,8 +28,10 @@ class CustomerController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('customer:view')")
-    List<Map<String, Object>> search(@RequestParam(required = false) String q, @RequestParam(defaultValue = "0") int page,
-                                     @RequestParam(defaultValue = "20") int size) {
+    List<Map<String, Object>> search(@RequestParam(required = false) String q, @RequestParam(required = false) String externalRef,
+                                     @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
+        // the customer an integration created under its own id (LOS create-or-get, US-124): that customer or nothing
+        if (externalRef != null) return customers.byExternalRef(externalRef);
         return customers.search(q, page, size);
     }
 
@@ -45,7 +47,10 @@ class CustomerController {
         return customers.duplicates(in);
     }
 
-    /** 200 with the existing customer when the PAN is already on file (idempotent create), else 202 approval. */
+    /**
+     * 200 with the existing customer when the PAN or the externalRef is already on file (idempotent create),
+     * else 202 with the approval request.
+     */
     @PostMapping
     @PreAuthorize("hasAuthority('customer:create')")
     ResponseEntity<Map<String, Object>> create(@RequestBody CustomerService.Input in,

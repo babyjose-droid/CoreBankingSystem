@@ -1,13 +1,27 @@
 package com.corebanking.lending.engine;
 
-/** Repayment methods supported in Phase 2 (the reference system lists 18; the remaining are variants of these). */
+/**
+ * Repayment methods. The reference system lists 18; docs/phase2-status.md ("P2-6 product completion") maps each one
+ * to a method here or says why it is not built. Every method works at every {@link Frequency}.
+ */
 public enum RepaymentMethod {
-    /** Equal monthly instalments (PMT); optional moratorium and balloon. */
+    /** Equal instalments (PMT); optional moratorium and balloon; flat-rate and given-instalment loans are equated. */
     EQUATED,
-    /** Equal principal each month plus interest on the declining balance. */
+    /** Equated instalments that step up or down by a percentage every so many instalments (step EMI). */
+    STEP_EQUATED,
+    /**
+     * Equal principal plus interest on the declining balance ("Periodic Fixed Principal And Accrued Interest"). With
+     * {@code principalEvery} above 1, interest falls due every period and principal every n-th ("With Differing
+     * Interval").
+     */
     FIXED_PRINCIPAL,
     /** Principal and all interest in one payment at maturity. */
     BULLET_TOTAL_INTEREST,
-    /** Interest every month, principal at maturity. */
-    BULLET_PERIODIC_INTEREST
+    /** Interest every period, principal at maturity. */
+    BULLET_PERIODIC_INTEREST,
+    /**
+     * Principal as assigned to each date by the lender ("Periodic Assigned Principal And Accrued Interest"; seasonal
+     * and irregular schedules), with the interest accrued on the balance.
+     */
+    STRUCTURED
 }

@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * A change to the terms of a live loan (P2-3): rate, tenure, EMI or due date. The engine rebuilds the future
+ * A change to the terms of a live loan (P2-3, P2-6): rate, tenure, EMI, due date or maturity date. The engine rebuilds the future
  * schedule from the current outstanding; demands already raised are never touched and interest accrued but not yet
  * demanded is carried into the next instalment, so no interest is lost or counted twice.
  *
@@ -22,11 +22,13 @@ import java.util.Objects;
  * @param newEmi               EMI_CHANGE, or RATE_CHANGE with CHANGE_BOTH (instead of remainingInstalments)
  * @param newDueDay            DUE_DAY_CHANGE: day of month 1..31 (beyond the month's length means its last day)
  * @param maxTenureMonths      product maximum tenure, counted from disbursal (instalments raised + remaining)
+ * @param newMaturityDate      MATURITY_CHANGE: the last instalment falls due in this date's month (on the loan's due
+ *                             day); the EMI is recomputed, exactly as a tenure change to that many instalments
  */
 public record Amendment(Kind kind, BigDecimal newRatePercent, RateResetOption rateOption, Integer remainingInstalments,
-                        BigDecimal newEmi, Integer newDueDay, Integer maxTenureMonths, String reason) {
+                        BigDecimal newEmi, Integer newDueDay, Integer maxTenureMonths, String reason, LocalDate newMaturityDate) {
 
-    public enum Kind { RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE }
+    public enum Kind { RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, MATURITY_CHANGE }
 
     /** RBI 18-Aug-2023: the options offered to the borrower on a rate reset. */
     public enum RateResetOption { KEEP_EMI_CHANGE_TENURE, KEEP_TENURE_CHANGE_EMI, CHANGE_BOTH }
@@ -56,11 +58,24 @@ public record Amendment(Kind kind, BigDecimal newRatePercent, RateResetOption ra
             case DUE_DAY_CHANGE -> {
                 if (newDueDay == null || newDueDay < 1 || newDueDay > 31) throw new IllegalArgumentException("newDueDay must be 1..31");
             }
+            case MATURITY_CHANGE -> {
+                if (newMaturityDate == null) throw new IllegalArgumentException("newMaturityDate is required for a maturity change");
+            }
         }
         if (remainingInstalments != null && (remainingInstalments < 1 || remainingInstalments > 480)) {
             throw new IllegalArgumentException("remainingInstalments must be 1..480");
         }
         if (newEmi != null && newEmi.signum() <= 0) throw new IllegalArgumentException("newEmi must be positive");
+    }
+
+    /** As before P2-6: no maturity date. */
+    public Amendment(Kind kind, BigDecimal newRatePercent, RateResetOption rateOption, Integer remainingInstalments,
+                     BigDecimal newEmi, Integer newDueDay, Integer maxTenureMonths, String reason) {
+        this(kind, newRatePercent, rateOption, remainingInstalments, newEmi, newDueDay, maxTenureMonths, reason, null);
+    }
+
+    public static Amendment maturity(LocalDate newMaturityDate, Integer maxTenureMonths) {
+        return new Amendment(Kind.MATURITY_CHANGE, null, null, null, null, null, maxTenureMonths, null, newMaturityDate);
     }
 
     public static Amendment rate(BigDecimal newRate, RateResetOption option, Integer maxTenureMonths) {

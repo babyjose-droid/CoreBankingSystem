@@ -23,14 +23,16 @@ public class TenantDirectory {
     private static final Duration TTL = Duration.ofSeconds(60);
 
     /** Path prefix → module that must be enabled. Core platform, customer, EOD and audit are always on. */
-    private static final Map<String, String> MODULE_PATHS = Map.of(
-            "/api/v1/gl/", "GL",
-            "/api/v1/loans/", "LENDING",
-            "/api/v1/loan-products/", "LENDING",
-            "/api/v1/casa/", "CASA",
-            "/api/v1/deposits/", "TD",
-            "/api/v1/collections/", "COLLECTIONS",
-            "/api/v1/reports/", "REPORTS");
+    private static final Map<String, String> MODULE_PATHS = Map.ofEntries(
+            Map.entry("/api/v1/gl/", "GL"),
+            Map.entry("/api/v1/loans/", "LENDING"),
+            Map.entry("/api/v1/loan-products/", "LENDING"),
+            Map.entry("/api/v1/loan-product-templates/", "LENDING"),
+            Map.entry("/api/v1/deferred-receipts/", "LENDING"),
+            Map.entry("/api/v1/casa/", "CASA"),
+            Map.entry("/api/v1/deposits/", "TD"),
+            Map.entry("/api/v1/collections/", "COLLECTIONS"),
+            Map.entry("/api/v1/reports/", "REPORTS"));
 
     private final JdbcTemplate control;
     private final Map<String, Entry> cache = new ConcurrentHashMap<>();

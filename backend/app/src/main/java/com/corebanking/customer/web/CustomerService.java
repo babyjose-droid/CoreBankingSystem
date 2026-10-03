@@ -13,6 +13,7 @@ import com.corebanking.platform.ApprovalService;
 import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.Json;
 import com.corebanking.platform.CurrentUser;
+import com.corebanking.platform.CustomFieldService;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -42,7 +43,7 @@ class CustomerService {
     record Address(String line1, String line2, String city, String stateCode, String pincode) {}
     record Input(String customerType, String firstName, String middleName, String lastName, LocalDate dateOfBirth,
                  String gender, String pan, String mobile, String email, String homeBranch, Address address,
-                 Boolean overrideDedupe, String overrideReason) {}
+                 Boolean overrideDedupe, String overrideReason, String externalRef, Map<String, Object> custom) {}
     record Match(UUID customerId, String customerNo, String displayName, String rule, String strength) {}
     /** Outcome of a create: either the existing customer (same PAN) or a pending approval. */
     record Created(Map<String, Object> existingCustomer, ApprovalRequest approval) {}
@@ -52,8 +53,10 @@ class CustomerService {
     private final PiiKeys keys;
     private final Json json;
     private final BranchScope scope;
+    private final CustomFieldService fields;
 
-    CustomerService(JdbcTemplate jdbc, ApprovalService approvals, PiiKeys keys, Json json, BranchScope scope) {
+    CustomerService(JdbcTemplate jdbc, ApprovalService approvals, PiiKeys keys, Json json, BranchScope scope, CustomFieldService fields) {
+        this.fields = fields;
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.keys = keys;
@@ -77,6 +80,17 @@ class CustomerService {
         if (in.address() != null && in.address().pincode() != null && !in.address().pincode().matches("[1-9][0-9]{5}")) {
             throw ApiException.invalid("pincode must be 6 digits");
         }
+        if (in.externalRef() != null && !in.externalRef().matches("[A-Za-z0-9._:-]{1,64}")) {
+            throw ApiException.invalid("externalRef must be 1 to 64 letters, digits, '.', '_', ':' or '-'");
+        }
+    }
+
+    /**
+     * The customer an integration (LOS) created under its own id: a list of one, or empty. Outside the caller's
+     * branch scope it is not found, like any other customer.
+     */
+    List<Map<String, Object>> byExternalRef(String externalRef) {
+        return jdbc.query(SCOPED + " AND external_ref = ?", this::row, scope.user(), externalRef);
     }
 
     List<Match> duplicates(Input in) {
@@ -96,6 +110,12 @@ class CustomerService {
 
     @Transactional
     Created create(Input in, String idempotencyKey) {
+        if (in.externalRef() != null) {
+            // create-or-get for an LOS: the same externalRef always answers with the same customer
+            validate(in);
+            List<UUID> known = jdbc.queryForList("SELECT id FROM customer.customer WHERE external_ref = ?", UUID.class, in.externalRef());
+            if (!known.isEmpty()) return new Created(summary(known.get(0)), null);
+        }
         List<Match> matches = duplicates(in);
         for (Match m : matches) {
             if (m.rule().equals("PAN")) {
@@ -114,6 +134,9 @@ class CustomerService {
             }
         }
         PiiCipher cipher = keys.forTenant(CurrentUser.requireTenant());
+        // Custom fields (US-014): checked now, so the maker sees every problem; personal-data fields are sealed here
+        // and travel in the request as ciphertext and mask.
+        Map<String, Object> custom = fields.prepare("CUSTOMER", in.custom(), () -> cipher);
         Map<String, Object> sealed = new LinkedHashMap<>();
         sealed.put("firstName", in.firstName());
         sealed.put("middleName", in.middleName());
@@ -145,8 +168,10 @@ class CustomerService {
             overrides.add(Map.of("customerNo", m.customerNo() == null ? "outside your branch scope" : m.customerNo(),
                     "rule", m.rule(), "strength", m.strength()));
         }
+        payload.put("custom", custom);
         payload.put("dedupeOverrides", overrides);
         payload.put("overrideReason", in.overrideReason());
+        payload.put("externalRef", in.externalRef());
         payload.put("sealed", Base64.getEncoder().encodeToString(cipher.encrypt(json.write(sealed), "approval.customer")));
         return new Created(null, approvals.propose("CUSTOMER", "CREATE", null, payload, null, null, in.homeBranch(), idempotencyKey));
     }
@@ -187,7 +212,7 @@ class CustomerService {
 
     private static final String SELECT = """
             SELECT id, customer_no, display_name, customer_type, date_of_birth, pan_last4, mobile_last4, home_branch,
-                   kyc_status, status FROM customer.customer""";
+                   kyc_status, status, custom::text AS custom FROM customer.customer""";
     /** Customers of the caller's branch scope (US-020); binds the username first. */
     private static final String SCOPED = SELECT + " WHERE home_branch" + BranchScope.SQL_VISIBLE;
 
@@ -205,6 +230,7 @@ class CustomerService {
         m.put("homeBranch", rs.getString("home_branch"));
         m.put("kycStatus", rs.getString("kyc_status"));
         m.put("status", rs.getString("status"));
+        m.put("custom", fields.view(rs.getString("custom")));
         return m;
     }
 
@@ -250,10 +276,13 @@ class CustomerService {
             String mobile = (String) s.get("mobile");
             Input in = new Input((String) p.get("customerType"), (String) s.get("firstName"), (String) s.get("middleName"),
                     (String) s.get("lastName"), LocalDate.parse(sealedFirst(s, p, "dateOfBirth")), (String) p.get("gender"),
-                    pan, mobile, (String) s.get("email"), (String) p.get("homeBranch"), null, null, null);
+                    pan, mobile, (String) s.get("email"), (String) p.get("homeBranch"), null, null, null, (String) p.get("externalRef"), null);
             Hashes h = hashes(c, in);
             if (h.pan() != null && !jdbc.queryForList("SELECT 1 FROM customer.customer WHERE pan_hash = ? AND status <> 'ERASED'", h.pan()).isEmpty()) {
                 throw ApiException.conflict("a customer with this PAN was created after the request was raised");
+            }
+            if (in.externalRef() != null && !jdbc.queryForList("SELECT 1 FROM customer.customer WHERE external_ref = ?", in.externalRef()).isEmpty()) {
+                throw ApiException.conflict("a customer with this externalRef was created after the request was raised");
             }
             UUID id = UUID.randomUUID();
             String no = numbers.next(NumberSeries.Family.CUSTOMER);
@@ -263,14 +292,14 @@ class CustomerService {
                     INSERT INTO customer.customer (id, customer_no, customer_type, display_name, date_of_birth, gender,
                         first_name_cipher, middle_name_cipher, last_name_cipher, pan_cipher, pan_hash, pan_last4,
                         mobile_cipher, mobile_hash, mobile_last4, email_cipher, name_dob_hash, home_branch,
-                        approval_id, created_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        approval_id, created_by, external_ref)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, id, no, p.get("customerType"), p.get("displayName"), in.dateOfBirth(), p.get("gender"),
                     c.encrypt(in.firstName(), "customer.first_name"), c.encrypt(in.middleName(), "customer.middle_name"),
                     c.encrypt(in.lastName(), "customer.last_name"), c.encrypt(normPan, "customer.pan"), h.pan(),
                     normPan == null ? null : normPan.substring(5, 9),
                     c.encrypt(normMobile, "customer.mobile"), h.mobile(), normMobile.substring(6),
-                    c.encrypt(in.email(), "customer.email"), h.nameDob(), p.get("homeBranch"), r.id(), r.maker());
+                    c.encrypt(in.email(), "customer.email"), h.nameDob(), p.get("homeBranch"), r.id(), r.maker(), in.externalRef());
             String pincode = sealedFirst(s, p, "pincode");
             if (pincode != null) {
                 String line = String.join(", ", nonNull((String) s.get("addressLine1")), nonNull((String) s.get("addressLine2")));
@@ -278,6 +307,10 @@ class CustomerService {
                         INSERT INTO customer.address (customer_id, address_type, line_cipher, city, state_code, pincode)
                         VALUES (?, 'COMMUNICATION', ?, ?, ?, ?)
                         """, id, c.encrypt(line, "customer.address"), sealedFirst(s, p, "city"), p.get("stateCode"), pincode);
+            }
+            // Custom values were checked and sealed when the request was raised; the database checks them again at commit.
+            if (p.get("custom") instanceof Map<?, ?> custom && !custom.isEmpty()) {
+                jdbc.update("UPDATE customer.customer SET custom = ?::jsonb WHERE id = ?", json.write(custom), id);
             }
             Object overrides = p.get("dedupeOverrides");
             if (overrides instanceof List<?> list) {

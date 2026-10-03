@@ -13,6 +13,7 @@ const KIND_LABEL: Record<AmendmentKind, string> = {
   TENURE_CHANGE: 'Tenure change',
   EMI_CHANGE: 'EMI change',
   DUE_DAY_CHANGE: 'Due-day change',
+  MATURITY_CHANGE: 'Maturity date change',
 };
 export const amendmentKindLabel = (k: string | undefined) => (k === 'RESTRUCTURE' ? 'Restructure' : KIND_LABEL[k as AmendmentKind] ?? k ?? '');
 

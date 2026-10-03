@@ -185,7 +185,8 @@ export function useRepayLoan(id: string) {
   const after = useAfterLoanChange();
   return useMutation({
     mutationFn: (b: { amount: Money; valueDate?: string; mode?: string; reference?: string }) =>
-      unwrap<Loan>(api.POST('/api/v1/loans/{id}/repayments', { params: { path: { id } }, body: b })),
+      // 200 with the loan, or 202 with a deferred receipt when end of day is running for a straight-through client
+      unwrap<Loan>(api.POST('/api/v1/loans/{id}/repayments', { params: { path: { id } }, body: b }) as never),
     onSuccess: after,
   });
 }

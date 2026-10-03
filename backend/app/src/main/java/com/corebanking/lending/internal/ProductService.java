@@ -5,9 +5,12 @@ import com.corebanking.calc.FeeCalculator;
 import com.corebanking.calc.Rounding;
 import com.corebanking.lending.engine.Appropriation;
 import com.corebanking.lending.engine.FeeRule;
+import com.corebanking.lending.engine.Frequency;
 import com.corebanking.lending.engine.LoanAccount;
 import com.corebanking.lending.engine.LoanPostings;
+import com.corebanking.lending.engine.LoanTerms;
 import com.corebanking.lending.engine.RepaymentMethod;
+import com.corebanking.lending.engine.ScheduleBuilder;
 import com.corebanking.platform.ApiException;
 import com.corebanking.platform.ApprovalApplier;
 import com.corebanking.platform.ApprovalRequest;
@@ -15,6 +18,7 @@ import com.corebanking.platform.ApprovalService;
 import com.corebanking.platform.CurrentUser;
 import com.corebanking.platform.Json;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,7 +42,31 @@ public class ProductService {
                           String interestTableCode, String rateType, String dayCount, String rounding, BigDecimal penalChargeRate,
                           Integer maxMoratoriumMonths, Integer coolingOffDays, Boolean secured, List<String> appropriationSequence,
                           String appropriationMode, String prepaymentMode, String status, List<Fee> fees,
-                          LoanPostings.GlMap glMap, Integer version) {}
+                          LoanPostings.GlMap glMap, Integer version,
+                          // P2-6 (US-039, US-050, US-054); every one is optional and defaults as in V18
+                          String frequency, String interestBasis, String bpiMode, BigDecimal stepPercent, Integer stepEvery,
+                          Integer principalEvery, Boolean multipleDisbursements, Boolean preEmi, Boolean topUpAllowed,
+                          String benchmarkCode, BigDecimal spread, Integer resetFrequencyMonths) {
+
+        /** The product with every optional setting filled in with its default. */
+        Product withDefaults() {
+            return new Product(code, name, repaymentMethod, minAmount, maxAmount, minTenorMonths, maxTenorMonths, minRate, maxRate,
+                    interestTableCode, rateType == null ? "FIXED" : rateType, dayCount == null ? "ACTUAL_365" : dayCount,
+                    rounding == null ? "RUPEE_HALF_UP" : rounding, penalChargeRate, maxMoratoriumMonths == null ? 0 : maxMoratoriumMonths,
+                    coolingOffDays == null ? 3 : coolingOffDays, Boolean.TRUE.equals(secured),
+                    appropriationSequence == null ? List.of("INTEREST", "PRINCIPAL", "PENAL", "FEE") : appropriationSequence,
+                    appropriationMode == null ? "BY_DEMAND" : appropriationMode, prepaymentMode == null ? "REDUCE_EMI" : prepaymentMode,
+                    status == null ? "ACTIVE" : status, fees == null ? List.of() : fees,
+                    glMap == null ? LoanPostings.GlMap.starter() : glMap, version,
+                    frequency == null ? "MONTHLY" : frequency, interestBasis == null ? "DAILY_REDUCING" : interestBasis,
+                    bpiMode == null ? "NONE" : bpiMode, stepPercent, stepEvery, principalEvery == null ? 1 : principalEvery,
+                    Boolean.TRUE.equals(multipleDisbursements), Boolean.TRUE.equals(preEmi), Boolean.TRUE.equals(topUpAllowed),
+                    benchmarkCode, spread, resetFrequencyMonths);
+        }
+    }
+
+    /** One row of a STRUCTURED schedule as entered on the loan: the principal falling due on a date. */
+    public record ScheduleRow(LocalDate dueDate, BigDecimal principal) {}
 
     private final JdbcTemplate jdbc;
     private final ApprovalService approvals;
@@ -63,7 +91,9 @@ public class ProductService {
                 SELECT code, name, repayment_method, min_amount, max_amount, min_tenor_months, max_tenor_months, min_rate, max_rate,
                        interest_table_code, rate_type, day_count, rounding, penal_charge_rate, max_moratorium_months,
                        cooling_off_days, secured, array_to_string(appropriation_sequence, ',') AS seq, appropriation_mode,
-                       prepayment_mode, status, gl_map::text AS gl_map, version
+                       prepayment_mode, status, gl_map::text AS gl_map, version, frequency, interest_basis, bpi_mode, step_percent,
+                       step_every, principal_every, multiple_disbursements, pre_emi, top_up_allowed, benchmark_code, spread,
+                       reset_frequency_months
                   FROM lending.loan_product WHERE code = ?
                 """, code);
         if (rows.isEmpty()) throw ApiException.notFound("loan product " + code);
@@ -82,20 +112,50 @@ public class ProductService {
                 (BigDecimal) r.get("penal_charge_rate"), (Integer) r.get("max_moratorium_months"), (Integer) r.get("cooling_off_days"),
                 (Boolean) r.get("secured"), List.of(((String) r.get("seq")).split(",")), (String) r.get("appropriation_mode"),
                 (String) r.get("prepayment_mode"), (String) r.get("status"), fees,
-                gl == null ? LoanPostings.GlMap.starter() : json.read(gl, LoanPostings.GlMap.class), (Integer) r.get("version"));
+                gl == null ? LoanPostings.GlMap.starter() : json.read(gl, LoanPostings.GlMap.class), (Integer) r.get("version"),
+                (String) r.get("frequency"), (String) r.get("interest_basis"), (String) r.get("bpi_mode"),
+                (BigDecimal) r.get("step_percent"), (Integer) r.get("step_every"), (Integer) r.get("principal_every"),
+                (Boolean) r.get("multiple_disbursements"), (Boolean) r.get("pre_emi"), (Boolean) r.get("top_up_allowed"),
+                (String) r.get("benchmark_code"), (BigDecimal) r.get("spread"), (Integer) r.get("reset_frequency_months"));
+    }
+
+    /** Product templates (US-038): starting points for the product wizard, seeded in V18. Nothing here is a live product. */
+    public List<Map<String, Object>> templates() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> row : jdbc.queryForList("""
+                SELECT code, name, description, category, product::text AS product
+                  FROM lending.loan_product_template WHERE active ORDER BY sort_order, code
+                """)) {
+            Map<String, Object> m = new LinkedHashMap<>(row);
+            m.put("product", json.readMap((String) row.get("product")));
+            out.add(m);
+        }
+        return out;
     }
 
     /** Validates the product with the engine (fee rules must compute) and raises a maker-checker request. */
     @Transactional
     public ApprovalRequest propose(Product p) {
         validate(p);
+        requireBenchmark(p);
         List<String> existing = jdbc.queryForList("SELECT code FROM lending.loan_product WHERE code = ?", String.class, p.code());
         Map<String, Object> current = existing.isEmpty() ? null : json.toMap(get(jdbc, p.code()));
         return approvals.propose("LOAN_PRODUCT", existing.isEmpty() ? "CREATE" : "UPDATE", p.code(), json.toMap(p), current, null, null, null);
     }
 
+    void requireBenchmark(Product p) {
+        if (p.benchmarkCode() == null) return;
+        Integer n = jdbc.queryForObject("SELECT count(*) FROM lending.benchmark WHERE code = ?", Integer.class, p.benchmarkCode());
+        if (n == null || n == 0) throw ApiException.invalid("unknown benchmark " + p.benchmarkCode());
+    }
+
     static void validate(Product p) {
         if (p.code() == null || !p.code().matches("[A-Z0-9]{2,12}")) throw ApiException.invalid("product code must be 2-12 capitals/digits");
+        validateTerms(p);
+    }
+
+    /** Everything but the code: also used for a draft product that has none yet (product preview, US-044). */
+    static void validateTerms(Product p) {
         if (p.name() == null || p.name().isBlank()) throw ApiException.invalid("name is required");
         try {
             RepaymentMethod.valueOf(p.repaymentMethod());
@@ -105,6 +165,14 @@ public class ProductService {
         } catch (IllegalArgumentException | NullPointerException e) {
             throw ApiException.invalid("invalid repayment method, day count, rounding or appropriation component");
         }
+        try {
+            if (p.frequency() != null) Frequency.valueOf(p.frequency());
+            if (p.interestBasis() != null) LoanTerms.InterestBasis.valueOf(p.interestBasis());
+            if (p.bpiMode() != null) LoanTerms.BpiMode.valueOf(p.bpiMode());
+        } catch (IllegalArgumentException e) {
+            throw ApiException.invalid("invalid frequency, interest basis or broken-period interest mode");
+        }
+        checkMethodOptions(p.withDefaults());
         if (p.minAmount() == null || p.maxAmount() == null || p.minAmount().compareTo(p.maxAmount()) > 0 || p.minAmount().signum() <= 0) {
             throw ApiException.invalid("0 < minAmount <= maxAmount");
         }
@@ -115,6 +183,81 @@ public class ProductService {
             throw ApiException.invalid("0 <= minRate <= maxRate");
         }
         for (Fee f : p.fees() == null ? List.<Fee>of() : p.fees()) toRule(f).compute(p.minAmount(), "00", "00", Rounding.PAISE_HALF_UP);
+        Frequency f = Frequency.valueOf(p.withDefaults().frequency());
+        if (p.maxTenorMonths() > f.maxPeriods()) {
+            throw ApiException.invalid("the tenor is counted in " + f.name().toLowerCase(java.util.Locale.ROOT) + " periods: at most " + f.maxPeriods());
+        }
+    }
+
+    /** The combinations the engine supports; the database has the same rules as constraints (V18). */
+    private static void checkMethodOptions(Product d) {
+        RepaymentMethod method = RepaymentMethod.valueOf(d.repaymentMethod());
+        boolean step = d.stepPercent() != null || d.stepEvery() != null;
+        if (method == RepaymentMethod.STEP_EQUATED) {
+            if (d.stepPercent() == null || d.stepEvery() == null) throw ApiException.invalid("a step loan needs stepPercent and stepEvery");
+            if (d.stepEvery() < 1) throw ApiException.invalid("stepEvery must be at least 1 instalment");
+            if (d.stepPercent().signum() == 0 || d.stepPercent().compareTo(BigDecimal.valueOf(-50)) <= 0
+                    || d.stepPercent().compareTo(BigDecimal.valueOf(100)) > 0) {
+                throw ApiException.invalid("stepPercent must be above -50 and at most 100, and not zero");
+            }
+        } else if (step) {
+            throw ApiException.invalid("stepPercent and stepEvery apply to STEP_EQUATED products only");
+        }
+        if (d.principalEvery() < 1) throw ApiException.invalid("principalEvery must be at least 1");
+        if (d.principalEvery() > 1 && method != RepaymentMethod.FIXED_PRINCIPAL) {
+            throw ApiException.invalid("principalEvery applies to FIXED_PRINCIPAL products only");
+        }
+        boolean daily = "DAILY_REDUCING".equals(d.interestBasis());
+        if ("FLAT".equals(d.interestBasis()) && method != RepaymentMethod.EQUATED) throw ApiException.invalid("a flat rate applies to EQUATED products only");
+        if (method == RepaymentMethod.STRUCTURED && !daily) throw ApiException.invalid("a structured product accrues on the daily-reducing basis");
+        if (d.multipleDisbursements() || d.topUpAllowed()) {
+            boolean ok = daily && d.principalEvery() == 1 && (method == RepaymentMethod.EQUATED || method == RepaymentMethod.FIXED_PRINCIPAL
+                    || method == RepaymentMethod.BULLET_TOTAL_INTEREST || method == RepaymentMethod.BULLET_PERIODIC_INTEREST);
+            if (!ok) {
+                throw ApiException.invalid("disbursement in tranches and top-up are available for equated, fixed-principal and bullet"
+                        + " products on the daily-reducing basis");
+            }
+        }
+        if (d.preEmi() && !(d.multipleDisbursements() && method == RepaymentMethod.EQUATED)) {
+            throw ApiException.invalid("pre-EMI interest applies to EQUATED products disbursed in tranches");
+        }
+        boolean anyLink = d.benchmarkCode() != null || d.spread() != null || d.resetFrequencyMonths() != null;
+        boolean fullLink = d.benchmarkCode() != null && d.spread() != null && d.resetFrequencyMonths() != null;
+        if (anyLink && !(fullLink && "FLOATING".equals(d.rateType()))) {
+            throw ApiException.invalid("a benchmark-linked product needs benchmarkCode, spread and resetFrequencyMonths, and rateType FLOATING");
+        }
+        if (d.resetFrequencyMonths() != null && (d.resetFrequencyMonths() < 1 || d.resetFrequencyMonths() > 60)) {
+            throw ApiException.invalid("resetFrequencyMonths must be 1..60");
+        }
+        for (Fee f : d.fees()) {
+            if (Boolean.TRUE.equals(f.deductFromDisbursal()) && !"DISBURSEMENT".equals(f.event()) && !"EVERY_DISBURSEMENT".equals(f.event())) {
+                throw ApiException.invalid("fee " + f.code() + ": only a DISBURSEMENT or EVERY_DISBURSEMENT fee can be deducted from the payout");
+            }
+        }
+    }
+
+    /**
+     * Loan terms on this product: the one place that turns product settings into engine terms, for the loan preview,
+     * the KFS, the booking and the product preview. Engine refusals come back as 422.
+     *
+     * @param instalment the agreed instalment, when the rate is to follow from it ("Tenure Amount and Installment")
+     * @param rows       the principal by date of a STRUCTURED loan
+     */
+    static LoanTerms terms(Product product, BigDecimal amount, BigDecimal rate, int periods, LocalDate disbursal, LocalDate firstDue,
+                           int moratorium, BigDecimal balloon, BigDecimal instalment, List<ScheduleRow> rows) {
+        Product p = product.withDefaults();
+        try {
+            LoanTerms.Options options = new LoanTerms.Options(Frequency.valueOf(p.frequency()),
+                    LoanTerms.InterestBasis.valueOf(p.interestBasis()), LoanTerms.BpiMode.valueOf(p.bpiMode()), p.stepPercent(),
+                    p.stepEvery(), p.principalEvery(), instalment,
+                    rows == null ? null : rows.stream().map(r -> new LoanTerms.CustomRow(r.dueDate(), r.principal())).toList());
+            LoanTerms t = new LoanTerms(amount, rate, periods, disbursal, firstDue, RepaymentMethod.valueOf(p.repaymentMethod()),
+                    moratorium, balloon, DayCount.valueOf(p.dayCount()), Rounding.valueOf(p.rounding()), false, options);
+            ScheduleBuilder.plan(t);        // refusals that only show when the schedule is built (steps too steep, instalment too low)
+            return t;
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw ApiException.invalid(e.getMessage() == null ? "invalid loan terms" : e.getMessage());
+        }
     }
 
     static FeeRule toRule(Fee f) {
@@ -130,8 +273,9 @@ public class ProductService {
     }
 
     /** Engine parameters for a new loan: the product as it is today is frozen into the loan (US-043). */
-    public LoanAccount.Params params(Product p, String loanNo, String branch, String supplierState, String recipientState,
+    public LoanAccount.Params params(Product product, String loanNo, String branch, String supplierState, String recipientState,
                                      BigDecimal rate, BigDecimal securedPortion) {
+        Product p = product.withDefaults();
         return new LoanAccount.Params(loanNo, branch, supplierState, recipientState, rate, p.penalChargeRate(),
                 DayCount.valueOf(p.dayCount()), Rounding.valueOf(p.rounding()),
                 p.appropriationSequence().stream().map(Appropriation.Component::valueOf).toList(),
@@ -157,15 +301,19 @@ public class ProductService {
             Product p = json.convert(r.payload(), Product.class);
             validate(p);
             LoanPostings.GlMap gl = p.glMap() == null ? LoanPostings.GlMap.starter() : p.glMap();
+            Product d = p.withDefaults();
             String seq = "{" + String.join(",", p.appropriationSequence() == null ? List.of("INTEREST", "PRINCIPAL", "PENAL", "FEE")
                     : p.appropriationSequence()) + "}";
             jdbc.update("""
                     INSERT INTO lending.loan_product (code, name, repayment_method, min_amount, max_amount, min_tenor_months,
                         max_tenor_months, min_rate, max_rate, interest_table_code, rate_type, day_count, rounding, penal_charge_rate,
                         max_moratorium_months, cooling_off_days, secured, appropriation_sequence, appropriation_mode, prepayment_mode,
-                        gl_principal, gl_interest_income, gl_interest_receivable, gl_map, status, version, effective_from, updated_by)
+                        gl_principal, gl_interest_income, gl_interest_receivable, gl_map, status, version, effective_from, updated_by,
+                        frequency, interest_basis, bpi_mode, step_percent, step_every, principal_every, multiple_disbursements,
+                        pre_emi, top_up_allowed, benchmark_code, spread, reset_frequency_months)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::text[], ?, ?, ?, ?, ?, ?::jsonb, ?, 1,
-                            (SELECT business_date FROM platform.business_day WHERE id = 1), ?)
+                            (SELECT business_date FROM platform.business_day WHERE id = 1), ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, repayment_method = EXCLUDED.repayment_method,
                         min_amount = EXCLUDED.min_amount, max_amount = EXCLUDED.max_amount, min_tenor_months = EXCLUDED.min_tenor_months,
                         max_tenor_months = EXCLUDED.max_tenor_months, min_rate = EXCLUDED.min_rate, max_rate = EXCLUDED.max_rate,
@@ -176,7 +324,12 @@ public class ProductService {
                         appropriation_mode = EXCLUDED.appropriation_mode, prepayment_mode = EXCLUDED.prepayment_mode,
                         gl_principal = EXCLUDED.gl_principal, gl_interest_income = EXCLUDED.gl_interest_income,
                         gl_interest_receivable = EXCLUDED.gl_interest_receivable, gl_map = EXCLUDED.gl_map, status = EXCLUDED.status,
-                        version = lending.loan_product.version + 1, effective_from = EXCLUDED.effective_from, updated_by = EXCLUDED.updated_by
+                        version = lending.loan_product.version + 1, effective_from = EXCLUDED.effective_from, updated_by = EXCLUDED.updated_by,
+                        frequency = EXCLUDED.frequency, interest_basis = EXCLUDED.interest_basis, bpi_mode = EXCLUDED.bpi_mode,
+                        step_percent = EXCLUDED.step_percent, step_every = EXCLUDED.step_every, principal_every = EXCLUDED.principal_every,
+                        multiple_disbursements = EXCLUDED.multiple_disbursements, pre_emi = EXCLUDED.pre_emi,
+                        top_up_allowed = EXCLUDED.top_up_allowed, benchmark_code = EXCLUDED.benchmark_code, spread = EXCLUDED.spread,
+                        reset_frequency_months = EXCLUDED.reset_frequency_months
                     """, p.code(), p.name(), p.repaymentMethod(), p.minAmount(), p.maxAmount(), p.minTenorMonths(), p.maxTenorMonths(),
                     p.minRate(), p.maxRate(), p.interestTableCode(), p.rateType() == null ? "FIXED" : p.rateType(),
                     p.dayCount() == null ? "ACTUAL_365" : p.dayCount(), p.rounding() == null ? "RUPEE_HALF_UP" : p.rounding(),
@@ -184,7 +337,9 @@ public class ProductService {
                     p.coolingOffDays() == null ? 3 : p.coolingOffDays(), Boolean.TRUE.equals(p.secured()), seq,
                     p.appropriationMode() == null ? "BY_DEMAND" : p.appropriationMode(),
                     p.prepaymentMode() == null ? "REDUCE_EMI" : p.prepaymentMode(), gl.principal(), gl.interestIncome(),
-                    gl.interestReceivable(), json.write(gl), p.status() == null ? "ACTIVE" : p.status(), r.maker());
+                    gl.interestReceivable(), json.write(gl), p.status() == null ? "ACTIVE" : p.status(), r.maker(),
+                    d.frequency(), d.interestBasis(), d.bpiMode(), d.stepPercent(), d.stepEvery(), d.principalEvery(),
+                    d.multipleDisbursements(), d.preEmi(), d.topUpAllowed(), d.benchmarkCode(), d.spread(), d.resetFrequencyMonths());
             jdbc.update("DELETE FROM lending.fee_rule WHERE product_code = ?", p.code());
             for (Fee f : p.fees() == null ? List.<Fee>of() : p.fees()) {
                 jdbc.update("""

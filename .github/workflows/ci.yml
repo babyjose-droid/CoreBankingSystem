@@ -20,7 +20,7 @@ jobs:
         with:
           gradle-version: '8.14.3'
       - name: Golden calculation, ledger and kernel tests (block merge on any failure)
-        run: gradle :backend:calc:test :backend:ledger-core:test :backend:kernel:test :backend:lending-core:test --no-daemon
+        run: gradle :backend:calc:test :backend:ledger-core:test :backend:kernel:test :backend:lending-core:test :backend:integration-core:test --no-daemon
       - name: App build, modularity check, DB invariant tests (Testcontainers)
         run: gradle :backend:app:build --no-daemon
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -81,6 +81,14 @@ jobs:
             echo "== $t on fresh database $db"
             $P -d postgres -c "create database $db"
             tools/db/apply-migrations.sh tenant -h localhost -U ar -d "$db"
+            $P -d "$db" -f "$t" | tee out.txt
+            grep -q "TESTS PASSED" out.txt
+          done
+          for t in backend/app/src/test/resources/db/control/*_test.sql; do
+            i=$((i+1)); db="control_ci_$i"
+            echo "== $t on fresh control database $db"
+            $P -d postgres -c "create database $db"
+            tools/db/apply-migrations.sh control -h localhost -U ar -d "$db"
             $P -d "$db" -f "$t" | tee out.txt
             grep -q "TESTS PASSED" out.txt
           done

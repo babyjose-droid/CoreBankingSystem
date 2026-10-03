@@ -33,9 +33,11 @@ class LendingEod implements EodStepProvider {
 
     private static final String USER = "eod";
     private final LoanStore store;
+    private final LoanEventPublisher events;
 
-    LendingEod(LoanStore store) {
+    LendingEod(LoanStore store, LoanEventPublisher events) {
         this.store = store;
+        this.events = events;
     }
 
     @Override
@@ -90,6 +92,8 @@ class LendingEod implements EodStepProvider {
                     LoanStore.Loaded l = store.lock(jdbc, id);
                     LoanAccount a = l.account();
                     LoanAccount.Snapshot before = a.snapshot();
+                    LoanAccount.Status statusBefore = a.status();
+                    boolean npaBefore = a.assetClass().isNpa();
                     LoanAccount.Result r = a.endOfDay(ctx.businessDate(), rates);
                     for (TransactionLot lot : r.lots()) PostingService.postDuringEod(jdbc, lot, USER);
                     store.save(jdbc, id, a, ctx.businessDate());
@@ -97,6 +101,8 @@ class LendingEod implements EodStepProvider {
                         store.recordTxn(jdbc, id, "EOD", ctx.businessDate(), ctx.businessDate(), null, r.lots(), before, r.summary(), null, USER);
                     }
                     store.recordDpd(jdbc, id, ctx.businessDate(), a);
+                    // loan.closed / loan.npa, in the loan's own day-end transaction (ADR-008)
+                    events.transitions(jdbc, id, statusBefore, npaBefore, a, ctx.businessDate());
                 });
             }
 
@@ -127,12 +133,15 @@ class LendingEod implements EodStepProvider {
                     LoanStore.Loaded l = store.lock(jdbc, id);
                     LoanAccount a = l.account();
                     LoanAccount.Snapshot before = a.snapshot();
+                    LoanAccount.Status statusBefore = a.status();
+                    boolean npaBefore = a.assetClass().isNpa();
                     LocalDate since = b.get("npa_since") == null ? ctx.businessDate() : ((java.sql.Date) b.get("npa_since")).toLocalDate();
                     LoanAccount.Result r = a.applyBorrowerClass(AssetClass.valueOf((String) b.get("worst_class")), since, ctx.businessDate());
                     for (TransactionLot lot : r.lots()) PostingService.postDuringEod(jdbc, lot, USER);
                     store.save(jdbc, id, a, ctx.businessDate());
                     store.recordTxn(jdbc, id, "EOD", ctx.businessDate(), ctx.businessDate(), null, r.lots(), before, r.summary(), null, USER);
                     store.recordDpd(jdbc, id, ctx.businessDate(), a);
+                    events.transitions(jdbc, id, statusBefore, npaBefore, a, ctx.businessDate());
                 });
             }
         };

@@ -84,6 +84,8 @@ services:
       COREBANKING_OIDC_JWKS_BASE: http://keycloak:8081/realms/
       # LOCAL ONLY: provision demo-nbfc on first start (starter kit, HO + MUM branches, business date 30-Jun-2026).
       COREBANKING_BOOTSTRAP_DEMO_TENANT: "true"
+      # P2-2 integrations, local only: the simulator reports payouts as paid without moving any money.
+      COREBANKING_INTEGRATION_PROVIDERS: SIMULATOR
       # LOCAL ONLY personal-data keys (base64, 32 bytes). Cloud tiers inject KMS-unwrapped keys instead.
       # Generated into deploy/local/.env by ./init-env.sh (git-ignored); never commit real keys.
       COREBANKING_TENANT_DEMO_NBFC_PII_KEY: ${DEMO_PII_KEY:?run ./init-env.sh first}

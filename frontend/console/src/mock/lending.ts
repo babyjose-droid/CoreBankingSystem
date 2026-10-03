@@ -6,6 +6,7 @@
  * consistent and makes reversals exact: a reversed transaction (and every later one) is dropped and the days since
  * are replayed, which is what the backend does.
  */
+import { LOAN_PRODUCT_DEFAULTS } from '../api/types';
 import type { FeeRule, Loan, LoanApplication, LoanKfs, LoanParty, LoanPartyInput, LoanProduct, LoanSchedule, LoanSummary, LoanTxn, PreclosureQuote, ScheduleRow } from '../api/types';
 import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
@@ -34,6 +35,7 @@ const APPROPRIATION: LoanProduct['appropriationSequence'] = ['INTEREST', 'PRINCI
 
 export const SEED_PRODUCTS: LoanProduct[] = [
   {
+    ...LOAN_PRODUCT_DEFAULTS,
     code: 'PL01',
     name: 'Personal Loan',
     repaymentMethod: 'EQUATED',
@@ -66,6 +68,7 @@ export const SEED_PRODUCTS: LoanProduct[] = [
     ],
   },
   {
+    ...LOAN_PRODUCT_DEFAULTS,
     code: 'ML01',
     name: 'Micro Bullet',
     repaymentMethod: 'BULLET_TOTAL_INTEREST',
@@ -865,6 +868,7 @@ function validateProduct(p: LoanProduct): LoanProduct {
   if (errors.length) throw bad(errors.map((e) => e.message).join('; '), errors);
   const s = (v: unknown) => (v === null || v === undefined || v === '' ? null : String(v));
   return {
+    ...LOAN_PRODUCT_DEFAULTS,
     code: p.code,
     name: p.name.trim(),
     repaymentMethod: p.repaymentMethod,

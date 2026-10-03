@@ -899,6 +899,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loan-product-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Product templates - starting points for the product wizard (US-038)
+         * @description Seeded examples (personal EMI, business EMI and step-up, gold bullet, weekly micro-loan, flat-rate consumer loan, floating home loan in tranches, seasonal structured loan). `product` has the shape of LoanProduct without code, status and version; the figures are illustrative and nothing here is a live product.
+         */
+        get: operations["listLoanProductTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loan-products/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate an account on a draft product - schedule, fees, net disbursal, APR (US-044; nothing is stored)
+         * @description The product need not be saved or approved, and needs no code. The sample loan defaults to the product's smallest amount, shortest tenor and lowest rate. GST is shown as an intra-state supply. For a STRUCTURED product without `scheduleRows`, equal principal on each period date is shown as an example (`sampleSchedule: true`). The engine is the one that books loans, so a product the engine would refuse is refused here (422).
+         */
+        post: operations["previewLoanProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans/preview": {
         parameters: {
             query?: never;
@@ -1045,8 +1085,145 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Staff users get a 202 approval; LOS clients with loan:stp are disbursed immediately (200) */
+        /**
+         * Staff users get a 202 approval; LOS clients with loan:stp are disbursed immediately (200)
+         * @description `amount` is what to disburse now; omitted, it is everything not yet drawn. A part of the sanctioned amount can be drawn only on a product with `multipleDisbursements`; further tranches use this same endpoint while the loan is ACTIVE with an undrawn amount. Interest accrues only on what is drawn. DISBURSEMENT fees are charged once, on the first tranche, on the sanctioned amount; EVERY_DISBURSEMENT fees on each tranche's amount; broken-period interest in mode DEDUCT_AT_DISBURSAL is taken from the first tranche. The schedule is rebuilt on each tranche: with `preEmi` the instalments are interest-only until the loan is fully drawn (or the undrawn amount is cancelled) and the EMIs then run for the full tenor; otherwise the instalments are recomputed on the amount drawn over the instalments left. No tranche is paid while the account has unpaid dues or is NPA (409). A tranche cannot be reversed.
+         */
         post: operations["disburseLoan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/tranches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Disbursements made so far and the amount still undrawn (US-050) */
+        get: operations["listLoanTranches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/simulations/disbursement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What a disbursement would do today - fees, interest deducted, net payout, schedule (nothing changes)
+         * @description For a SANCTIONED loan the first disbursement, for an ACTIVE loan the next tranche. Computed by the code that posts the disbursement; nothing is posted or stored. The same refusals apply (409 / 422).
+         */
+        post: operations["simulateLoanDisbursement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/simulations/transaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What a receipt, part-prepayment or pre-closure would do on a date (nothing changes)
+         * @description `onDate` is today or up to 366 days ahead: the day-ends until then (demands, accrual, penal charges, classification) are run on a copy first. The figures come from the engine code that posts the transaction; nothing is posted or stored. Restructure options are simulated by `/restructure/simulation`.
+         */
+        post: operations["simulateLoanTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/sanction-change/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Before/after of a change of the sanctioned amount (nothing changes) */
+        post: operations["previewLoanSanctionChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/sanction-change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose a top-up, a reduction or the cancellation of the undrawn amount (maker-checker, entity LOAN_SANCTION_CHANGE)
+         * @description **Reduction** may only take away undrawn amount (never below what is disbursed); `cancelUndrawn` brings the sanctioned amount down to the amount disbursed, which starts the EMIs of a pre-EMI loan. **Top-up** in the same account needs a product with `topUpAllowed`, an amount within the product maximum and the customer's exposure limit, and a STANDARD account with no unpaid dues that is not under post-restructuring monitoring (409 otherwise: new money to a borrower in arrears would be evergreening). No money moves on approval: the extra amount is then paid out through `/disbursement`. One checker. Recorded in the amendment history (kind SANCTION_CHANGE); it cannot be reversed. Needs `loan:amend`.
+         */
+        post: operations["proposeLoanSanctionChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/npa-override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manual NPA mark - downgrade the account to an NPA class or hold it there (maker-checker, two checkers)
+         * @description Entity LOAN_NPA_OVERRIDE, action OVERRIDE. The override sets the worst class the account may be upgraded to until `until`: it can downgrade the account or hold it at its present NPA class, never upgrade it (409). A downgrade from a performing class moves unrealised interest to suspense. While it holds, day-end classification can make the class worse but not better; after it expires the normal rules apply. LOSS is permanent. Recorded in the amendment history (kind NPA_OVERRIDE); it cannot be reversed. Needs `loan:classify`.
+         */
+        post: operations["proposeLoanNpaOverride"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/npa-override/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Un-mark - end a manual NPA override before its expiry (maker-checker, two checkers)
+         * @description Entity LOAN_NPA_OVERRIDE, action RELEASE. Refused (409) while the account has unpaid dues, when proposed and again when approved: an NPA is upgraded only when all arrears are cleared (RBI IRACP norms). Nothing is posted; the next day-end classifies the account by the normal rules. A LOSS classification cannot be released. Needs `loan:classify`.
+         */
+        post: operations["proposeLoanNpaRelease"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1216,7 +1393,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Before/after figures and the new schedule for a rate, tenure, EMI or due-day change (nothing changes)
+         * Before/after figures and the new schedule for a rate, tenure, EMI, due-day or maturity-date change (nothing changes)
          * @description Same engine as the posting. Rate resets follow RBI's 18-Aug-2023 circular on floating-rate EMI loans: the borrower keeps the EMI and changes the tenure, keeps the tenure and changes the EMI, or changes both. A tenure extension may not pass the product's maximum tenure and the EMI must cover the monthly interest. Extending the tenure or lowering the EMI of a borrower in arrears is refused (409): that is a restructure.
          */
         post: operations["previewLoanAmendment"];
@@ -1547,6 +1724,974 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/providers/catalogue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Providers the product knows, their settings and secret names, and whether each is verified and enabled
+         * @description Permission: integration:view.
+         */
+        get: operations["listProviderCatalogue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Provider configuration per kind; secrets appear only as set + last four characters
+         * @description Permission: integration:view.
+         */
+        get: operations["listProviderConfigs"];
+        put?: never;
+        /**
+         * Propose a provider configuration (maker-checker)
+         * @description Permission: integration:admin. Secrets are encrypted in the approval request and never shown to the checker. A secret left out keeps its current value.
+         */
+        post: operations["proposeProviderConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/providers/{kind}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose to deactivate the provider of a kind (maker-checker)
+         * @description Permission: integration:admin.
+         */
+        post: operations["proposeProviderDeactivation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/simulator/callbacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test and demo only - play a callback of the SIMULATOR provider through the real verification path
+         * @description Permission: integration:simulate.
+         */
+        post: operations["simulateProviderCallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/hooks/v1/{tenant}/{kind}/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Provider callback (inbound webhook)
+         * @description Permission: none. No access token - the request is authenticated by the provider signature over the raw body, checked with the secret of the tenant in the path. 200 is returned only after the event is durably stored; a repeated event id is answered 200 with duplicate = true and is not processed again. 401 when the signature does not verify.
+         */
+        post: operations["receiveProviderCallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/payout-beneficiary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The payout beneficiary of a loan (masked)
+         * @description Permission: payout:view.
+         */
+        get: operations["getPayoutBeneficiary"];
+        /**
+         * Record the bank account the disbursement is paid to, after the gateway validates it
+         * @description Permission: payout:beneficiary. 422 when the bank does not confirm the account. The account number is stored encrypted and returned masked.
+         */
+        put: operations["setPayoutBeneficiary"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Payout reconciliation query
+         * @description Permission: payout:view.
+         */
+        get: operations["searchPayouts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payouts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A payout with its status history
+         * @description Permission: payout:view.
+         */
+        get: operations["getPayout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payouts/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume a payout on hold, send again one whose outcome is unknown, or make a new attempt after a parked failure
+         * @description Permission: payout:admin.
+         */
+        post: operations["retryPayout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payouts/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the provider for the status now
+         * @description Permission: payout:admin.
+         */
+        post: operations["refreshPayout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/collection-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Payment orders of a loan
+         * @description Permission: collection:view.
+         */
+        get: operations["listCollectionOrders"];
+        put?: never;
+        /**
+         * Create a payment link or order for a loan
+         * @description Permission: collection:create.
+         */
+        post: operations["createCollectionOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/collection-orders/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A payment order
+         * @description Permission: collection:view.
+         */
+        get: operations["getCollectionOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gateway-payments/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gateway settlements against postings, unmatched in both directions
+         * @description Permission: collection:view.
+         */
+        get: operations["getCollectionReconciliation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gateway-payments/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unmatched receipts queue - assign a receipt to a loan or mark it for refund
+         * @description Permission: collection:admin.
+         */
+        post: operations["resolveGatewayPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gateway-settlements/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Load a settlement report (CSV with provider_payment_id, amount, settled_on and optionally fee, utr)
+         * @description Permission: collection:admin.
+         */
+        post: operations["uploadGatewaySettlements"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/mandates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Mandates of a loan, the one in force first
+         * @description Permission: mandate:view.
+         */
+        get: operations["listLoanMandates"];
+        put?: never;
+        /**
+         * Register an e-mandate for a loan
+         * @description Permission: mandate:register.
+         */
+        post: operations["registerMandate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/nach-presentations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * NACH presentations of a loan with their outcomes
+         * @description Permission: mandate:view.
+         */
+        get: operations["listLoanNachPresentations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mandates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The mandate register
+         * @description Permission: mandate:view.
+         */
+        get: operations["searchMandates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mandates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A mandate with its status history
+         * @description Permission: mandate:view.
+         */
+        get: operations["getMandate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mandates/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a mandate status by hand (sponsor bank report, cancellation, suspension)
+         * @description Permission: mandate:admin.
+         */
+        post: operations["updateMandateStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mandates/status-upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Registration statuses from a file (CSV with mandate_ref, status and optionally umrn, reject_code, reject_reason)
+         * @description Permission: mandate:admin.
+         */
+        post: operations["uploadMandateStatuses"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/return-reasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * NACH return reason codes (indicative until verified)
+         * @description Permission: mandate:view.
+         */
+        get: operations["listNachReturnReasons"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Presentation and response files
+         * @description Permission: nach:admin.
+         */
+        get: operations["listNachFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/files/{id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The file itself (it holds account numbers; the download is audited)
+         * @description Permission: nach:file.
+         */
+        get: operations["getNachFileContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/files/{id}/simulate-response": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test and demo only - the response a bank would send for a presentation file
+         * @description Permission: integration:simulate.
+         */
+        post: operations["simulateNachResponse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/presentations/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate presentation files for the open business date (the end-of-day step does the same)
+         * @description Permission: nach:admin.
+         */
+        post: operations["generateNachPresentations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/presentations/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Outcomes whose repayment or bounce charge is not yet posted
+         * @description Permission: nach:admin.
+         */
+        get: operations["listPendingNachFollowUps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nach/responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload a NACH response file for processing
+         * @description Permission: nach:admin. 409 when the same file was already received. The file is refused as a whole when its control totals do not match its rows.
+         */
+        post: operations["uploadNachResponse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/event-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Event types, their fields, the signature header and the retry schedule
+         * @description Permission: webhook:view.
+         */
+        get: operations["getWebhookEventTypes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Webhook endpoints (never their secrets)
+         * @description Permission: webhook:view.
+         */
+        get: operations["listWebhookEndpoints"];
+        put?: never;
+        /**
+         * Propose a webhook endpoint (maker-checker)
+         * @description Permission: webhook:admin. The URL must be https with a public DNS name.
+         */
+        post: operations["proposeWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/endpoints/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Propose a change to an endpoint (maker-checker)
+         * @description Permission: webhook:admin.
+         */
+        put: operations["proposeWebhookEndpointChange"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/endpoints/{id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose DISABLE, ENABLE or ROTATE_SECRET (maker-checker)
+         * @description Permission: webhook:admin.
+         */
+        post: operations["proposeWebhookEndpointAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/endpoints/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Collect the signing secret - once, by the user who proposed the endpoint or the rotation
+         * @description Permission: webhook:admin.
+         */
+        post: operations["collectWebhookSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/endpoints/{id}/replay-dead": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay every dead-lettered delivery of an endpoint
+         * @description Permission: webhook:admin.
+         */
+        post: operations["replayDeadWebhookDeliveries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The delivery log
+         * @description Permission: webhook:view.
+         */
+        get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/deliveries/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A delivery with its attempts
+         * @description Permission: webhook:view.
+         */
+        get: operations["getWebhookDelivery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/deliveries/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send the event to its endpoint again, as a new delivery
+         * @description Permission: webhook:admin.
+         */
+        post: operations["replayWebhookDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * OAuth2 API clients of the tenant
+         * @description Permission: apiclient:view.
+         */
+        get: operations["listApiClients"];
+        put?: never;
+        /**
+         * Propose an API client (maker-checker; two checkers when a money-moving scope is included)
+         * @description Permission: apiclient:admin.
+         */
+        post: operations["proposeApiClient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-clients/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The scopes an API client may hold and which need two checkers
+         * @description Permission: apiclient:view.
+         */
+        get: operations["listApiClientScopes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-clients/{clientId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An API client
+         * @description Permission: apiclient:view.
+         */
+        get: operations["getApiClient"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-clients/{clientId}/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Propose a scope change (maker-checker)
+         * @description Permission: apiclient:admin.
+         */
+        put: operations["proposeApiClientScopes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-clients/{clientId}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose ROTATE_SECRET, DISABLE or ENABLE (maker-checker)
+         * @description Permission: apiclient:admin.
+         */
+        post: operations["proposeApiClientAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-clients/{clientId}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Collect the client secret - once, by the user who proposed the client or the rotation
+         * @description Permission: apiclient:admin. The secret is generated at the identity provider at this moment and is not stored by CoreBanking.
+         */
+        post: operations["collectApiClientSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/message-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * SMS and e-mail templates
+         * @description Permission: message:view.
+         */
+        get: operations["listMessageTemplates"];
+        put?: never;
+        /**
+         * Propose a template (maker-checker)
+         * @description Permission: message:admin.
+         */
+        post: operations["proposeMessageTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/message-templates/variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Template codes (events) and the placeholders each may use
+         * @description Permission: message:view.
+         */
+        get: operations["listMessageTemplateVariables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The delivery log - recipient masked, never the text
+         * @description Permission: message:view.
+         */
+        get: operations["listMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customers/{id}/message-opt-outs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record or lift a customer opt-out of a channel
+         * @description Permission: message:admin.
+         */
+        post: operations["setMessageOptOut"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/v1/tenants": {
         parameters: {
             query?: never;
@@ -1593,6 +2738,416 @@ export interface paths {
         put?: never;
         /** Migrate all tenants */
         post: operations["migrateAllTenants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/custom-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Custom field definitions for customers, loan accounts and loan products
+         * @description Permission `custom-field:view`.
+         */
+        get: operations["listCustomFields"];
+        put?: never;
+        /**
+         * Propose a custom field or a change to one (maker-checker)
+         * @description Permission `custom-field:propose`. The type and the personal-data flag of an existing field cannot change; a field is deactivated, never deleted. A field flagged `pii` must be TEXT: its values are stored encrypted and returned masked.
+         */
+        post: operations["proposeCustomField"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loan-products/{code}/custom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Custom field values of a loan product */
+        get: operations["getLoanProductCustom"];
+        /**
+         * Propose the custom field values of a loan product (maker-checker)
+         * @description Permission `product:propose`. The body holds the complete set of values.
+         */
+        put: operations["proposeLoanProductCustom"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/deferred-receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Receipts of the loan accepted during end of day */
+        get: operations["listLoanDeferredReceipts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deferred-receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Receipts accepted during end of day, in the caller's branch scope */
+        get: operations["listDeferredReceipts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deferred-receipts/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a failed receipt again
+         * @description Permission `loan:admin`. Use it once the cause of the failure (for example a frozen loan) is fixed.
+         */
+        post: operations["retryDeferredReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deferred-receipts/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a failed receipt aside (refunded or handled outside)
+         * @description Permission `loan:admin`. The note says what was done with the money.
+         */
+        post: operations["cancelDeferredReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's login sessions, or another user's with session:admin */
+        get: operations["listSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End a login session
+         * @description Without `user` the session must be one of the caller's own; with `user` (`session:admin`) one of that user's. Every termination is audited. An access token already issued stays valid until it expires.
+         */
+        delete: operations["terminateSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Job catalogue with schedules, next fire time and last run
+         * @description Permission `job:view`.
+         */
+        get: operations["listJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job runs, newest first */
+        get: operations["listJobRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Propose a job's schedule, on/off switch and parameters (maker-checker)
+         * @description Permission `job:schedule`. The schedule is a six-field cron (second minute hour day-of-month month day-of-week) in India Standard Time. For a report job the maker needs the report's permission; the scheduled runs use the maker's branch scope and belong to the maker.
+         */
+        put: operations["proposeJobSchedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{code}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a job now
+         * @description Permission `job:run`. Answers when the job has finished. 409 when the job is already running.
+         */
+        post: operations["runJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dashboard/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whole-book figures per business date (all-branch users) */
+        get: operations["getDashboardTrend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/support-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Support access requests and grants of this tenant
+         * @description Permission `support-access:approve`.
+         */
+        get: operations["listSupportAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/support-access/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a support access request; it expires after the requested duration */
+        post: operations["approveSupportAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/support-access/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a support access request (a note is required) */
+        post: operations["rejectSupportAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/support-access/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke a support access grant at once */
+        post: operations["revokeSupportAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/v1/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Daily usage per tenant (active loans and customers, API calls, storage, staff users) */
+        get: operations["listUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/v1/usage/monthly": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Monthly usage per tenant for billing */
+        get: operations["listMonthlyUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/v1/usage/monthly.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Monthly usage per tenant as CSV */
+        get: operations["exportMonthlyUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/v1/usage/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Take the usage snapshot now for one tenant or for all */
+        post: operations["snapshotUsage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/v1/support-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The engineer's own support access requests (all of them for an operator) */
+        get: operations["listSupportRequests"];
+        put?: never;
+        /**
+         * Ask for time-boxed, read-only access to a tenant
+         * @description Permission `platform:support` (platform realm). Nothing is granted by this call: the tenant's admin approves in the tenant API. While a grant is in force the engineer may call that tenant's GET endpoints on the support list with the headers `X-Support-Tenant` and `X-Support-Grant`; responses have personal values masked and every call is written to the tenant's audit trail.
+         */
+        post: operations["requestSupportAccess"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1803,6 +3358,7 @@ export interface components {
             note?: string;
         };
         CustomerInput: {
+            custom?: components["schemas"]["CustomValues"];
             /** @enum {string} */
             customerType: "INDIVIDUAL" | "NON_INDIVIDUAL";
             firstName: string;
@@ -1827,8 +3383,11 @@ export interface components {
             /** @description Proceed despite possible duplicates (requires approval with reason) */
             overrideDedupe?: boolean;
             overrideReason?: string;
+            /** @description The id of the customer in the LOS; repeating it returns the existing customer */
+            externalRef?: string;
         };
         CustomerSummary: {
+            custom?: components["schemas"]["CustomValues"];
             /** Format: uuid */
             id: string;
             customerNo: string;
@@ -2224,8 +3783,11 @@ export interface components {
         FeeRule: {
             code: string;
             name: string;
-            /** @enum {string} */
-            event: "DISBURSEMENT" | "PRECLOSURE" | "PART_PREPAYMENT" | "BOUNCE" | "LATE_PAYMENT" | "CANCELLATION" | "ADHOC";
+            /**
+             * @description DISBURSEMENT: once, on the first disbursement, on the sanctioned amount. EVERY_DISBURSEMENT: on each tranche, on that tranche's amount. Only these two may be deducted from the payout.
+             * @enum {string}
+             */
+            event: "DISBURSEMENT" | "EVERY_DISBURSEMENT" | "PRECLOSURE" | "PART_PREPAYMENT" | "BOUNCE" | "LATE_PAYMENT" | "CANCELLATION" | "ADHOC";
             /** @enum {string} */
             calcType: "FIXED" | "PERCENT" | "SLAB";
             amount?: number | string | null;
@@ -2243,14 +3805,246 @@ export interface components {
             taxTreatment?: "EXCLUSIVE" | "INCLUSIVE";
             deductFromDisbursal?: boolean;
         };
+        /**
+         * @description EQUATED: equal instalments. STEP_EQUATED: instalments that step up or down by stepPercent every stepEvery instalments. FIXED_PRINCIPAL: equal principal plus interest on the balance. BULLET_TOTAL_INTEREST: principal and all interest at maturity. BULLET_PERIODIC_INTEREST: interest every period, principal at maturity. STRUCTURED: principal as assigned to each date on the loan (scheduleRows), with the interest accrued.
+         * @enum {string}
+         */
+        RepaymentMethod: "EQUATED" | "STEP_EQUATED" | "FIXED_PRINCIPAL" | "BULLET_TOTAL_INTEREST" | "BULLET_PERIODIC_INTEREST" | "STRUCTURED";
+        /**
+         * @default MONTHLY
+         * @enum {string}
+         */
+        RepaymentFrequency: "DAILY" | "WEEKLY" | "FORTNIGHTLY" | "MONTHLY" | "QUARTERLY" | "HALF_YEARLY" | "YEARLY";
+        LoanProductTemplate: {
+            code?: string;
+            name?: string;
+            description?: string;
+            /** @enum {string} */
+            category?: "RETAIL" | "BUSINESS" | "GOLD" | "MICRO" | "CONSUMER" | "HOUSING" | "AGRI";
+            /** @description LoanProduct without code, status and version */
+            product?: {
+                [key: string]: unknown;
+            };
+        };
+        PrincipalRow: {
+            /** Format: date */
+            dueDate: string;
+            /** @description Principal falling due on the date; zero for an interest-only date */
+            principal: number | string;
+        };
+        ProductPreviewRequest: {
+            /** @description A draft LoanProduct; code, status and version are not needed */
+            product: {
+                [key: string]: unknown;
+            };
+            /** @description Default: the product minimum */
+            amount?: number | string | null;
+            /** @description Periods of the product frequency; default: the product minimum */
+            tenorMonths?: number | null;
+            /** @description Default: the product minimum rate, or benchmark + spread, or the interest table */
+            rate?: number | string | null;
+            /** Format: date */
+            disbursalDate?: string | null;
+            /** Format: date */
+            firstDueDate?: string | null;
+            moratoriumMonths?: number | null;
+            balloon?: number | string | null;
+            instalment?: number | string | null;
+            maturityAmount?: number | string | null;
+            scheduleRows?: components["schemas"]["PrincipalRow"][] | null;
+        };
+        LoanTranches: {
+            sanctionedAmount?: components["schemas"]["Money"];
+            disbursedAmount?: components["schemas"]["Money"];
+            undrawnAmount?: components["schemas"]["Money"];
+            multipleDisbursements?: boolean;
+            preEmi?: boolean;
+            tranches?: {
+                trancheNo?: number;
+                /** Format: uuid */
+                txnId?: string;
+                /** Format: date */
+                businessDate?: string;
+                amount?: components["schemas"]["Money"];
+                feesDeducted?: components["schemas"]["Money"];
+                interestDeducted?: components["schemas"]["Money"];
+                netDisbursed?: components["schemas"]["Money"];
+                createdBy?: string;
+            }[];
+        };
+        ChargeBreakup: {
+            code?: string;
+            name?: string;
+            fee?: string;
+            cgst?: string;
+            sgst?: string;
+            igst?: string;
+            total?: string;
+        };
+        DisbursementSimulation: {
+            /** Format: date */
+            asOf?: string;
+            trancheNo?: number;
+            amount?: components["schemas"]["Money"];
+            deductedFees?: components["schemas"]["ChargeBreakup"][];
+            /** @description Fees charged to the account instead of deducted */
+            chargedFees?: components["schemas"]["ChargeBreakup"][];
+            interestDeducted?: components["schemas"]["Money"];
+            netDisbursal?: components["schemas"]["Money"];
+            disbursedAfter?: components["schemas"]["Money"];
+            undrawnAfter?: components["schemas"]["Money"];
+            fullyDrawn?: boolean;
+            /** @description Interest-only instalments continue after this disbursement */
+            preEmi?: boolean;
+            instalmentAfter?: components["schemas"]["Money"];
+            schedule?: components["schemas"]["ScheduleRow"][];
+        };
+        TransactionSimulationRequest: {
+            /** @enum {string} */
+            type: "REPAYMENT" | "PREPAYMENT" | "PRECLOSURE";
+            /** @description REPAYMENT and PREPAYMENT */
+            amount?: number | string | null;
+            /**
+             * @description PREPAYMENT; default: the product setting
+             * @enum {string|null}
+             */
+            mode?: "REDUCE_EMI" | "REDUCE_TENURE" | null;
+            /**
+             * Format: date
+             * @description Today (default) or up to 366 days ahead
+             */
+            onDate?: string | null;
+        };
+        /** @description Fields depend on type. */
+        TransactionSimulation: {
+            type?: string;
+            /** Format: date */
+            asOf?: string;
+            /** Format: date */
+            onDate?: string;
+            amount?: string;
+            /** @description REPAYMENT */
+            duesBefore?: string;
+            /** @description REPAYMENT: what the receipt is appropriated to, in order */
+            allocations?: {
+                /** @description D<n> = instalment n; otherwise a charge id */
+                ref?: string;
+                /** @enum {string} */
+                component?: "INTEREST" | "PRINCIPAL" | "PENAL" | "FEE";
+                amount?: string;
+            }[];
+            principal?: string;
+            interest?: string;
+            fees?: string;
+            penal?: string;
+            /** @description REPAYMENT: excess kept as an advance */
+            advance?: string;
+            duesAfter?: string;
+            principalOutstandingAfter?: string;
+            dpdAfter?: number;
+            assetClassAfter?: string;
+            statusAfter?: string;
+            /** @description PREPAYMENT */
+            mode?: string;
+            /** @description PREPAYMENT */
+            feeCharged?: string;
+            instalmentBefore?: string;
+            instalmentAfter?: string;
+            remainingBefore?: number;
+            remainingAfter?: number;
+            /** @description PREPAYMENT: the schedule after it */
+            schedule?: components["schemas"]["ScheduleRow"][];
+            /** @description PRECLOSURE */
+            overdueDues?: string;
+            /** @description PRECLOSURE */
+            accruedInterest?: string;
+            /** @description PRECLOSURE */
+            charges?: string;
+            /** @description PRECLOSURE */
+            foreclosureFee?: string;
+            /** @description PRECLOSURE */
+            advanceAdjusted?: string;
+            /** @description PRECLOSURE: amount to close the loan on the date */
+            total?: string;
+        };
+        /** @description Give either newAmount or cancelUndrawn; reason is required when proposing. */
+        SanctionChangeRequest: {
+            newAmount?: number | string | null;
+            /** @description Bring the sanctioned amount down to the amount disbursed */
+            cancelUndrawn?: boolean | null;
+            reason?: string;
+        };
+        SanctionChangePreview: {
+            /** Format: date */
+            asOf?: string;
+            sanctionedBefore?: string;
+            sanctionedAfter?: string;
+            disbursed?: string;
+            undrawnAfter?: string;
+            topUp?: boolean;
+            schedule?: components["schemas"]["ScheduleRow"][];
+            note?: string;
+        };
+        NpaOverrideRequest: {
+            /** @enum {string} */
+            assetClass: "SUBSTANDARD" | "DOUBTFUL1" | "DOUBTFUL2" | "DOUBTFUL3" | "LOSS";
+            /**
+             * Format: date
+             * @description Expiry of the override (inclusive); after the business date
+             */
+            until: string;
+            reason: string;
+        };
         LoanProduct: {
             code: string;
             name: string;
-            /** @enum {string} */
-            repaymentMethod: "EQUATED" | "FIXED_PRINCIPAL" | "BULLET_TOTAL_INTEREST" | "BULLET_PERIODIC_INTEREST";
+            repaymentMethod: components["schemas"]["RepaymentMethod"];
+            frequency?: components["schemas"]["RepaymentFrequency"];
+            /**
+             * @description DAILY_REDUCING: simple interest per annum on the balance for the actual days, by the day count. PERIODIC_REDUCING: balance x rate / periods per year for every full period. FLAT (EQUATED only): interest = amount x rate x tenor, in equal instalments; the account accrues at the equivalent reducing rate, and the KFS shows that rate and the APR.
+             * @default DAILY_REDUCING
+             * @enum {string}
+             */
+            interestBasis: "DAILY_REDUCING" | "PERIODIC_REDUCING" | "FLAT";
+            /**
+             * @description Broken-period interest, for the days between disbursal and the start of the first regular period when the first due date is later than one period: absorbed by the first instalment's split (NONE), added to the first instalment, demanded on its own, or deducted from the payout.
+             * @default NONE
+             * @enum {string}
+             */
+            bpiMode: "NONE" | "ADD_TO_FIRST_INSTALMENT" | "SEPARATE_DEMAND" | "DEDUCT_AT_DISBURSAL";
+            /** @description STEP_EQUATED: change of the instalment at each step, e.g. 10 (step-up) or -10 (step-down); above -50, at most 100 */
+            stepPercent?: number | string | null;
+            /** @description STEP_EQUATED: instalments between steps */
+            stepEvery?: number | null;
+            /**
+             * @description FIXED_PRINCIPAL: principal falls due every n-th instalment, interest every instalment
+             * @default 1
+             */
+            principalEvery: number;
+            /**
+             * @description The loan may be disbursed in tranches (EQUATED, FIXED_PRINCIPAL and bullet products on DAILY_REDUCING)
+             * @default false
+             */
+            multipleDisbursements: boolean;
+            /**
+             * @description With multipleDisbursements on an EQUATED product: interest only on the amount drawn until the final tranche, then EMIs for the full tenor. Otherwise EMIs on the amount drawn, recomputed on each tranche.
+             * @default false
+             */
+            preEmi: boolean;
+            /**
+             * @description The sanctioned amount of a live account may be raised (same methods as multipleDisbursements)
+             * @default false
+             */
+            topUpAllowed: boolean;
+            /** @description Floating products: rate = benchmark + spread when the application gives no rate. Needs spread, resetFrequencyMonths and rateType FLOATING. */
+            benchmarkCode?: string | null;
+            spread?: number | string | null;
+            resetFrequencyMonths?: number | null;
             minAmount: number | string;
             maxAmount: number | string;
+            /** @description Counted in periods of the frequency (months for MONTHLY) */
             minTenorMonths: number;
+            /** @description Counted in periods of the frequency (months for MONTHLY) */
             maxTenorMonths: number;
             minRate: number | string;
             maxRate: number | string;
@@ -2258,7 +4052,7 @@ export interface components {
             /** @enum {string} */
             rateType?: "FIXED" | "FLOATING";
             /** @enum {string} */
-            dayCount?: "ACTUAL_365" | "ACTUAL_360" | "ACTUAL_ACTUAL" | "THIRTY_360";
+            dayCount?: "ACTUAL_365" | "ACTUAL_360" | "ACTUAL_ACTUAL" | "THIRTY_360" | "THIRTY_E_360" | "ACTUAL_366" | "ACTUAL_364" | "ACTUAL_336" | "ACTUAL_372";
             /** @enum {string} */
             rounding?: "RUPEE_HALF_UP" | "RUPEE_DOWN" | "RUPEE_UP" | "PAISE_HALF_UP" | "PAISE_HALF_EVEN";
             penalChargeRate?: number | string | null;
@@ -2276,15 +4070,23 @@ export interface components {
             readonly version?: number;
         };
         LoanApplication: {
+            custom?: components["schemas"]["CustomValues"];
             productCode: string;
             /** Format: uuid */
             customerId: string;
             /** @description Defaults to the customer's home branch */
             branch?: string;
             amount: number | string;
+            /** @description Instalment periods of the product frequency (months for a monthly product) */
             tenorMonths: number;
-            /** @description Omit to use the product interest table */
+            /** @description Omit to use, in this order, the instalment or maturityAmount given, the product benchmark + spread, or its interest table. For a FLAT product this is the flat rate. */
             rate?: number | string | null;
+            /** @description EQUATED: the agreed instalment; the rate follows from it (rate basis "tenure, amount and instalment"). Not together with rate. */
+            instalment?: number | string | null;
+            /** @description BULLET_TOTAL_INTEREST: the amount repayable at maturity; the simple annual rate follows from it. Not together with rate. */
+            maturityAmount?: number | string | null;
+            /** @description STRUCTURED: principal by date, ascending, adding up to the amount; tenorMonths = number of rows */
+            scheduleRows?: components["schemas"]["PrincipalRow"][] | null;
             /** Format: date */
             disbursalDate?: string;
             /** Format: date */
@@ -2322,11 +4124,29 @@ export interface components {
             productVersion?: number;
             amount?: components["schemas"]["Money"];
             tenorMonths?: number;
+            frequency?: string;
             repaymentMethod?: string;
             rateType?: string;
+            interestBasis?: string;
+            /** @description The rate as quoted (the flat rate of a flat-rate loan) */
             interestRate?: string;
+            /** @description Annual rate on the reducing balance that the account accrues at; differs from interestRate for a flat rate or a given instalment */
+            effectiveRate?: string;
             rateExplanation?: string;
+            /** @description Regular instalment of an equated loan (the first step of a step loan) */
             emi?: string | null;
+            bpiMode?: string;
+            brokenPeriodInterest?: string;
+            interestDeductedAtDisbursal?: string;
+            /**
+             * @description Evenly spaced instalments: periodic IRR x periods per year. Bullet, structured or separately collected broken-period interest: XIRR on the dated flows.
+             * @enum {string}
+             */
+            aprBasis?: "NOMINAL_PERIODIC_IRR" | "XIRR";
+            /** @description Product preview only */
+            draft?: boolean;
+            /** @description Product preview only: the schedule rows were made up as an example */
+            sampleSchedule?: boolean;
             instalments?: number;
             totalInterest?: components["schemas"]["Money"];
             fees?: {
@@ -2340,12 +4160,12 @@ export interface components {
             }[];
             netDisbursal?: components["schemas"]["Money"];
             totalRepayable?: components["schemas"]["Money"];
-            /** @description Annual percentage rate (IRR of net flows, fees ex-GST) */
+            /** @description Annual percentage rate: IRR of the actual cash flows (amount less fees ex-GST and interest deducted upfront, then every instalment). For a flat-rate loan this is the true reducing-balance cost. */
             apr?: string;
             penalChargeRate?: string | null;
             penalChargeNote?: string;
             coolingOffDays?: number;
-            placeOfSupply?: string;
+            placeOfSupply?: string | null;
             schedule?: components["schemas"]["ScheduleRow"][];
         };
         LoanSummary: {
@@ -2366,6 +4186,7 @@ export interface components {
             branch?: string;
         };
         Loan: components["schemas"]["LoanSummary"] & {
+            custom?: components["schemas"]["CustomValues"];
             /** Format: uuid */
             customerId?: string;
             productVersion?: number;
@@ -2397,6 +4218,21 @@ export interface components {
              * @description Restructured and under monitoring: earliest end of the specified period
              */
             upgradeNotBefore?: string | null;
+            frequency?: components["schemas"]["RepaymentFrequency"];
+            disbursedAmount?: string;
+            /** @description Sanctioned amount not yet disbursed */
+            undrawnAmount?: string;
+            multipleDisbursements?: boolean;
+            preEmi?: boolean;
+            topUpAllowed?: boolean;
+            /** @description Manual NPA override: the class the account is held at or below */
+            overrideClass?: string | null;
+            /** Format: date */
+            overrideUntil?: string | null;
+            benchmarkCode?: string | null;
+            spread?: string | null;
+            /** Format: date */
+            nextRateReset?: string | null;
         };
         LoanSchedule: {
             demands?: {
@@ -2464,7 +4300,12 @@ export interface components {
         /** @description Fields used depend on kind; reason is required when proposing. */
         AmendmentRequest: {
             /** @enum {string} */
-            kind: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE";
+            kind: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "MATURITY_CHANGE";
+            /**
+             * Format: date
+             * @description MATURITY_CHANGE: the last instalment falls due in this month, on the loan's due day; the EMI is recomputed
+             */
+            newMaturityDate?: string | null;
             /** @description RATE_CHANGE: new annual rate, within the product band */
             newRatePercent?: number | string;
             /**
@@ -2580,7 +4421,7 @@ export interface components {
             /** Format: uuid */
             txnId?: string;
             /** @enum {string} */
-            kind?: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "RESTRUCTURE";
+            kind?: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "MATURITY_CHANGE" | "SANCTION_CHANGE" | "NPA_OVERRIDE" | "RESTRUCTURE";
             /** @description The request as proposed */
             parameters?: {
                 [key: string]: unknown;
@@ -2733,6 +4574,384 @@ export interface components {
             } | null;
             /** @description Shown to all-branch users; 0 for others */
             openEodExceptions?: number;
+        };
+        /** @description A record of the integration module. Money is a decimal string; account numbers appear only masked. */
+        IntegrationRecord: {
+            [key: string]: unknown;
+        };
+        ProviderConfigInput: {
+            /** @enum {string} */
+            kind: "PAYOUT" | "COLLECTION" | "MANDATE" | "SMS" | "EMAIL";
+            /** @example SIMULATOR */
+            provider: string;
+            settings?: {
+                [key: string]: string;
+            };
+            /** @description Write-only. Never returned by any API. */
+            secrets?: {
+                [key: string]: string;
+            };
+        };
+        SimulatedCallback: {
+            /** @enum {string} */
+            kind: "payout" | "collection" | "mandate";
+            /** @description Payout reference, order reference or mandate reference */
+            reference: string;
+            /** @description Payout - SUCCESS, FAILED, RETURNED; collection - PAID, FAILED; mandate - ACTIVE, REJECTED, CANCELLED */
+            status: string;
+            amount?: components["schemas"]["Money"];
+            reasonCode?: string;
+            reason?: string;
+            /** @description Repeat an id to test replay protection */
+            eventId?: string;
+        };
+        BeneficiaryInput: {
+            holderName: string;
+            accountNumber: string;
+            ifsc: string;
+        };
+        CollectionOrderInput: {
+            amount: components["schemas"]["Money"];
+            methods?: ("UPI" | "CARD" | "NETBANKING")[];
+            /** Format: uri */
+            returnUrl?: string;
+        };
+        PaymentResolution: {
+            /** Format: uuid */
+            loanId?: string;
+            refund?: boolean;
+            note: string;
+        };
+        MandateInput: {
+            holderName: string;
+            accountNumber: string;
+            ifsc: string;
+            /**
+             * @default SB
+             * @enum {string}
+             */
+            accountType: "SB" | "CA" | "CC" | "OT";
+            maxAmount: components["schemas"]["Money"];
+            /**
+             * @default MONTHLY
+             * @enum {string}
+             */
+            frequency: "MONTHLY" | "QUARTERLY" | "HALF_YEARLY" | "YEARLY" | "AS_PRESENTED";
+            /** Format: date */
+            startDate: string;
+            /** Format: date */
+            endDate?: string;
+            sponsorBankCode?: string;
+            utilityCode?: string;
+        };
+        MandateStatusUpdate: {
+            /** @enum {string} */
+            status: "SUBMITTED" | "ACTIVE" | "REJECTED" | "SUSPENDED" | "CANCELLED" | "EXPIRED";
+            umrn?: string;
+            rejectCode?: string;
+            rejectReason?: string;
+        };
+        WebhookEndpointInput: {
+            name: string;
+            /**
+             * Format: uri
+             * @description https, public DNS name, port 443 or 8443
+             */
+            url: string;
+            eventTypes: ("loan.disbursed" | "payment.received" | "payment.bounced" | "loan.closed" | "loan.npa" | "mandate.status" | "payout.status")[];
+        };
+        ActionInput: {
+            action: string;
+        };
+        ApiClientInput: {
+            /** @description Lower-case letters, digits and hyphens; stored with the prefix ext- */
+            clientId: string;
+            name: string;
+            scopes: string[];
+            homeBranch: string;
+            /** @default false */
+            allBranches: boolean;
+        };
+        ApiClientScopes: {
+            scopes: string[];
+        };
+        MessageTemplateInput: {
+            /** @enum {string} */
+            code: "LOAN_DISBURSED" | "PAYMENT_RECEIVED" | "PAYMENT_BOUNCED" | "DUE_REMINDER" | "NOC_ISSUED" | "RATE_RESET";
+            /** @enum {string} */
+            channel: "SMS" | "EMAIL";
+            /** @default en */
+            language: string;
+            /**
+             * @default TRANSACTIONAL
+             * @enum {string}
+             */
+            category: "TRANSACTIONAL" | "SERVICE" | "PROMOTIONAL";
+            /** @description E-mail only */
+            subject?: string;
+            /** @description Text with {{placeholders}} */
+            body: string;
+            /** @description SMS - principal entity id on the DLT platform */
+            dltEntityId?: string;
+            /** @description SMS - registered content template id */
+            dltTemplateId?: string;
+            /** @description SMS - registered header (sender id) */
+            dltHeader?: string;
+            /**
+             * @default ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "RETIRED";
+        };
+        MessageOptOut: {
+            /** @enum {string} */
+            channel: "SMS" | "EMAIL";
+            /** @default true */
+            optOut: boolean;
+            source?: string;
+        };
+        /** @description The tenant's custom fields by key (see `GET /api/v1/custom-fields`). An unknown key, a value of the wrong type and a missing required field are refused with 422. Personal-data fields are returned masked. */
+        CustomValues: {
+            [key: string]: unknown;
+        };
+        CustomFieldInput: {
+            /** @enum {string} */
+            entity: "CUSTOMER" | "LOAN_ACCOUNT" | "LOAN_PRODUCT";
+            key: string;
+            label: string;
+            /** @enum {string} */
+            dataType: "TEXT" | "NUMBER" | "DATE" | "BOOLEAN" | "ENUM";
+            /** @description Enumeration type that lists the choices; ENUM only */
+            enumType?: string | null;
+            /** @enum {string|null} */
+            widget?: "TEXT" | "TEXTAREA" | "NUMBER" | "DATE" | "CHECKBOX" | "SELECT" | "RADIO" | null;
+            /** @default false */
+            required: boolean;
+            /** @description TEXT only; the whole value must match */
+            regex?: string | null;
+            /** @description NUMBER: lowest value; TEXT: shortest length */
+            min?: number | null;
+            /** @description NUMBER: highest value; TEXT: longest length */
+            max?: number | null;
+            /**
+             * @description Personal data; TEXT only; stored encrypted and returned masked
+             * @default false
+             */
+            pii: boolean;
+            /** @default true */
+            active: boolean;
+            /** @default 0 */
+            sortOrder: number;
+        };
+        CustomField: {
+            entity?: string;
+            key?: string;
+            label?: string;
+            dataType?: string;
+            enumType?: string | null;
+            widget?: string;
+            required?: boolean;
+            regex?: string | null;
+            min?: string | null;
+            max?: string | null;
+            pii?: boolean;
+            active?: boolean;
+            sortOrder?: number;
+            updatedBy?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        LoanProductCustom: {
+            productCode?: string;
+            custom?: components["schemas"]["CustomValues"];
+        };
+        Note: {
+            note?: string;
+        };
+        DeferredReceipt: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            loanId?: string;
+            loanNo?: string;
+            amount?: components["schemas"]["Money"];
+            mode?: string | null;
+            reference?: string | null;
+            /** Format: date-time */
+            receivedAt?: string;
+            receivedBy?: string;
+            /**
+             * Format: date
+             * @description The business date that was being closed
+             */
+            cutoffBusinessDate?: string;
+            /** Format: date */
+            expectedPostingDate?: string;
+            /** @enum {string} */
+            status?: "PENDING" | "APPLIED" | "FAILED" | "CANCELLED";
+            /** Format: date */
+            postingDate?: string | null;
+            /**
+             * Format: date
+             * @description Always the posting date
+             */
+            valueDate?: string | null;
+            /** Format: uuid */
+            loanTxnId?: string | null;
+            attempts?: number;
+            error?: string | null;
+            resolvedBy?: string | null;
+            resolutionNote?: string | null;
+        };
+        DeferredReceiptAccepted: {
+            /** @enum {string} */
+            status?: "ACCEPTED_FOR_NEXT_BUSINESS_DATE";
+            receipt?: components["schemas"]["DeferredReceipt"];
+        };
+        LoginSession: {
+            id?: string;
+            username?: string;
+            ipAddress?: string | null;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            lastAccessAt?: string | null;
+            clients?: string[];
+            /** @description The session this request's token belongs to */
+            current?: boolean;
+        };
+        Job: {
+            code?: string;
+            name?: string;
+            /** @enum {string} */
+            kind?: "REPORT" | "DASHBOARD_REFRESH" | "KYC_EXPIRY" | "CONSENT_EXPIRY" | "EXPORT_CLEANUP" | "USAGE_SNAPSHOT" | "DEFERRED_RECEIPTS";
+            /** @description Six-field cron in IST */
+            schedule?: string | null;
+            enabled?: boolean;
+            parameters?: {
+                [key: string]: unknown;
+            };
+            builtIn?: boolean;
+            updatedBy?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            runnable?: boolean;
+            /** Format: date-time */
+            nextRunAt?: string | null;
+            lastRun?: components["schemas"]["JobRun"] | null;
+        };
+        JobRun: {
+            /** Format: uuid */
+            id?: string;
+            jobCode?: string;
+            /** @enum {string} */
+            origin?: "SCHEDULE" | "MANUAL";
+            /** Format: date-time */
+            scheduledFor?: string | null;
+            requestedBy?: string;
+            /** @enum {string} */
+            status?: "RUNNING" | "COMPLETED" | "FAILED";
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string | null;
+            processed?: number;
+            failed?: number;
+            error?: string | null;
+            /** @description What the run produced. A scheduled report carries `reportRunId` and `delivery` (PENDING_PROVIDER until e-mail is built). */
+            artifact?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        JobScheduleInput: {
+            /** @example 0 0 6 1 * * */
+            schedule?: string | null;
+            enabled?: boolean;
+            /** @description Report jobs take `period` (BUSINESS_DATE, PREVIOUS_DAY, MONTH_TO_DATE, PREVIOUS_MONTH), `parameters` (the report's own, without dates) and `emailTo`. Other jobs take none. */
+            parameters?: {
+                [key: string]: unknown;
+            };
+        };
+        DashboardTrendPoint: {
+            /** Format: date */
+            businessDate?: string;
+            activeLoans?: number;
+            portfolioOutstanding?: components["schemas"]["Money"];
+            overdueAmount?: components["schemas"]["Money"];
+            overdueLoans?: number;
+            grossNpa?: components["schemas"]["Money"];
+            npaLoans?: number;
+            disbursed?: components["schemas"]["Money"];
+            collected?: components["schemas"]["Money"];
+            pendingApprovals?: number;
+            /** Format: date-time */
+            refreshedAt?: string;
+        };
+        SupportAccessRequest: {
+            tenant: string;
+            reason: string;
+            ticket: string;
+            /** @default 60 */
+            durationMinutes: number;
+            /**
+             * @default READ_ONLY
+             * @enum {string}
+             */
+            scope: "READ_ONLY";
+        };
+        SupportAccess: {
+            /** Format: uuid */
+            id?: string;
+            /** @description Present in control-plane responses */
+            tenant?: string;
+            engineer?: string;
+            reason?: string;
+            ticket?: string;
+            scope?: string;
+            durationMinutes?: number;
+            /** Format: date-time */
+            requestedAt?: string;
+            /** @enum {string} */
+            status?: "REQUESTED" | "APPROVED" | "REJECTED" | "REVOKED" | "EXPIRED" | "LAPSED" | "UNKNOWN";
+            decidedBy?: string | null;
+            /** Format: date-time */
+            decidedAt?: string | null;
+            decisionNote?: string | null;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            revokedBy?: string | null;
+            /** Format: date-time */
+            revokedAt?: string | null;
+            revokeReason?: string | null;
+        };
+        UsageDay: {
+            tenant?: string;
+            /** Format: date */
+            day?: string;
+            activeLoans?: number | null;
+            activeCustomers?: number | null;
+            staffUsers?: number | null;
+            apiCalls?: number;
+            documentBytes?: number | null;
+            databaseBytes?: number | null;
+            storageBytes?: number;
+            /** Format: date-time */
+            capturedAt?: string | null;
+        };
+        UsageMonth: {
+            tenant?: string;
+            legalName?: string;
+            edition?: string;
+            month?: string;
+            daysMeasured?: number;
+            peakActiveLoans?: number | null;
+            closingActiveLoans?: number | null;
+            peakActiveCustomers?: number | null;
+            closingActiveCustomers?: number | null;
+            peakStaffUsers?: number | null;
+            apiCalls?: number;
+            peakStorageBytes?: number | null;
+            closingStorageBytes?: number | null;
         };
     };
     responses: {
@@ -3371,6 +5590,8 @@ export interface operations {
             query?: {
                 /** @description Customer number, exact PAN or exact mobile */
                 q?: string;
+                /** @description The id of the customer in the LOS (create-or-get): returns that customer or an empty list */
+                externalRef?: string;
                 page?: number;
                 size?: number;
             };
@@ -4253,6 +6474,52 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    listLoanProductTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanProductTemplate"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    previewLoanProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description KFS figures of the sample loan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanKfs"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     previewLoan: {
         parameters: {
             query?: never;
@@ -4491,6 +6758,8 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
+                    /** @description Amount of this disbursement; default: all that is undrawn */
+                    amount?: number | string;
                     beneficiaryName?: string;
                     beneficiaryAccount?: string;
                     ifsc?: string;
@@ -4517,10 +6786,178 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    repayLoan: {
+    listLoanTranches: {
         parameters: {
             query?: never;
             header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanTranches"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulateLoanDisbursement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Default: all that is undrawn */
+                    amount?: number | string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisbursementSimulation"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulateLoanTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransactionSimulationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionSimulation"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    previewLoanSanctionChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SanctionChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SanctionChangePreview"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanSanctionChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SanctionChangeRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanNpaOverride: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NpaOverrideRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanNpaRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    repayLoan: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 id: components["parameters"]["Id"];
             };
@@ -4551,6 +6988,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Loan"];
+                };
+            };
+            /** @description End of day has started (cut-off). The repayment of a straight-through client (`loan:stp`) is accepted and will be booked and valued on the next business date. Send it without `valueDate`. A staff posting gets 409 instead. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeferredReceiptAccepted"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -5222,6 +7668,1237 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    listProviderCatalogue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listProviderConfigs: {
+        parameters: {
+            query?: {
+                /** @description Include superseded versions */
+                history?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeProviderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderConfigInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeProviderDeactivation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulateProviderCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SimulatedCallback"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    receiveProviderCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant: string;
+                kind: "payout" | "collection" | "mandate";
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getPayoutBeneficiary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    setPayoutBeneficiary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BeneficiaryInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    searchPayouts: {
+        parameters: {
+            query?: {
+                /** @description INITIATED, ON_HOLD, SENT, SUCCESS, FAILED, RETURNED or CANCELLED */
+                status?: string;
+                needsAction?: boolean;
+                loanId?: string;
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getPayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    retryPayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    refreshPayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCollectionOrders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    createCollectionOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionOrderInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCollectionOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCollectionReconciliation: {
+        parameters: {
+            query?: {
+                /** @description MATCHED, PAYMENT_NOT_POSTED, POSTED_NOT_SETTLED, SETTLED_NOT_RECEIVED, AMOUNT_MISMATCH or REFUND_DUE; without it everything that is not MATCHED */
+                category?: string;
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    resolveGatewayPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaymentResolution"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadGatewaySettlements: {
+        parameters: {
+            query: {
+                fileRef: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/csv": string;
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLoanMandates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    registerMandate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MandateInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLoanNachPresentations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    searchMandates: {
+        parameters: {
+            query?: {
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getMandate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    updateMandateStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MandateStatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadMandateStatuses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/csv": string;
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listNachReturnReasons: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listNachFiles: {
+        parameters: {
+            query?: {
+                /** @description PRESENTATION or RESPONSE */
+                direction?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getNachFileContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulateNachResponse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    generateNachPresentations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listPendingNachFollowUps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    uploadNachResponse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/plain": string;
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getWebhookEventTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listWebhookEndpoints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookEndpointInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeWebhookEndpointChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookEndpointInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeWebhookEndpointAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActionInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    collectWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    replayDeadWebhookDeliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listWebhookDeliveries: {
+        parameters: {
+            query?: {
+                endpointId?: string;
+                /** @description PENDING, RETRY, DELIVERED or DEAD */
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getWebhookDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    replayWebhookDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listApiClients: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeApiClient: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiClientInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listApiClientScopes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getApiClient: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeApiClientScopes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiClientScopes"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeApiClientAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActionInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    collectApiClientSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listMessageTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeMessageTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageTemplateInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listMessageTemplateVariables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listMessages: {
+        parameters: {
+            query?: {
+                customerId?: string;
+                loanId?: string;
+                /** @description QUEUED, SENT, FAILED or SUPPRESSED */
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    setMessageOptOut: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageOptOut"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     listTenants: {
         parameters: {
             query?: never;
@@ -5313,6 +8990,595 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MigrationResult"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCustomFields: {
+        parameters: {
+            query?: {
+                entity?: "CUSTOMER" | "LOAN_ACCOUNT" | "LOAN_PRODUCT";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomField"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCustomField: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomFieldInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLoanProductCustom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanProductCustom"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanProductCustom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    custom?: components["schemas"]["CustomValues"];
+                };
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLoanDeferredReceipts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeferredReceipt"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listDeferredReceipts: {
+        parameters: {
+            query?: {
+                status?: "PENDING" | "APPLIED" | "FAILED" | "CANCELLED";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeferredReceipt"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    retryDeferredReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeferredReceipt"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    cancelDeferredReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Note"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeferredReceipt"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listSessions: {
+        parameters: {
+            query?: {
+                /** @description User name; needs `session:admin` */
+                user?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginSession"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    terminateSession: {
+        parameters: {
+            query?: {
+                user?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ended */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listJobRuns: {
+        parameters: {
+            query?: {
+                job?: string;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRun"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeJobSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobScheduleInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    runJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRun"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getDashboardTrend: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardTrendPoint"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listSupportAccess: {
+        parameters: {
+            query?: {
+                status?: "REQUESTED" | "APPROVED" | "REJECTED" | "REVOKED" | "EXPIRED" | "LAPSED";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportAccess"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    approveSupportAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Note"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportAccess"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    rejectSupportAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Note"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportAccess"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    revokeSupportAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Note"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportAccess"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listUsage: {
+        parameters: {
+            query?: {
+                tenant?: string;
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageDay"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listMonthlyUsage: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM; the previous month when left out */
+                month?: string;
+                tenant?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageMonth"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    exportMonthlyUsage: {
+        parameters: {
+            query?: {
+                month?: string;
+                tenant?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    snapshotUsage: {
+        parameters: {
+            query?: {
+                tenant?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per tenant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listSupportRequests: {
+        parameters: {
+            query?: {
+                tenant?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportAccess"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    requestSupportAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupportAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Requested */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportAccess"];
                 };
             };
             default: components["responses"]["Problem"];

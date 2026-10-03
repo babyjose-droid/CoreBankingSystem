@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useLoanProduct, useProposeLoanProduct } from '../../api/lendingHooks';
+import { LOAN_PRODUCT_DEFAULTS } from '../../api/types';
 import type { FeeRule, LoanProduct } from '../../api/types';
 import { Button, Card, Checkbox, ErrorBanner, Input, PageHeader, Select, Spinner } from '../../ui';
 import { useProposalToast } from '../proposal';
@@ -146,6 +147,7 @@ function validate(d: Draft) {
 function toProduct(d: Draft): LoanProduct {
   const opt = (v: string) => (v.trim() ? v.trim() : null);
   return {
+    ...LOAN_PRODUCT_DEFAULTS,
     code: d.code,
     name: d.name.trim(),
     repaymentMethod: d.repaymentMethod,

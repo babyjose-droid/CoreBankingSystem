@@ -1,5 +1,9 @@
 package com.corebanking.platform.web;
 
+import com.corebanking.audit.AuditLog;
+import com.corebanking.platform.Json;
+import com.corebanking.platform.TenantDataSources;
+import com.corebanking.platform.tenancy.ApiCallMeter;
 import com.corebanking.platform.tenancy.TenantDirectory;
 import com.corebanking.platform.tenancy.TenantFilter;
 import java.util.Collection;
@@ -40,6 +44,9 @@ import org.springframework.security.web.SecurityFilterChain;
  *       {@code /platform/**}, so a tenant realm admin can never mint a control-plane operator.</li>
  *   <li>Authorities come from the {@code permissions} claim (client roles of the {@code api} client), e.g.
  *       {@code customer:create}; controllers check them with {@code @PreAuthorize} (US-020).</li>
+ *   <li>The one exception is time-boxed support access (US-007, ADR-016): a platform-realm token with
+ *       {@code platform:support} may read a tenant's API while a grant approved by that tenant's admin is in force.
+ *       {@link TenantFilter} checks the grant on every request and swaps the authorities for read-only ones.</li>
  *   <li>Signing keys can be fetched from an internal URL (e.g. {@code http://keycloak:8081}) while the issuer
  *       stays the public one — needed in Docker and inside a cluster.</li>
  * </ul>
@@ -49,7 +56,8 @@ import org.springframework.security.web.SecurityFilterChain;
 class SecurityConfig {
 
     @Bean
-    SecurityFilterChain api(HttpSecurity http, TenantDirectory directory,
+    SecurityFilterChain api(HttpSecurity http, TenantDirectory directory, TenantDataSources dataSources, AuditLog audit, Json json,
+                            ApiCallMeter meter,
                             @Value("${corebanking.oidc.issuer-prefix}") String issuerPrefix,
                             @Value("${corebanking.oidc.jwks-base:}") String jwksBase,
                             @Value("${corebanking.oidc.audience:api}") String audience,
@@ -81,10 +89,20 @@ class SecurityConfig {
             .authorizeHttpRequests(a -> a
                     .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                    // Provider callbacks (P2-2) carry no token: the tenant is in the path and the request is
+                    // authenticated by the provider's signature, checked with that tenant's secret before
+                    // anything is stored (integration InboundWebhookController).
+                    .requestMatchers(HttpMethod.POST, "/hooks/v1/**").permitAll()
+                    // Developer portal: the API contract and a static page; no secrets, no tenant data (US-119).
+                    .requestMatchers(HttpMethod.GET, "/developer", "/developer/**").permitAll()
+                    // Support engineers ask for access here; everything else on the control plane is for operators.
+                    .requestMatchers("/platform/v1/support-access", "/platform/v1/support-access/**")
+                        .hasAnyAuthority("platform:operator", "platform:support")
                     .requestMatchers("/platform/v1/**").hasAuthority("platform:operator")
                     .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.authenticationManagerResolver(new JwtIssuerAuthenticationManagerResolver(byIssuer)))
-            .addFilterAfter(new TenantFilter(prefix, platformRealm, directory), BearerTokenAuthenticationFilter.class);
+            .addFilterAfter(new TenantFilter(prefix, platformRealm, directory, dataSources, audit, json, meter),
+                    BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 

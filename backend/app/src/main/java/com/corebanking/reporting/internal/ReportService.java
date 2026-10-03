@@ -118,12 +118,56 @@ public class ReportService {
     /** Runs a report now and stores its file. Returns the run; a run that fails is returned with status FAILED. */
     public Run run(String code, Map<String, Object> requested) {
         Def def = definition(code);
-        Definition d = def.api();
         CurrentUser user = CurrentUser.get();
-        if (!user.has(d.permission())) throw ApiException.forbidden("report " + code + " needs the permission " + d.permission());
+        requirePermission(def.api(), user);
+        if (def.api().allBranchesOnly()) scope.requireAll();
+        return execute(def, requested, user.login(), null);
+    }
+
+    /**
+     * Runs a report for its schedule (US-113), with the branch scope of the staff user who scheduled it. That user
+     * held the report's permission when the schedule was proposed and a checker approved it; the run is recorded
+     * under their name, so they can download the file. E-mail delivery is not built (OI-06).
+     *
+     * @param schedule the cron expression that fired, kept on the run
+     */
+    public Run runScheduled(String code, Map<String, Object> requested, String asUser, String schedule) {
+        Def def = definition(code);
+        if (asUser == null || asUser.isBlank()) throw ApiException.conflict("the schedule of report " + code + " names no user to run as");
+        if (def.api().allBranchesOnly()
+                && !Boolean.TRUE.equals(jdbc.queryForObject("SELECT platform.sees_all_branches(?)", Boolean.class, asUser))) {
+            throw ApiException.conflict("report " + code + " covers every branch and " + asUser + " no longer has all-branch access");
+        }
+        return execute(def, requested, asUser, schedule == null ? "manual run of the schedule" : schedule);
+    }
+
+    /** For a schedule proposal: the maker must be allowed to run the report, and the parameters must be valid. */
+    public Map<String, String> checkSchedulable(String code, Map<String, Object> requested) {
+        Def def = definition(code);
+        requirePermission(def.api(), CurrentUser.get());
+        if (def.api().allBranchesOnly()) scope.requireAll();
+        return parameters(def.api().parameters(), requested);
+    }
+
+    /** The names of the report's parameters. */
+    public java.util.Set<String> parameterNames(String code) {
+        Map<String, Object> schema = definition(code).api().parameters();
+        return schema != null && schema.get("properties") instanceof Map<?, ?> p
+                ? p.keySet().stream().map(String::valueOf).collect(java.util.stream.Collectors.toUnmodifiableSet()) : java.util.Set.of();
+    }
+
+    private static void requirePermission(Definition d, CurrentUser user) {
+        if (!user.has(d.permission())) throw ApiException.forbidden("report " + d.code() + " needs the permission " + d.permission());
+        if ("UCRF".equals(d.outputFormat()) && !user.has("bureau:export")) {
+            throw ApiException.forbidden("the bureau file needs the permission bureau:export");
+        }
+    }
+
+    /** @param login the staff user whose branch scope applies and who owns the run */
+    private Run execute(Def def, Map<String, Object> requested, String login, String schedule) {
+        Definition d = def.api();
+        String code = d.code();
         boolean bureau = "UCRF".equals(d.outputFormat());
-        if (bureau && !user.has("bureau:export")) throw ApiException.forbidden("the bureau file needs the permission bureau:export");
-        if (d.allBranchesOnly()) scope.requireAll();
         if (!def.sqlFunction().matches("reporting\\.[a-z][a-z0-9_]*")) throw new IllegalStateException("bad report function for " + code);
         Map<String, String> params = parameters(d.parameters(), requested);
         UcrfConsumerFile.Header header = bureau ? bureauHeader(params) : null;
@@ -133,19 +177,20 @@ public class ReportService {
         UUID id = UUID.randomUUID();
         String paramJson = json.write(params);
         jdbc.update("""
-                INSERT INTO reporting.report_run (id, report_code, requested_by, business_date, parameters, status)
-                VALUES (?, ?, ?, ?, ?::jsonb, 'RUNNING')
-                """, id, code, user.login(), businessDate, paramJson);
+                INSERT INTO reporting.report_run (id, report_code, requested_by, business_date, parameters, status, schedule)
+                VALUES (?, ?, ?, ?, ?::jsonb, 'RUNNING', ?)
+                """, id, code, login, businessDate, paramJson, schedule);
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("runId", id.toString());
         detail.put("parameters", params);
-        audit.record(user.login(), bureau ? "BUREAU_EXPORT" : "REPORT_RUN", "REPORT", code, detail);
+        if (schedule != null) detail.put("scheduledFor", login);
+        audit.record(schedule == null ? login : "scheduler", bureau ? "BUREAU_EXPORT" : "REPORT_RUN", "REPORT", code, detail);
 
         try {
             if (def.sqlFunction().startsWith("reporting.rpt_gst_")) {
                 jdbc.queryForObject("SELECT lending.issue_fee_invoices(NULL)", Integer.class);   // invoices not yet issued
             }
-            Built built = bureau ? bureauFile(def, user.login(), paramJson, header, tenant) : csv(def, user.login(), paramJson);
+            Built built = bureau ? bureauFile(def, login, paramJson, header, tenant) : csv(def, login, paramJson);
             String ext = bureau ? ".txt" : ".csv";
             String fileName = DocumentKey.safeFileName(code.toLowerCase(Locale.ROOT).replace('_', '-') + "-" + businessDate + "-" + id.toString().substring(0, 8) + ext);
             String key = DocumentKey.forTenant(tenant, "reports", businessDate.toString(), code + "-" + id + ext);
@@ -297,7 +342,8 @@ public class ReportService {
     public Download download(UUID runId, String part) {
         CurrentUser user = CurrentUser.get();
         List<Stored> found = jdbc.query("""
-                SELECT artifact_key, artifact_sha256, content_type, report_code, status, requested_by, file_name, rejected_count
+                SELECT artifact_key, artifact_sha256, content_type, report_code,
+                       CASE WHEN artifact_purged_at IS NOT NULL THEN 'REMOVED' ELSE status END, requested_by, file_name, rejected_count
                   FROM reporting.report_run WHERE id = ?
                 """, (rs, i) -> new Stored(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
                         rs.getString(7), rs.getInt(8)), runId);
@@ -306,6 +352,7 @@ public class ReportService {
         if (!s.requestedBy().equalsIgnoreCase(user.login()) && !user.has("report:admin")) throw ApiException.notFound("report run " + runId);
         Definition d = definition(s.reportCode()).api();
         if (!user.has(d.permission())) throw ApiException.forbidden("report " + d.code() + " needs the permission " + d.permission());
+        if ("REMOVED".equals(s.status())) throw ApiException.conflict("the file of report run " + runId + " was removed under the retention policy; run the report again");
         if (!"COMPLETED".equals(s.status())) throw ApiException.conflict("report run " + runId + " is " + s.status() + " and has no file");
         boolean rejections = "rejections".equals(part);
         if (part != null && !part.isBlank() && !rejections) throw ApiException.invalid("part must be 'rejections' or left out");
@@ -323,6 +370,34 @@ public class ReportService {
         return rejections
                 ? new Download(DocumentKey.safeFileName(s.fileName() + ".rejected.csv"), CSV_TYPE, content)
                 : new Download(s.fileName(), s.contentType(), content);
+    }
+
+    // ------------------------------------------------------------------------------------------------ retention
+    /**
+     * Removes the stored files of completed runs older than the retention period (US-113: generated files are
+     * retained per policy). The run stays as the record of who exported what; only its file goes.
+     *
+     * @return files removed, and runs whose file could not be removed
+     */
+    public int[] purge(int retentionDays) {
+        String tenant = CurrentUser.requireTenant();
+        record Old(UUID id, String key, int rejected) {}
+        List<Old> old = jdbc.query("SELECT id, artifact_key, rejected_count FROM reporting.purgeable_runs(?)",
+                (rs, i) -> new Old(rs.getObject(1, UUID.class), rs.getString(2), rs.getInt(3)), retentionDays);
+        int removed = 0;
+        int failed = 0;
+        for (Old o : old) {
+            try {
+                String key = DocumentKey.requireTenant(o.key(), tenant);
+                store.delete(key);
+                if (o.rejected() > 0) store.delete(key + ".rejected.csv");
+                jdbc.update("UPDATE reporting.report_run SET artifact_purged_at = now() WHERE id = ?", o.id());
+                removed++;
+            } catch (RuntimeException e) {
+                failed++;
+            }
+        }
+        return new int[] {removed, failed};
     }
 
     // ------------------------------------------------------------------------------------------------ helpers

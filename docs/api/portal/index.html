@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoreBanking API – developer portal</title>
+  <link rel="stylesheet" href="/developer/portal.css">
+</head>
+<body>
+  <header>
+    <h1 id="title">CoreBanking API</h1>
+    <p id="version" class="muted"></p>
+    <nav>
+      <a href="#guide">Guide</a>
+      <a href="#reference">API reference</a>
+      <a href="/developer/openapi.yaml">OpenAPI document (YAML)</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="guide">
+      <h2>Guide</h2>
+      <div id="guide-body"><p class="muted">Loading the guide…</p></div>
+    </section>
+
+    <section id="reference">
+      <h2>API reference</h2>
+      <p class="muted">Every operation of the contract, by tag. The OpenAPI document is the source of truth: generate
+        a client from it, or read the schemas there.</p>
+      <label for="filter">Filter</label>
+      <input id="filter" type="search" placeholder="path, summary or operation id" autocomplete="off">
+      <p id="count" class="muted"></p>
+      <div id="operations"><p class="muted">Loading the contract…</p></div>
+    </section>
+  </main>
+
+  <noscript><p>This page lists the API from <a href="/developer/openapi.yaml">the OpenAPI document</a>; without
+    JavaScript, open the document itself.</p></noscript>
+  <script src="/developer/portal.js"></script>
+</body>
+</html>

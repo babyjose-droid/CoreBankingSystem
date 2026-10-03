@@ -16,7 +16,11 @@ public record FeeRule(String code, String name, Event event, CalcType calcType, 
                       List<Slab> slabs, BigDecimal min, BigDecimal max, BigDecimal gstRatePercent,
                       FeeCalculator.TaxTreatment taxTreatment, boolean deductFromDisbursal) {
 
-    public enum Event { DISBURSEMENT, PRECLOSURE, PART_PREPAYMENT, BOUNCE, LATE_PAYMENT, CANCELLATION, ADHOC }
+    /**
+     * DISBURSEMENT: once, on the first disbursement, on the sanctioned amount. EVERY_DISBURSEMENT: on each tranche,
+     * on the amount of that tranche. Both may be deducted from the payout.
+     */
+    public enum Event { DISBURSEMENT, PRECLOSURE, PART_PREPAYMENT, BOUNCE, LATE_PAYMENT, CANCELLATION, ADHOC, EVERY_DISBURSEMENT }
     public enum CalcType { FIXED, PERCENT, SLAB }
 
     /** Base in [from, to] → fixed fee. */
