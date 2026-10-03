@@ -10,7 +10,7 @@ with each step; none of them is in the realm template yet (see docs/phase2-statu
 | `corebanking.integration.providers-enabled` (`COREBANKING_INTEGRATION_PROVIDERS`) | empty | Providers a tenant may configure: `SIMULATOR`, `EASEBUZZ`, `GENERIC_HTTP`. **Never list SIMULATOR in production**: it reports payouts as paid without moving money. EASEBUZZ and GENERIC_HTTP are unverified against the provider. |
 | `corebanking.integration.worker-enabled` (`COREBANKING_INTEGRATION_WORKER`) | true | The background worker (outbox relay, senders, processors). |
 | `corebanking.integration.worker-interval-ms` | 5000 | Pause between worker runs. |
-| `corebanking.integration.keycloak-admin.*` (`COREBANKING_KEYCLOAK_ADMIN_ENABLED`, `_URL`, `_REALM`, `_CLIENT_ID`, `_CLIENT_SECRET`) | disabled | Admin service account for API clients. Needs the right to manage clients, client scope mappings and user role mappings in the tenant realms. |
+| `corebanking.integration.keycloak-admin.*` (`COREBANKING_KEYCLOAK_ADMIN_ENABLED`, `_URL`, `_REALM`, `_CLIENT_ID`, `_CLIENT_SECRET`) | disabled | Admin service account for API clients. Needs the right to manage clients, client scope mappings and user role mappings in the tenant realms (`realm-management` roles `manage-clients` and `manage-users`). The local stack sets these for its `corebanking-admin` client in the `demo-nbfc` realm (deploy/local/README.md); elsewhere see OI-08. |
 | JVM security property `networkaddress.cache.ttl` | JVM default | Keep at 30 or more: the webhook sender checks the resolved address and the HTTP client must connect to the same answer. |
 
 Network: route `POST /hooks/v1/**` from the internet to the app (provider callbacks; no token, signature

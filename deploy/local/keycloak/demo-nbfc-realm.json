@@ -1142,6 +1142,24 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "corebanking-admin",
+      "name": "CoreBanking Keycloak admin (LOCAL ONLY)",
+      "description": "LOCAL DEVELOPMENT ONLY: service account the backend uses for session management (view-users, manage-users) and API clients (view-clients, manage-clients) in this realm. Its secret comes from deploy/local/.env at import. new-tenant-realm.py strips this client from every tenant realm.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": true,
+      "redirectUris": [],
+      "webOrigins": []
     }
   ],
   "clientScopeMappings": {
@@ -1605,6 +1623,19 @@
           "customer:view",
           "customer:create",
           "product:view"
+        ]
+      }
+    },
+    {
+      "username": "service-account-corebanking-admin",
+      "enabled": true,
+      "serviceAccountClientId": "corebanking-admin",
+      "clientRoles": {
+        "realm-management": [
+          "view-users",
+          "manage-users",
+          "view-clients",
+          "manage-clients"
         ]
       }
     }

@@ -178,7 +178,7 @@ jobs:
           assert r["accessTokenLifespan"] == 300 and r["ssoSessionIdleTimeout"] == 1800
           assert any(a["alias"] == "CONFIGURE_TOTP" and a["defaultAction"] for a in r["requiredActions"])
           clients = {c["clientId"]: c for c in r["clients"]}
-          assert set(clients) == {"console", "console-dev", "api", "corebanking-service"}
+          assert set(clients) == {"console", "console-dev", "api", "corebanking-service", "corebanking-admin"}
           assert clients["console"]["publicClient"] and clients["console"]["attributes"]["pkce.code.challenge.method"] == "S256"
           perms = {x["name"] for x in r["roles"]["client"]["api"]}
           # Realm permissions must match the console's list (plus loan:stp, which is API-only), so they never drift.
@@ -203,6 +203,19 @@ jobs:
           assert scope["console-dev"] == scope["console"]
           realm_scope = {m["client"]: set(m["roles"]) for m in r["scopeMappings"]}
           assert realm_scope["console-dev"] == realm_scope["console"]
+          # corebanking-admin is the LOCAL-ONLY Keycloak admin service account (sessions, API clients): the only holder
+          # of realm-management roles, no more of them than the backend's calls need, no login flow, no API
+          # permission, and a secret that is a placeholder filled from deploy/local/.env — never a committed value.
+          admin = clients["corebanking-admin"]
+          assert admin["secret"] == "${LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET}"
+          assert admin["serviceAccountsEnabled"] and not admin["publicClient"] and not admin["standardFlowEnabled"]
+          assert not admin["implicitFlowEnabled"] and not admin["directAccessGrantsEnabled"] and not admin.get("redirectUris")
+          managers = {u["username"]: u["clientRoles"]["realm-management"] for u in r["users"] if "realm-management" in u.get("clientRoles", {})}
+          assert set(managers) == {"service-account-corebanking-admin"}, managers
+          assert set(managers["service-account-corebanking-admin"]) == {"view-users", "manage-users", "view-clients", "manage-clients"}
+          sa = next(u for u in r["users"] if u["username"] == "service-account-corebanking-admin")
+          assert set(sa["clientRoles"]) == {"realm-management"} and not sa.get("realmRoles")
+          assert "corebanking-admin" not in scope and "corebanking-admin" not in realm_scope
           print("realm template OK")
           EOF
       - name: new-tenant-realm.py smoke test
@@ -225,6 +238,11 @@ jobs:
           assert not [c["clientId"] for c in r["clients"] if c.get("directAccessGrantsEnabled")], "password grant enabled"
           assert not [u["username"] for u in r.get("users", []) if u["username"].startswith("dev-")], "dev users present"
           print("tenant realm has no direct-grant client")
+          # nor the local stack's Keycloak admin client, any realm-management role, or an unfilled placeholder
+          assert "corebanking-admin" not in text, "the local Keycloak admin client leaked into a tenant realm"
+          assert "realm-management" not in text, "a realm-management role leaked into a tenant realm"
+          assert "${" not in text, "an environment placeholder leaked into a tenant realm"
+          print("tenant realm has no local admin client")
           EOF
       - name: docker compose config
         working-directory: deploy/local

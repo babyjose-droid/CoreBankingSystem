@@ -1,7 +1,7 @@
 # Local development stack
 
-> **LOCAL DEVELOPMENT ONLY.** All passwords, the Keycloak admin account, the demo users and the
-> `corebanking-service` client secret (`change-me`) are throwaway values. Never reuse them in any
+> **LOCAL DEVELOPMENT ONLY.** All passwords, the Keycloak admin account, the demo users, the
+> `corebanking-service` client secret (`change-me`) and the `corebanking-admin` client are throwaway values. Never reuse them in any
 > shared, UAT or production environment. Use synthetic `CLAUDE-TEST` data only (CONTRIBUTING.md #5).
 
 | Service | URL | Notes |
@@ -52,7 +52,7 @@ works), the tenant properties `nach.sponsor-bank-code` and `nach.utility-code`, 
 without maker-checker, which is why this exists only behind the local bootstrap flag.
 
 ```bash
-./init-env.sh                       # once: writes random local-only encryption keys to .env (git-ignored)
+./init-env.sh                       # once: writes random local-only keys and the Keycloak admin client secret to .env (git-ignored)
 docker compose up -d --build
 docker compose logs -f backend      # look for "tenant demo-nbfc registered"
 ```
@@ -122,6 +122,29 @@ Get a token for API testing (browser flow via the console, or the service accoun
 curl -s -d grant_type=client_credentials -d client_id=corebanking-service -d client_secret=change-me \
   http://localhost:8081/realms/demo-nbfc/protocol/openid-connect/token | jq -r .access_token
 ```
+
+## Keycloak admin client (sessions, API clients)
+
+The realm carries a **local-only** confidential client `corebanking-admin` whose service account holds four
+`realm-management` roles and nothing else: `view-users` and `manage-users` (the Sessions page: find a user,
+list and end sessions; and the role mappings of an API client's service account), `view-clients` and
+`manage-clients` (API clients: create, enable or disable, new secret, scope mappings). No user can sign in
+through it and it has no permission on the CoreBanking API.
+
+Its secret is not in the repository: `./init-env.sh` writes a random `LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET` to
+`.env`; Keycloak substitutes it for the placeholder in the realm file when it imports the realm, and the compose
+file hands the same value to the backend (`COREBANKING_KEYCLOAK_ADMIN_CLIENT_SECRET`, with
+`COREBANKING_KEYCLOAK_ADMIN_ENABLED=true` and `COREBANKING_KEYCLOAK_ADMIN_REALM=demo-nbfc`). With that,
+`GET /api/v1/sessions` no longer answers 503 and approving an API client no longer answers 409.
+
+- **A stack started before this client existed** has neither the secret nor the client: run `./init-env.sh`
+  again (it only adds what is missing), then re-create Keycloak as below and restart the backend.
+- If you delete `.env`, re-create Keycloak too: the realm keeps the secret it was imported with.
+- `infra/keycloak/new-tenant-realm.py` always removes this client and its service account, and refuses to render
+  a realm that still holds a placeholder or a `realm-management` role; CI checks both. A tenant's own
+  session-admin client is created at onboarding with `view-users` and `manage-users` only (OI-08).
+- These calls have not been run against a live Keycloak by the author of this set-up; if the Sessions page
+  answers 502, the backend log names the status Keycloak returned.
 
 The realm is imported only when it does not exist yet. After editing `keycloak/demo-nbfc-realm.json`,
 re-create Keycloak: `docker compose rm -sf keycloak && docker compose up -d keycloak`.

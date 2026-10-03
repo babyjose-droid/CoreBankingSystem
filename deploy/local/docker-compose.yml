@@ -45,6 +45,9 @@ services:
       KC_HOSTNAME: http://localhost:8081
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
+      # LOCAL ONLY: becomes the secret of the realm's corebanking-admin client at import (the realm file holds the
+      # placeholder ${LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET}). Generated into .env by ./init-env.sh.
+      LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET: ${LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET:?run ./init-env.sh first}
       TZ: Asia/Kolkata
     ports:
       - "127.0.0.1:8081:8081"
@@ -86,6 +89,14 @@ services:
       COREBANKING_BOOTSTRAP_DEMO_TENANT: "true"
       # P2-2 integrations, local only: the simulator reports payouts as paid without moving any money.
       COREBANKING_INTEGRATION_PROVIDERS: SIMULATOR
+      # LOCAL ONLY Keycloak admin client (corebanking-admin in the demo-nbfc realm): sessions (US-027) and API
+      # clients (US-120). Both read this secret; API clients take their admin token from the tenant's own realm
+      # here, where a shared environment would use a client that can reach every tenant realm.
+      COREBANKING_KEYCLOAK_ADMIN_CLIENT_SECRET: ${LOCAL_KEYCLOAK_ADMIN_CLIENT_SECRET:?run ./init-env.sh first}
+      COREBANKING_KEYCLOAK_ADMIN_BASE_URL: http://keycloak:8081
+      COREBANKING_KEYCLOAK_ADMIN_ENABLED: "true"
+      COREBANKING_KEYCLOAK_ADMIN_URL: http://keycloak:8081
+      COREBANKING_KEYCLOAK_ADMIN_REALM: demo-nbfc
       # LOCAL ONLY personal-data keys (base64, 32 bytes). Cloud tiers inject KMS-unwrapped keys instead.
       # Generated into deploy/local/.env by ./init-env.sh (git-ignored); never commit real keys.
       COREBANKING_TENANT_DEMO_NBFC_PII_KEY: ${DEMO_PII_KEY:?run ./init-env.sh first}

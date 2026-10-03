@@ -14,6 +14,10 @@ This script changes only tenant-specific values:
   * the `console-dev` client (LOCAL ONLY direct username/password grant behind the console's development
     sign-in) and its scope mappings are ALWAYS removed, even with --keep-demo-users, unless --keep-dev-login is
     given explicitly; the dev-* users follow --keep-demo-users. A tenant realm must never accept the password grant.
+  * the `corebanking-admin` client (LOCAL ONLY Keycloak admin service account: its secret is a placeholder filled
+    from deploy/local/.env, and it may manage the realm's clients) and its service account are ALWAYS removed.
+    A tenant's session-admin client is created by the operator with view-users and manage-users only, and its
+    secret set in Secrets Manager (docs/runbooks/tenant-onboarding.md).
 
 Usage:
   new-tenant-realm.py --tenant acme-finance --console-url https://acme-finance.console.example.in \
@@ -42,6 +46,7 @@ CONSOLE_CLIENT = "console"
 SERVICE_CLIENT = "corebanking-service"
 DEV_LOGIN_CLIENT = "console-dev"
 DEV_USER_PREFIX = "dev-"
+LOCAL_ADMIN_CLIENT = "corebanking-admin"
 SECRET_PLACEHOLDER = "change-me"
 
 
@@ -74,6 +79,19 @@ def render(template: dict, tenant: str, console_url: str, display_name: str | No
         direct = [c.get("clientId") for c in realm["clients"] if c.get("directAccessGrantsEnabled")]
         if direct:
             raise ValueError(f"template enables the password grant on {direct}; refusing to render a tenant realm")
+
+    # The local stack's Keycloak admin client never reaches a tenant realm: no flag keeps it.
+    realm["clients"] = [c for c in realm.get("clients", []) if c.get("clientId") != LOCAL_ADMIN_CLIENT]
+    realm["users"] = [u for u in realm.get("users", []) if u.get("serviceAccountClientId") != LOCAL_ADMIN_CLIENT]
+    if "scopeMappings" in realm:
+        realm["scopeMappings"] = [m for m in realm["scopeMappings"] if m.get("client") != LOCAL_ADMIN_CLIENT]
+    for owner, mappings in list(realm.get("clientScopeMappings", {}).items()):
+        realm["clientScopeMappings"][owner] = [m for m in mappings if m.get("client") != LOCAL_ADMIN_CLIENT]
+    if "${" in json.dumps(realm):
+        raise ValueError("template still holds an environment placeholder; refusing to render a tenant realm")
+    managers = [u.get("username") for u in realm.get("users", []) if u.get("clientRoles", {}).get("realm-management")]
+    if managers:
+        raise ValueError(f"template gives realm-management roles to {managers}; refusing to render a tenant realm")
 
     tenant_mappers = 0
     for client in realm.get("clients", []):
@@ -125,13 +143,25 @@ def self_test(template_path: Path) -> None:
         assert DEV_LOGIN_CLIENT not in json.dumps(realm), f"{label}: {DEV_LOGIN_CLIENT} leaked into rendered realm"
 
     assert_no_dev_login(out, "tenant realm")
+    assert any(c["clientId"] == LOCAL_ADMIN_CLIENT for c in template["clients"]), \
+        "template should carry the local Keycloak admin client (otherwise this test proves nothing)"
+
+    def assert_no_local_admin(realm: dict, label: str) -> None:
+        text = json.dumps(realm)
+        assert LOCAL_ADMIN_CLIENT not in text, f"{label}: {LOCAL_ADMIN_CLIENT} leaked into rendered realm"
+        assert "realm-management" not in text, f"{label}: a realm-management role leaked into rendered realm"
+        assert "${" not in text, f"{label}: environment placeholder leaked into rendered realm"
+
+    assert_no_local_admin(out, "tenant realm")
     assert not any(u["username"].startswith(DEV_USER_PREFIX) for u in out["users"]), "dev users must be stripped"
     assert out["passwordPolicy"] == template["passwordPolicy"]
     assert out["bruteForceProtected"] is True and out["failureFactor"] == 5
     kept = render(template, "acme-finance", "http://localhost:5173", None, True)
     assert any(u["username"] == "maker" for u in kept["users"])
     assert_no_dev_login(kept, "--keep-demo-users")
+    assert_no_local_admin(kept, "--keep-demo-users")
     local = render(template, "acme-finance", "http://localhost:5173", None, True, keep_dev_login=True)
+    assert_no_local_admin(local, "--keep-dev-login")
     dev = next(c for c in local["clients"] if c["clientId"] == DEV_LOGIN_CLIENT)
     assert dev["directAccessGrantsEnabled"] and any(u["username"] == "dev-maker" for u in local["users"])
     only_client = render(template, "acme-finance", "http://localhost:5173", None, False, keep_dev_login=True)
