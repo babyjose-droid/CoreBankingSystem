@@ -3,7 +3,7 @@
 #   docker build -f backend/app/Dockerfile -t corebanking/backend:dev .
 
 # ---- Stage 1: build the Spring Boot jar ------------------------------------------------------
-FROM gradle:8.14-jdk21 AS build
+FROM gradle:9.7-jdk21 AS build
 WORKDIR /workspace
 ENV GRADLE_USER_HOME=/cache/gradle
 
