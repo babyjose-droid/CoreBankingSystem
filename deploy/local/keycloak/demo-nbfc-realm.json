@@ -1146,7 +1146,7 @@
     {
       "clientId": "corebanking-admin",
       "name": "CoreBanking Keycloak admin (LOCAL ONLY)",
-      "description": "LOCAL DEVELOPMENT ONLY: service account the backend uses for session management (view-users, manage-users) and API clients (view-clients, manage-clients) in this realm. Its secret comes from deploy/local/.env at import. new-tenant-realm.py strips this client from every tenant realm.",
+      "description": "LOCAL DEVELOPMENT ONLY: service account for session management and API clients. Secret comes from deploy/local/.env at import. Stripped from every tenant realm.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
