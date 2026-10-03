@@ -1713,6 +1713,14 @@ public class LoanService {
     }
 
     @Service
+    /**
+     * Not private: the applier holds the Spring proxy of this service, and a private method called on a proxy runs
+     * on the proxy object itself, whose fields are not set.
+     */
+    void applyWaiver(UUID loanId, String chargeId, BigDecimal amount) {
+        apply(loanId, "WAIVER", amount, null, (a, bd) -> a.waiveCharge(chargeId, amount, bd));
+    }
+
     static class WaiverApplier implements ApprovalApplier {
         private final LoanService loans;
 
@@ -1727,7 +1735,7 @@ public class LoanService {
             UUID loanId = UUID.fromString(String.valueOf(r.payload().get("loanId")));
             BigDecimal amount = new BigDecimal(String.valueOf(r.payload().get("amount")));
             String chargeId = String.valueOf(r.payload().get("chargeId"));
-            loans.apply(loanId, "WAIVER", amount, null, (a, bd) -> a.waiveCharge(chargeId, amount, bd));
+            loans.applyWaiver(loanId, chargeId, amount);
             return String.valueOf(r.payload().get("loanNo"));
         }
     }

@@ -219,7 +219,7 @@ class WebhookService implements OutboxConsumer {
         if (n == 0) return;
         jdbc.update("""
                 INSERT INTO integration.webhook_delivery (id, endpoint_id, event_id)
-                SELECT gen_random_uuid(), e.id, ? FROM integration.webhook_endpoint e WHERE e.status = 'ACTIVE' AND e.event_types @> ARRAY[?]
+                SELECT gen_random_uuid(), e.id, ? FROM integration.webhook_endpoint e WHERE e.status = 'ACTIVE' AND e.event_types @> ARRAY[?::text]
                 """, eventId, topic);
     }
 
