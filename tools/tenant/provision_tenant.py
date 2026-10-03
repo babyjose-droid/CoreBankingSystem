@@ -671,6 +671,9 @@ def self_test() -> int:
         realm = realm_post[2]
         check(realm["realm"] == "acme-finance" and not any(u["username"] in ("maker", "admin") for u in realm.get("users", [])),
               "S8 realm rendered for the tenant without demo users")
+        check(not any(c.get("directAccessGrantsEnabled") for c in realm["clients"]) and "console-dev" not in json.dumps(realm)
+              and not any(u["username"].startswith("dev-") for u in realm.get("users", [])),
+              "S8b realm has no direct-grant client, no console-dev and no dev users")
         user_post = next(c for c in http.calls if c[0] == "POST" and c[1].endswith("/users"))
         check(user_post[2]["requiredActions"] == ["UPDATE_PASSWORD", "CONFIGURE_TOTP"] and user_post[2]["username"] == "acme.admin",
               "S9 admin must change password and enrol TOTP")

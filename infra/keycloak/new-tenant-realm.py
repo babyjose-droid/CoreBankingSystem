@@ -11,6 +11,9 @@ This script changes only tenant-specific values:
   * the console client's root/redirect/post-logout URLs
   * the batch service client secret -> placeholder (set the real secret via the admin API / Secrets Manager)
   * demo users are REMOVED unless --keep-demo-users is given (they are for local development only)
+  * the `console-dev` client (LOCAL ONLY direct username/password grant behind the console's development
+    sign-in) and its scope mappings are ALWAYS removed, even with --keep-demo-users, unless --keep-dev-login is
+    given explicitly; the dev-* users follow --keep-demo-users. A tenant realm must never accept the password grant.
 
 Usage:
   new-tenant-realm.py --tenant acme-finance --console-url https://acme-finance.console.example.in \
@@ -37,11 +40,13 @@ DEFAULT_TEMPLATE = REPO_ROOT / "deploy" / "local" / "keycloak" / "demo-nbfc-real
 TEMPLATE_TENANT = "demo-nbfc"
 CONSOLE_CLIENT = "console"
 SERVICE_CLIENT = "corebanking-service"
+DEV_LOGIN_CLIENT = "console-dev"
+DEV_USER_PREFIX = "dev-"
 SECRET_PLACEHOLDER = "change-me"
 
 
 def render(template: dict, tenant: str, console_url: str, display_name: str | None,
-           keep_demo_users: bool) -> dict:
+           keep_demo_users: bool, keep_dev_login: bool = False) -> dict:
     if not TENANT_CODE.match(tenant):
         raise ValueError(f"invalid tenant code {tenant!r}: must match {TENANT_CODE.pattern}")
     parsed = urlparse(console_url)
@@ -55,6 +60,20 @@ def render(template: dict, tenant: str, console_url: str, display_name: str | No
     realm["realm"] = tenant
     realm["displayName"] = display_name or tenant
     realm.pop("id", None)
+
+    if not keep_dev_login:
+        # ADR-007 amendment: the direct-grant client exists for the local stack only.
+        realm["clients"] = [c for c in realm.get("clients", []) if c.get("clientId") != DEV_LOGIN_CLIENT]
+        if "scopeMappings" in realm:
+            realm["scopeMappings"] = [m for m in realm["scopeMappings"] if m.get("client") != DEV_LOGIN_CLIENT]
+        for owner, mappings in list(realm.get("clientScopeMappings", {}).items()):
+            if owner == DEV_LOGIN_CLIENT:
+                del realm["clientScopeMappings"][owner]
+            else:
+                realm["clientScopeMappings"][owner] = [m for m in mappings if m.get("client") != DEV_LOGIN_CLIENT]
+        direct = [c.get("clientId") for c in realm["clients"] if c.get("directAccessGrantsEnabled")]
+        if direct:
+            raise ValueError(f"template enables the password grant on {direct}; refusing to render a tenant realm")
 
     tenant_mappers = 0
     for client in realm.get("clients", []):
@@ -98,10 +117,25 @@ def self_test(template_path: Path) -> None:
               if m["config"].get("claim.name") == "tenant"]
     assert claims and all(v == "acme-finance" for v in claims)
     assert all(u.get("serviceAccountClientId") for u in out["users"]), "demo users must be stripped"
+    assert any(c["clientId"] == DEV_LOGIN_CLIENT and c["directAccessGrantsEnabled"] for c in template["clients"]), \
+        "template should carry the local development sign-in client (otherwise this test proves nothing)"
+
+    def assert_no_dev_login(realm: dict, label: str) -> None:
+        assert not any(c.get("directAccessGrantsEnabled") for c in realm["clients"]), f"{label}: direct-grant client"
+        assert DEV_LOGIN_CLIENT not in json.dumps(realm), f"{label}: {DEV_LOGIN_CLIENT} leaked into rendered realm"
+
+    assert_no_dev_login(out, "tenant realm")
+    assert not any(u["username"].startswith(DEV_USER_PREFIX) for u in out["users"]), "dev users must be stripped"
     assert out["passwordPolicy"] == template["passwordPolicy"]
     assert out["bruteForceProtected"] is True and out["failureFactor"] == 5
     kept = render(template, "acme-finance", "http://localhost:5173", None, True)
     assert any(u["username"] == "maker" for u in kept["users"])
+    assert_no_dev_login(kept, "--keep-demo-users")
+    local = render(template, "acme-finance", "http://localhost:5173", None, True, keep_dev_login=True)
+    dev = next(c for c in local["clients"] if c["clientId"] == DEV_LOGIN_CLIENT)
+    assert dev["directAccessGrantsEnabled"] and any(u["username"] == "dev-maker" for u in local["users"])
+    only_client = render(template, "acme-finance", "http://localhost:5173", None, False, keep_dev_login=True)
+    assert not any(u["username"].startswith(DEV_USER_PREFIX) for u in only_client["users"])
     for bad in ("Acme", "1abc", "ab", "a" * 40, "acme_finance"):
         try:
             render(template, bad, "https://x.example.in", None, False)
@@ -128,6 +162,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE)
     ap.add_argument("--out", type=Path, help="output file (default: stdout)")
     ap.add_argument("--keep-demo-users", action="store_true", help="keep demo users (local development only)")
+    ap.add_argument("--keep-dev-login", action="store_true",
+                    help=f"keep the '{DEV_LOGIN_CLIENT}' direct-grant client (LOCAL DEVELOPMENT ONLY; never for a tenant)")
     ap.add_argument("--self-test", action="store_true", help="run built-in checks against the template")
     args = ap.parse_args(argv)
 
@@ -139,7 +175,8 @@ def main(argv: list[str]) -> int:
 
     template = json.loads(args.template.read_text(encoding="utf-8"))
     try:
-        realm = render(template, args.tenant, args.console_url, args.display_name, args.keep_demo_users)
+        realm = render(template, args.tenant, args.console_url, args.display_name, args.keep_demo_users,
+                       keep_dev_login=args.keep_dev_login)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -149,6 +186,9 @@ def main(argv: list[str]) -> int:
         print(f"wrote {args.out}", file=sys.stderr)
     else:
         sys.stdout.write(text)
+    if args.keep_dev_login:
+        print(f"WARNING: '{DEV_LOGIN_CLIENT}' (password grant) kept — this realm is for local development only",
+              file=sys.stderr)
     print(f"reminder: rotate the '{SERVICE_CLIENT}' client secret after import and store it in "
           "Secrets Manager / the tenant's K8s Secret", file=sys.stderr)
     return 0

@@ -67,6 +67,46 @@ TOTP (Google Authenticator, FreeOTP, ...) on first login — MFA is mandatory fo
 | `auditor` | AUDITOR | read-only including the audit trail |
 | `admin` | TENANT_ADMIN | every permission — do not use it for maker-checker testing (ADR-012) |
 
+## Development sign-in (local only)
+
+The console's login page on this stack also shows a **Development sign-in (local only)** form above the SSO
+button. It signs in with a username and password directly, without the redirect to Keycloak, which helps in
+embedded test browsers that block the SSO page. Nothing to enrol: no password change, no TOTP.
+
+| User | Realm role | Password |
+|------|-----------|----------|
+| `dev-maker` | MAKER | `LocalDev#2026` |
+| `dev-checker` | CHECKER | `LocalDev#2026` |
+| `dev-ops` | OPERATIONS | `LocalDev#2026` |
+| `dev-auditor` | AUDITOR | `LocalDev#2026` |
+| `dev-admin` | TENANT_ADMIN | `LocalDev#2026` |
+
+How it works and why it cannot reach a real tenant (ADR-007 amendment):
+
+- The form appears only when the console runs on the Vite dev server with `VITE_DEV_LOGIN=1` and `VITE_MOCK=0`
+  (the `console` service sets both). A production build compiles the flag to false.
+- It uses the realm's `console-dev` client (password grant). That client and the `dev-*` users exist only in
+  `keycloak/demo-nbfc-realm.json`; `infra/keycloak/new-tenant-realm.py` removes them from every tenant realm and
+  CI fails if a rendered realm has a password-grant client.
+- The browser posts to the same-origin `/realms/...` path; the dev server forwards it to
+  `VITE_KEYCLOAK_PROXY_TARGET` (`http://keycloak:8081` here) with `Host: localhost:8081`, so the token's issuer
+  stays `http://localhost:8081/realms/demo-nbfc`. The console refuses a token with any other issuer and says so.
+- The `maker` / `checker` / ... users above still sign in through SSO with password change and TOTP.
+
+The realm is imported and the staff profiles are created only on first start, so an existing stack must be
+reset once to get the `dev-*` users (**this deletes all local data**):
+
+```bash
+cd deploy/local
+docker compose --profile console down -v
+docker compose --profile console up -d --build
+```
+
+The password expires after 90 days like any other (realm policy); the sign-in then reports "Account is not fully
+set up" — reset the stack as above.
+
+## Tokens
+
 Tokens carry `tenant: "demo-nbfc"`, `permissions: [...]` (client roles of `api`) and `aud: api`.
 Get a token for API testing (browser flow via the console, or the service account):
 

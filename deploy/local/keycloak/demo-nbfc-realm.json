@@ -967,6 +967,90 @@
       ]
     },
     {
+      "clientId": "console-dev",
+      "name": "CoreBanking console development sign-in (LOCAL ONLY)",
+      "description": "LOCAL DEVELOPMENT ONLY: direct username/password grant for the console's development sign-in. new-tenant-realm.py strips this client from every tenant realm.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "consentRequired": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "fullScopeAllowed": false,
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "tenant",
+            "claim.value": "demo-nbfc",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "permissions",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "api",
+            "claim.name": "permissions",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "audience-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "api",
       "name": "CoreBanking API",
       "description": "Resource server; holds permission roles. No login flows.",
@@ -1064,6 +1148,84 @@
     "api": [
       {
         "client": "console",
+        "roles": [
+          "branch:view",
+          "branch:propose",
+          "holiday:view",
+          "holiday:propose",
+          "tax:view",
+          "tax:propose",
+          "approval:view",
+          "approval:approve",
+          "customer:view",
+          "customer:create",
+          "gl:view",
+          "gl:head-propose",
+          "voucher:create",
+          "voucher:reverse",
+          "gl:reports",
+          "eod:view",
+          "eod:run",
+          "eod:schedule",
+          "audit:view",
+          "product:view",
+          "product:propose",
+          "loan:view",
+          "loan:create",
+          "loan:disburse",
+          "loan:repay",
+          "loan:waive",
+          "loan:reverse",
+          "loan:admin",
+          "staff:view",
+          "staff:propose",
+          "master:view",
+          "master:propose",
+          "loan:amend",
+          "loan:restructure",
+          "limit:view",
+          "limit:propose",
+          "consent:view",
+          "consent:record",
+          "kyc:upload",
+          "kyc:verify",
+          "kyc:view-document",
+          "report:run",
+          "report:admin",
+          "bureau:export",
+          "dashboard:view",
+          "apiclient:view",
+          "apiclient:admin",
+          "collection:view",
+          "collection:create",
+          "collection:admin",
+          "custom-field:view",
+          "custom-field:propose",
+          "integration:view",
+          "integration:admin",
+          "integration:simulate",
+          "job:view",
+          "job:run",
+          "job:schedule",
+          "loan:classify",
+          "mandate:view",
+          "mandate:register",
+          "mandate:admin",
+          "message:view",
+          "message:admin",
+          "nach:admin",
+          "nach:file",
+          "payout:view",
+          "payout:beneficiary",
+          "payout:admin",
+          "webhook:view",
+          "webhook:admin",
+          "session:admin",
+          "support-access:approve"
+        ]
+      },
+      {
+        "client": "console-dev",
         "roles": [
           "branch:view",
           "branch:propose",
@@ -1333,6 +1495,101 @@
       ]
     },
     {
+      "username": "dev-maker",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "CLAUDE-TEST Dev",
+      "lastName": "Maker",
+      "email": "dev-maker@demo-nbfc.example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "LocalDev#2026",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "MAKER"
+      ]
+    },
+    {
+      "username": "dev-checker",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "CLAUDE-TEST Dev",
+      "lastName": "Checker",
+      "email": "dev-checker@demo-nbfc.example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "LocalDev#2026",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "CHECKER"
+      ]
+    },
+    {
+      "username": "dev-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "CLAUDE-TEST Dev",
+      "lastName": "Admin",
+      "email": "dev-admin@demo-nbfc.example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "LocalDev#2026",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "TENANT_ADMIN"
+      ]
+    },
+    {
+      "username": "dev-ops",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "CLAUDE-TEST Dev",
+      "lastName": "Ops",
+      "email": "dev-ops@demo-nbfc.example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "LocalDev#2026",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "OPERATIONS"
+      ]
+    },
+    {
+      "username": "dev-auditor",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "CLAUDE-TEST Dev",
+      "lastName": "Auditor",
+      "email": "dev-auditor@demo-nbfc.example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "LocalDev#2026",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "AUDITOR"
+      ]
+    },
+    {
       "username": "service-account-corebanking-service",
       "enabled": true,
       "serviceAccountClientId": "corebanking-service",
@@ -1355,6 +1612,16 @@
   "scopeMappings": [
     {
       "client": "console",
+      "roles": [
+        "MAKER",
+        "CHECKER",
+        "OPERATIONS",
+        "AUDITOR",
+        "TENANT_ADMIN"
+      ]
+    },
+    {
+      "client": "console-dev",
       "roles": [
         "MAKER",
         "CHECKER",

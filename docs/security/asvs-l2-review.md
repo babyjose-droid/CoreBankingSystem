@@ -13,7 +13,7 @@ a penetration test is still required (see "Organisational controls").
 | V3 Web frontend | Partial | No raw HTML sinks; tokens in sessionStorage; PKCE S256. CSP / HSTS / frame-ancestors belong to the console hosting (SEC-08). |
 | V4 API | Met | JSON / problem+json, uploads accept `text/csv` only, 6 MB body cap (`RequestSizeFilter`, ingress `proxy-body-size`). |
 | V5 File handling | Met | CSV parsed in memory with row caps and strict field counts; never stored or served. |
-| V6 Authentication | Partial | Keycloak: 12+ characters, lockout after 5 failures, TOTP, no default credentials in tenant realms. ASVS 5.0 advises against composition rules and forced expiry, which the backlog (US-026) requires — decision D-13. No breached-password check yet. |
+| V6 Authentication | Partial | Keycloak: 12+ characters, lockout after 5 failures, TOTP, no default credentials in tenant realms. ASVS 5.0 advises against composition rules and forced expiry, which the backlog (US-026) requires — decision D-13. No breached-password check yet. The password grant is enabled only on the local-only `console-dev` client of the demo realm (development sign-in, ADR-007 amendment); `new-tenant-realm.py` strips it from tenant realms and CI (`infra.yml`) fails if a rendered realm has a direct-grant client. |
 | V7 Sessions | Met | 5-minute access tokens, 30-minute idle, refresh-token rotation, stateless API. |
 | V8 Authorisation | Met | `@PreAuthorize` on every mutating endpoint; branch scope as a data filter (US-020); tenant = realm = token claim; control plane only for platform-realm tokens. |
 | V9 Tokens | Met | RS256 via JWKS, exact issuer, audience `api`, exp/nbf; only ACTIVE tenant realms and the platform realm are resolved. |

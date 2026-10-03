@@ -45,7 +45,9 @@ class DemoTenantBootstrap implements ApplicationRunner {
         JdbcTemplate t = new JdbcTemplate(ds);
         t.update("INSERT INTO platform.branch (code, name, state_code, parent_code) VALUES ('MUM', 'Mumbai', '27', 'HO')");
         // The integration client's profile (service-account-corebanking-service) is created by the provisioner.
-        for (String u : new String[] {"maker", "checker", "ops", "auditor", "admin"}) {
+        // dev-*: users of the console's local-only development sign-in (Keycloak client console-dev, ADR-007 amendment).
+        for (String u : new String[] {"maker", "checker", "ops", "auditor", "admin",
+                "dev-maker", "dev-checker", "dev-admin", "dev-ops", "dev-auditor"}) {
             t.update("INSERT INTO platform.staff_user (user_id, username, display_name, home_branch, all_branches) VALUES (?, ?, ?, 'HO', true)",
                     "local:" + u, u, "CLAUDE-TEST " + u);
         }

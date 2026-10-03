@@ -39,6 +39,8 @@ Set `VITE_MOCK=0`. Start the backend on :8080 and Keycloak on :8081; `deploy/loc
 | `VITE_API_BASE_URL` | API origin; leave empty to use same-origin `/api` |
 | `VITE_OIDC_AUTHORITY` | Keycloak realm URL, for example `http://localhost:8081/realms/demo-nbfc` |
 | `VITE_OIDC_CLIENT_ID` | public client id (`console`) |
+| `VITE_DEV_LOGIN` | `1` = local-only username/password sign-in (dev server only, not in mock mode or production builds; see `deploy/local/README.md`) |
+| `VITE_KEYCLOAK_PROXY_TARGET` | where the dev server proxies `/realms`; default `http://localhost:8081` |
 
 ## Scripts
 

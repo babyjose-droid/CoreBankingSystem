@@ -29,6 +29,29 @@ stays `http://localhost:8081/realms/demo-nbfc` and the JWK-set URI becomes
 Users `maker`, `checker`, `ops`, `auditor`, `admin` in realm `demo-nbfc`, temporary password
 `ChangeMe#2026`; first login forces a password change and TOTP enrolment. Local only.
 
+### Development sign-in (local only)
+
+The login page of the Docker console (http://localhost:5173) also has a **Development sign-in (local only)**
+form: username and password, no redirect to Keycloak, no TOTP. Use it when the SSO page does not work, for
+example in an embedded test browser.
+
+- Users: `dev-maker`, `dev-checker`, `dev-ops`, `dev-auditor`, `dev-admin`; password `LocalDev#2026`.
+- Local only: it needs `VITE_DEV_LOGIN=1` on the Vite dev server and the realm's `console-dev` client. Neither
+  exists outside this stack; tenant realms never contain that client (ADR-007 amendment, checked in CI).
+- An existing stack must be reset once so the new realm and staff profiles load. This deletes all local data:
+
+  ```bash
+  cd deploy/local
+  docker compose --profile console down -v
+  docker compose --profile console up -d --build
+  ```
+
+- Running the console on the host instead: put `VITE_MOCK=0` and `VITE_DEV_LOGIN=1` in
+  `frontend/console/.env.local`; the `/realms` proxy then targets `http://localhost:8081` by default.
+- Errors come from Keycloak: "Invalid user credentials" (wrong user or password; five failures lock the user for
+  15 minutes), "Account is not fully set up" (the user has a pending action, e.g. the non-dev users or an expired
+  password). "Token issuer mismatch" means the proxy or `KC_HOSTNAME` is misconfigured.
+
 ## Resetting
 
 | Want to reset | Command |

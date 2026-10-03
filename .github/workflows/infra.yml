@@ -178,7 +178,7 @@ jobs:
           assert r["accessTokenLifespan"] == 300 and r["ssoSessionIdleTimeout"] == 1800
           assert any(a["alias"] == "CONFIGURE_TOTP" and a["defaultAction"] for a in r["requiredActions"])
           clients = {c["clientId"]: c for c in r["clients"]}
-          assert set(clients) == {"console", "api", "corebanking-service"}
+          assert set(clients) == {"console", "console-dev", "api", "corebanking-service"}
           assert clients["console"]["publicClient"] and clients["console"]["attributes"]["pkce.code.challenge.method"] == "S256"
           perms = {x["name"] for x in r["roles"]["client"]["api"]}
           # Realm permissions must match the console's list (plus loan:stp, which is API-only), so they never drift.
@@ -193,6 +193,16 @@ jobs:
           scope = {m["client"]: set(m["roles"]) for m in r["clientScopeMappings"]["api"]}
           assert scope["console"] == perms - {"loan:stp"}, sorted(perms - {"loan:stp"} - scope["console"])
           assert scope["corebanking-service"] == perms, sorted(perms - scope["corebanking-service"])
+          # ADR-007 amendment: console-dev is the LOCAL-ONLY development sign-in. It is the only client allowed to
+          # use the password grant, it mirrors the console's token contents, and it never reaches a tenant realm.
+          assert [c for c in clients if clients[c].get("directAccessGrantsEnabled")] == ["console-dev"]
+          dev = clients["console-dev"]
+          assert dev["publicClient"] and not dev["standardFlowEnabled"] and not dev["implicitFlowEnabled"]
+          assert not dev["serviceAccountsEnabled"] and not dev["fullScopeAllowed"] and not dev.get("redirectUris")
+          assert dev["protocolMappers"] == clients["console"]["protocolMappers"]
+          assert scope["console-dev"] == scope["console"]
+          realm_scope = {m["client"]: set(m["roles"]) for m in r["scopeMappings"]}
+          assert realm_scope["console-dev"] == realm_scope["console"]
           print("realm template OK")
           EOF
       - name: new-tenant-realm.py smoke test
@@ -205,6 +215,17 @@ jobs:
           if python infra/keycloak/new-tenant-realm.py --tenant Bad_Code --console-url https://x.example.in; then
             echo "invalid tenant code accepted"; exit 1
           fi
+      - name: Tenant realm has no development sign-in
+        run: |
+          python - <<'EOF'
+          import json
+          text = open("/tmp/ci-tenant-realm.json").read()
+          r = json.loads(text)
+          assert "console-dev" not in text, "console-dev leaked into a tenant realm"
+          assert not [c["clientId"] for c in r["clients"] if c.get("directAccessGrantsEnabled")], "password grant enabled"
+          assert not [u["username"] for u in r.get("users", []) if u["username"].startswith("dev-")], "dev users present"
+          print("tenant realm has no direct-grant client")
+          EOF
       - name: docker compose config
         working-directory: deploy/local
         run: ./init-env.sh && docker compose config --quiet && docker compose --profile console config --services

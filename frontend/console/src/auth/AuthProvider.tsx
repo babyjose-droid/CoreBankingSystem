@@ -1,7 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { config } from '../config';
 import { DEMO_TENANT, findDemoUser, mockToken } from './demoUsers';
-import { claimsFromUser, getUserManager } from './oidc';
+import {
+  clearDevTokens,
+  devRefresh,
+  devRefreshDelay,
+  devSignIn,
+  devSignOut,
+  DevLoginError,
+  loadDevTokens,
+  saveDevTokens,
+  type DevTokens,
+} from './devLogin';
+import { claimsFromUser, decodeJwt, getUserManager } from './oidc';
 
 export interface Session {
   token: string;
@@ -19,6 +30,10 @@ export interface AuthContextValue {
   getToken: () => string | null;
   loginDemo: (username: string) => void;
   login: (returnTo?: string) => Promise<void>;
+  /** True only on a local development stack (VITE_DEV_LOGIN=1 on the dev server, not mock mode). */
+  devLogin: boolean;
+  /** LOCAL DEVELOPMENT ONLY: direct username/password sign-in. Rejects with a displayable message. */
+  loginDev: (username: string, password: string) => Promise<void>;
   completeLogin: () => Promise<string>;
   completeSilentRenew: () => Promise<void>;
   logout: () => Promise<void>;
@@ -44,6 +59,19 @@ function mockSession(username: string): Session | null {
   return { token: mockToken(u.username), username: u.username, name: u.name, tenant: DEMO_TENANT, permissions: u.permissions };
 }
 
+function devSession(tokens: DevTokens): Session {
+  const at = decodeJwt(tokens.accessToken);
+  const str = (k: string) => (typeof at[k] === 'string' ? (at[k] as string) : undefined);
+  const perms = at.permissions;
+  return {
+    token: tokens.accessToken,
+    username: str('preferred_username') ?? str('sub') ?? 'unknown',
+    name: str('name') ?? str('preferred_username') ?? 'User',
+    tenant: str('tenant') ?? '',
+    permissions: Array.isArray(perms) ? perms.map(String) : [],
+  };
+}
+
 export function AuthProvider({ children, initialMockUser }: { children: ReactNode; initialMockUser?: string }) {
   const mode = config.mock ? 'mock' : 'oidc';
   const [session, setSession] = useState<Session | null>(() =>
@@ -53,10 +81,72 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
   const tokenRef = useRef<string | null>(session?.token ?? null);
   tokenRef.current = session?.token ?? null;
 
+  // --- Development sign-in (local only; see devLogin.ts). Inert unless config.devLogin. ---
+  const devRef = useRef<DevTokens | null>(null);
+  const devTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const dropDev = useCallback(() => {
+    if (devTimer.current) clearTimeout(devTimer.current);
+    devTimer.current = null;
+    devRef.current = null;
+    clearDevTokens();
+  }, []);
+
+  const applyDev = useCallback(
+    (tokens: DevTokens) => {
+      if (devTimer.current) clearTimeout(devTimer.current);
+      devRef.current = tokens;
+      saveDevTokens(tokens);
+      setSession(devSession(tokens));
+      // Access tokens last 5 minutes: renew with the (rotating) refresh token shortly before expiry.
+      devTimer.current = setTimeout(() => {
+        devRefresh(tokens.refreshToken).then(
+          (next) => {
+            if (devRef.current === tokens) applyDev(next);
+          },
+          () => {
+            if (devRef.current !== tokens) return;
+            dropDev();
+            setSession(null);
+          },
+        );
+      }, devRefreshDelay(tokens));
+    },
+    [dropDev],
+  );
+
   useEffect(() => {
     if (mode !== 'oidc') return;
+    let cancelled = false;
+    const stored = config.devLogin ? loadDevTokens() : null;
+    if (stored) {
+      if (stored.expiresAt - Date.now() > 10_000) {
+        applyDev(stored);
+        setReady(true);
+      } else {
+        devRefresh(stored.refreshToken)
+          .then(
+            (next) => {
+              if (!cancelled) applyDev(next);
+            },
+            () => {
+              if (!cancelled) dropDev();
+            },
+          )
+          .finally(() => {
+            if (!cancelled) setReady(true);
+          });
+      }
+      return () => {
+        cancelled = true;
+        if (devTimer.current) clearTimeout(devTimer.current);
+        devTimer.current = null;
+        devRef.current = null;
+      };
+    }
     const um = getUserManager();
     const apply = (user: Parameters<typeof claimsFromUser>[0] | null) => {
+      if (devRef.current) return; // a development sign-in owns the session
       if (!user || user.expired) {
         setSession(null);
         return;
@@ -74,7 +164,9 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
       .then(apply)
       .finally(() => setReady(true));
     const onLoaded = (u: Parameters<typeof apply>[0]) => apply(u);
-    const onExpired = () => setSession(null);
+    const onExpired = () => {
+      if (!devRef.current) setSession(null);
+    };
     um.events.addUserLoaded(onLoaded);
     um.events.addAccessTokenExpired(onExpired);
     um.events.addUserSignedOut(onExpired);
@@ -82,8 +174,18 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
       um.events.removeUserLoaded(onLoaded);
       um.events.removeAccessTokenExpired(onExpired);
       um.events.removeUserSignedOut(onExpired);
+      if (devTimer.current) clearTimeout(devTimer.current);
+      devTimer.current = null;
     };
-  }, [mode]);
+  }, [mode, applyDev, dropDev]);
+
+  const loginDev = useCallback(
+    async (username: string, password: string) => {
+      if (!config.devLogin) throw new DevLoginError('Development sign-in is not enabled in this build.');
+      applyDev(await devSignIn(username, password));
+    },
+    [applyDev],
+  );
 
   const loginDemo = useCallback((username: string) => {
     const s = mockSession(username);
@@ -120,12 +222,22 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
       setSession(null);
       return;
     }
+    const dev = devRef.current;
+    if (dev) {
+      // Development sign-in: clear locally first, then end the Keycloak session through the proxy. No redirect.
+      dropDev();
+      setSession(null);
+      await devSignOut(dev.refreshToken).catch(() => undefined);
+      return;
+    }
     await getUserManager().signoutRedirect();
-  }, [mode]);
+  }, [mode, dropDev]);
 
   const expire = useCallback(() => {
-    if (mode === 'oidc') void getUserManager().removeUser();
-    else {
+    if (mode === 'oidc') {
+      if (devRef.current) dropDev();
+      else void getUserManager().removeUser();
+    } else {
       try {
         sessionStorage.removeItem(MOCK_KEY);
       } catch {
@@ -133,11 +245,11 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
       }
     }
     setSession(null);
-  }, [mode]);
+  }, [mode, dropDev]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ mode, ready, session, getToken: () => tokenRef.current, loginDemo, login, completeLogin, completeSilentRenew, logout, expire }),
-    [mode, ready, session, loginDemo, login, completeLogin, completeSilentRenew, logout, expire],
+    () => ({ mode, ready, session, getToken: () => tokenRef.current, loginDemo, login, devLogin: config.devLogin, loginDev, completeLogin, completeSilentRenew, logout, expire }),
+    [mode, ready, session, loginDemo, login, loginDev, completeLogin, completeSilentRenew, logout, expire],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
