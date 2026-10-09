@@ -29,10 +29,10 @@ class DemoLendingSeeder implements DemoTenantSeeder {
         // before the demo's opening business date (30-Jun-2026); only while the benchmark has no rate at all
         int n = jdbc.update("""
                 INSERT INTO lending.benchmark_rate (benchmark_code, effective_from, rate, recorded_by)
-                SELECT 'REPO', DATE '2026-04-01', 6.00, 'bootstrap (demo data, not the RBI rate)'
+                SELECT 'REPO', DATE '2026-01-01', 6.00, 'bootstrap (demo data, not the RBI rate)'
                  WHERE EXISTS (SELECT 1 FROM lending.benchmark WHERE code = 'REPO')
                    AND NOT EXISTS (SELECT 1 FROM lending.benchmark_rate WHERE benchmark_code = 'REPO')
                 """);
-        if (n > 0) log.warn("demo tenant: REPO benchmark rate 6.00% from 2026-04-01 added (demo data, local development only)");
+        if (n > 0) log.warn("demo tenant: REPO benchmark rate 6.00% from 2026-01-01 added (demo data, local development only)");
     }
 }
