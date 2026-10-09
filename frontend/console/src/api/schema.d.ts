@@ -4264,7 +4264,9 @@ export interface components {
             amount?: components["schemas"]["Money"];
             principalOutstanding?: components["schemas"]["Money"];
             overdueAmount?: components["schemas"]["Money"];
+            /** @description Days past due as of the last completed day-end (docs/lending-day-end.md); a receipt during the day can lower it, never raise it. 0 for a closed or cancelled loan */
             dpd?: number;
+            /** @description As of the last completed day-end. A closed or cancelled loan is STANDARD unless it was an NPA at closure, which is kept */
             assetClass?: components["schemas"]["AssetClass"];
             /** Format: date */
             nextDueDate?: string | null;

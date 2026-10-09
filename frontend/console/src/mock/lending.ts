@@ -541,7 +541,7 @@ function settleAll(st: LoanState, date: string, status: 'CLOSED' | 'CANCELLED') 
   st.advance = 0;
   st.status = status;
   st.closedOn = date;
-  st.npaSince = null;
+  if (status === 'CANCELLED') st.npaSince = null;   // a pre-closed NPA keeps its NPA date: its class at closure
 }
 
 function rebuildFuture(loan: StoredLoan, st: LoanState, balance: number, mode: string) {
@@ -640,6 +640,7 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
     case 'PRECLOSURE': {
       const q = quoteFrom(loan, st, e.valueDate);
       if (q.fc) st.charges.push({ id: e.data.chargeId ?? `C${900 + e.seq}`, code: q.fc.code, name: q.fc.name, kind: 'FEE', date: e.valueDate, amount: q.fc.total, paid: 0, waived: 0 });
+      markNpa(st, addDays(e.valueDate, -1));     // the class at closure is that of the last day-end
       settleAll(st, e.valueDate, 'CLOSED');
       break;
     }
@@ -679,7 +680,8 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
       break;
   }
   // Upgrade only when all arrears of interest and principal are paid, and (restructured) after the specified period.
-  if (st.npaSince && !st.overrideClass && arrearsOf(st) === 0 && (!st.upgradeNotBefore || e.valueDate >= st.upgradeNotBefore)) st.npaSince = null;
+  // A pre-closure is not a reclassification: an NPA keeps its class at closure (as the backend engine).
+  if (st.npaSince && e.type !== 'PRECLOSURE' && !st.overrideClass && arrearsOf(st) === 0 && (!st.upgradeNotBefore || e.valueDate >= st.upgradeNotBefore)) st.npaSince = null;
   maybeClose(st, e.valueDate);
 }
 
@@ -697,10 +699,12 @@ export function replay(loan: StoredLoan, asOf: string): LoanState {
   }
   if (!st.closedOn) advanceTo(loan, st, asOf);
   if (st.closedOn) {
+    // nothing outstanding: nothing past due; an SMA class becomes standard, an NPA class at closure is kept
     st.dpd = 0;
-    st.assetClass = 'STANDARD';
+    st.assetClass = st.npaSince ? C.npaAge(st.npaSince, st.closedOn) : 'STANDARD';
   } else {
-    st.dpd = C.dpdOf(asOf, oldestUnpaidDue(st));
+    // as the backend: days past due are those of the last completed day-end, the calendar day before the open one
+    st.dpd = C.dpdOf(addDays(asOf, -1), oldestUnpaidDue(st));
     markNpa(st, asOf);
     st.assetClass = st.npaSince ? C.npaAge(st.npaSince, asOf) : C.smaClass(st.dpd);
     if (st.overrideClass && (st.overrideClass === 'LOSS' || (st.overrideUntil ?? '') >= asOf)) {

@@ -7,7 +7,7 @@ import { P, hasPermission } from '../../auth/permissions';
 import { addDays } from '../../lib/dates';
 import { isZero, subtractMoney, addMoney } from '../../lib/money';
 import { Badge, Banner, Button, Card, Checkbox, DateText, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, Tabs, humanize } from '../../ui';
-import { AssetClassBadge, Stat, assetClassLabel, pct } from './common';
+import { LoanClass, Stat, assetClassLabel, isClosedLoan, pct } from './common';
 import { KfsView, ScheduleTable } from './KfsView';
 import { CustomFieldValues, useCustomDefs } from '../custom/CustomFields';
 import { TranchesTab } from './completion';
@@ -79,11 +79,19 @@ export function LoanDetailPage() {
         actions={
           <>
             <StatusBadge status={status} />
-            <AssetClassBadge value={loan.assetClass} />
+            <LoanClass status={status} value={loan.assetClass} />
             <Link to="/loans">All loans</Link>
           </>
         }
       />
+      {isClosedLoan(status) && (
+        <Banner tone="info">
+          <span data-testid="closed-banner">
+            This loan is {status === 'CANCELLED' ? 'cancelled' : 'closed'}
+            {loan.closedOn ? <> since <DateText value={loan.closedOn} /></> : null}: nothing is outstanding or past due.
+          </span>
+        </Banner>
+      )}
       {status === 'FROZEN' && <Banner tone="warn">This loan is frozen: repayments and other transactions are blocked until it is unfrozen. Interest keeps accruing.</Banner>}
       {loan.restructuredOn && (
         <Banner tone="warn">
@@ -183,8 +191,8 @@ function LoanSummaryStats({ loan, coolingOffEnd }: { loan: Loan; coolingOffEnd: 
       <Stat label="DPD" testId="stat-dpd">
         {loan.dpd ?? 0}
       </Stat>
-      <Stat label="Asset class">
-        <AssetClassBadge value={loan.assetClass} />
+      <Stat label="Asset class" testId="stat-class">
+        <LoanClass status={loan.status} value={loan.assetClass} />
         {loan.npaSince && (
           <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
             NPA since <DateText value={loan.npaSince} />

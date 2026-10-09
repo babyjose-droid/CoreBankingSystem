@@ -1798,11 +1798,11 @@ public class LoanService {
             LoanAccount a = l.account();
             a.restore(json.read((String) target.get("sb"), LoanAccount.Snapshot.class));
             Provisioning.Rates rates = rates(jdbc);
-            for (LocalDate d = a.lastAccrualDate().plusDays(1); d.isBefore(bd); d = d.plusDays(1)) {
-                for (TransactionLot lot : a.endOfDay(d, rates, bd).lots()) {
-                    posting.post(lot, CurrentUser.username());
-                    lots.add(lot);
-                }
+            // exactly the day-ends that ran since the restored state, up to the last day day-end had processed for the
+            // loan (an intraday transaction never moves that day): none when the transaction is of the open day
+            for (TransactionLot lot : a.replayDayEnds(current.lastAccrualDate(), bd, rates)) {
+                posting.post(lot, CurrentUser.username());
+                lots.add(lot);
             }
             store.save(jdbc, loanId, a, bd);
             UUID reversalId = store.recordTxn(jdbc, loanId, "REVERSAL", bd, bd, null, lots, current,

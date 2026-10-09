@@ -4415,8 +4415,10 @@ components:
         amount: { $ref: '#/components/schemas/Money' }
         principalOutstanding: { $ref: '#/components/schemas/Money' }
         overdueAmount: { $ref: '#/components/schemas/Money' }
-        dpd: { type: integer }
-        assetClass: { $ref: '#/components/schemas/AssetClass' }
+        dpd: { type: integer, description: 'Days past due as of the last completed day-end (docs/lending-day-end.md); a receipt during the day can lower it, never raise it. 0 for a closed or cancelled loan' }
+        assetClass:
+          allOf: [ { $ref: '#/components/schemas/AssetClass' } ]
+          description: 'As of the last completed day-end. A closed or cancelled loan is STANDARD unless it was an NPA at closure, which is kept'
         nextDueDate: { type: [string, 'null'], format: date }
         branch: { type: string }
         currentRate: { type: string, description: 'Rate now charged (Loan.rate is the rate as sanctioned)' }

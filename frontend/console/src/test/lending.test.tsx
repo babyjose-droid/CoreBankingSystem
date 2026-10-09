@@ -76,7 +76,7 @@ describe('loans list', () => {
     await screen.findByText('Deepak CLAUDE-TEST');
     const sma = loanRow('Deepak CLAUDE-TEST');
     expect(within(sma).getByText('SMA-1')).toHaveAttribute('data-asset-class', 'SMA1');
-    expect(within(sma).getByText('52')).toBeInTheDocument();
+    expect(within(sma).getByText('51')).toBeInTheDocument();
     const npa = loanRow('Esha CLAUDE-TEST');
     expect(within(npa).getByText(/Sub-standard/)).toHaveClass('badge--asset-substandard');
     expect(screen.queryByRole('button', { name: 'New loan' })).not.toBeInTheDocument();
@@ -162,7 +162,7 @@ describe('loan detail and servicing', () => {
     const loan = loanByCustomer(server, 'Deepak');
     renderApp({ user: 'maker', route: `/loans/${loan.id}`, server });
     expect(await screen.findByRole('heading', { name: `Loan ${loan.loanNo}` })).toBeInTheDocument();
-    expect(screen.getByTestId('stat-dpd')).toHaveTextContent('52');
+    expect(screen.getByTestId('stat-dpd')).toHaveTextContent('51');
     expect(screen.getByTestId('stat-overdue')).toHaveTextContent('₹10,954.00');
     const demands = await screen.findByRole('table', { name: 'Demands raised' });
     expect(within(demands).getAllByText('Unpaid')).toHaveLength(2);
@@ -220,6 +220,25 @@ describe('loan detail and servicing', () => {
     await waitFor(() => expect(screen.getByTestId('stat-outstanding')).toHaveTextContent('₹0.00'));
     expect(screen.getAllByText('Closed').length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Repayment' })).not.toBeInTheDocument();
+  });
+
+  it('a closed loan shows nothing past due; its class only when it was an NPA at closure', async () => {
+    const server = createMockServer();
+    for (const [name, npa] of [['Deepak', false], ['Esha', true]] as const) {
+      const loan = loanByCustomer(server, name);
+      const q = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}/preclosure-quote`)).body as { total: string };
+      expect((await mockCall(server, 'maker', 'POST', `/api/v1/loans/${loan.id}/preclosure`, { amount: q.total })).status).toBe(200);
+      const view = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}`)).body as { status: string; dpd: number; assetClass: string };
+      expect(view).toMatchObject({ status: 'CLOSED', dpd: 0 });
+      expect(view.assetClass).toBe(npa ? 'SUBSTANDARD' : 'STANDARD');
+
+      const r = renderApp({ user: 'maker', route: `/loans/${loan.id}`, server });
+      expect(await screen.findByTestId('closed-banner')).toHaveTextContent(/This loan is closed since .*: nothing is outstanding or past due/);
+      expect(screen.getByTestId('stat-dpd')).toHaveTextContent('0');
+      if (npa) expect(screen.getByTestId('stat-class')).toHaveTextContent('at closure: Sub-standard');
+      else expect(screen.getByTestId('stat-class')).toHaveTextContent('—');
+      r.unmount();
+    }
   });
 
   it('part-prepays with reduce EMI and cancels within cooling-off', async () => {

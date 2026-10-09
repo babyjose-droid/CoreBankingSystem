@@ -5,7 +5,7 @@ import { useLoans } from '../../api/lendingHooks';
 import type { LoanStatus, LoanSummary } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { Button, Card, DateText, EmptyState, ErrorBanner, Input, MoneyText, PageHeader, Select, Spinner, StatusBadge, Table, humanize, type Column } from '../../ui';
-import { AssetClassBadge, pct } from './common';
+import { LoanClass, pct } from './common';
 
 const PAGE_SIZE = 20;
 const STATUSES: LoanStatus[] = ['SANCTIONED', 'ACTIVE', 'FROZEN', 'CLOSED', 'CANCELLED', 'WRITTEN_OFF'];
@@ -39,7 +39,7 @@ export function LoansPage() {
     { key: 'outstanding', header: 'Outstanding', numeric: true, render: (l) => <MoneyText value={l.principalOutstanding} /> },
     { key: 'overdue', header: 'Overdue', numeric: true, render: (l) => <MoneyText value={l.overdueAmount} /> },
     { key: 'dpd', header: 'DPD', numeric: true, render: (l) => l.dpd ?? 0 },
-    { key: 'asset', header: 'Asset class', render: (l) => <AssetClassBadge value={l.assetClass} /> },
+    { key: 'asset', header: 'Asset class', render: (l) => <LoanClass status={l.status} value={l.assetClass} /> },
     { key: 'next', header: 'Next due', render: (l) => <DateText value={l.nextDueDate} /> },
     { key: 'branch', header: 'Branch', render: (l) => l.branch },
   ];

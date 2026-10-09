@@ -112,7 +112,7 @@ describe('restructure', () => {
 
     const table = await within(d).findByRole('table', { name: 'Restructure options' });
     const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
-    expect(headers).toEqual(['Figure', 'Current 52 DPD', 'Option 1', 'Option 2', 'Option 3']);
+    expect(headers).toEqual(['Figure', 'Current 51 DPD', 'Option 1', 'Option 2', 'Option 3']);
     const row = (name: RegExp) => within(table).getByRole('row', { name });
     expect(row(/^Asset class/)).toHaveTextContent('SMA-1Sub-standard (NPA)Sub-standard (NPA)Sub-standard (NPA)');
     expect(row(/^Remaining instalments/)).toHaveTextContent('30364824');

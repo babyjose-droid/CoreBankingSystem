@@ -370,7 +370,7 @@ public final class LoanAccount {
                 && demands.stream().anyMatch(d -> d.unpaid() && d.dueDate().isAfter(restructure.restructuredOn()) && !d.dueDate().isAfter(day))) {
             restructure = restructure.withDefaulted();
         }
-        lots.addAll(classify(day, post));
+        lots.addAll(classify(day, day, post));
         // 6. provisioning
         if (rates != null) {
             BigDecimal required = Provisioning.required(principalOutstanding, p.securedPortion(), assetClass, rates);
@@ -392,10 +392,39 @@ public final class LoanAccount {
                 suspense = ZERO;
                 capitalisedSuspense = ZERO;
             }
-            status = Status.CLOSED;
+            close(Status.CLOSED);
             return new Result(lots, "EOD " + day + " fully repaid; loan closed");
         }
         return new Result(lots, "EOD " + day + " dpd " + dpd + " " + assetClass);
+    }
+
+    /**
+     * The loan is repaid in full (or cancelled): nothing is outstanding, so nothing is past due. Without this a loan
+     * closed between two day-ends would keep the days past due of the last day-end for ever — day-end no longer
+     * visits it. An SMA class only describes days past due, so it becomes standard. An NPA class is kept with its
+     * NPA date: it is the account's classification at closure, which history and the bureau report. Provision and
+     * suspense are released by the caller. (A write-off is not a closure here: such a loan keeps its class.)
+     */
+    private void close(Status closed) {
+        status = closed;
+        dpd = 0;
+        if (!assetClass.isNpa()) assetClass = AssetClass.STANDARD;
+    }
+
+    /**
+     * After a state from an earlier moment is restored (a reversal): the day-ends that really ran since, i.e. every
+     * day after the restored state's last day-end up to {@code through} — the last day day-end had processed before
+     * the reversal — posted in {@code businessDate}'s books with their own value dates. Never a day day-end has not
+     * closed yet: the next regular day-end processes those exactly as it would have. A reversal of a transaction of
+     * the open day replays nothing.
+     */
+    public List<TransactionLot> replayDayEnds(LocalDate through, LocalDate businessDate, Provisioning.Rates rates) {
+        if (through.isAfter(businessDate)) throw new IllegalArgumentException("day-end cannot have run after the business date");
+        List<TransactionLot> lots = new ArrayList<>();
+        for (LocalDate d = lastAccrualDate.plusDays(1); !d.isAfter(through); d = d.plusDays(1)) {
+            lots.addAll(endOfDay(d, rates, businessDate).lots());
+        }
+        return lots;
     }
 
     private void addPenal(BigDecimal amount, LocalDate day) {
@@ -410,17 +439,24 @@ public final class LoanAccount {
         charges.add(new ChargeRow("P" + (++chargeSeq), "PENAL", "Penal charges", Component.PENAL, day, amount, ZERO, ZERO));
     }
 
-    private List<TransactionLot> classify(LocalDate day, LoanPostings post) {
+    /**
+     * Days past due and asset class. They are always those of the last completed day-end ({@code asOf}): the
+     * day-end passes the day it closes, a transaction during the open day passes {@link #lastAccrualDate}, because
+     * the open day has not ended — so a receipt can lower or clear the days past due but never raise them, and an
+     * account does not turn NPA between two day-ends. {@code day} is the date on which a change of class is
+     * recorded (the day closed, or the open business date).
+     */
+    private List<TransactionLot> classify(LocalDate day, LocalDate asOf, LoanPostings post) {
         List<TransactionLot> lots = new ArrayList<>();
         LocalDate oldest = demands.stream().filter(DemandRow::unpaid).map(DemandRow::dueDate).min(LocalDate::compareTo)
                 .orElse(charges.stream().filter(c -> c.kind() == Component.FEE && c.unpaid().signum() > 0)
                         .map(ChargeRow::date).min(LocalDate::compareTo).orElse(null));
-        dpd = Delinquency.dpd(day, oldest);
-        boolean arrears = oldest != null && !oldest.isAfter(day);
+        dpd = Delinquency.dpd(asOf, oldest);
+        boolean arrears = oldest != null && !oldest.isAfter(asOf);
         AssetClass before = assetClass;
         boolean upgradeBlocked = restructure != null && !restructure.upgradeAllowed(day, principalOutstanding);
         boolean held = classFloor != null && classFloorUntil != null && !day.isAfter(classFloorUntil);
-        Delinquency.Status st = Delinquency.classify(day, dpd, assetClass, npaSince, arrears, upgradeBlocked || held);
+        Delinquency.Status st = Delinquency.classify(asOf, dpd, assetClass, npaSince, arrears, upgradeBlocked || held);
         assetClass = st.assetClass();
         npaSince = st.npaSince();
         if (held && assetClass.ordinal() < classFloor.ordinal()) {       // a manual override holds the class; it never upgrades
@@ -533,7 +569,7 @@ public final class LoanAccount {
         lots.add(post.repayment(amount, split, npa && realised.signum() > 0, valueDate, narration));
         if (npa) suspense = suspense.subtract(realised);
         lots.addAll(releaseCapitalised(post, split.total(Component.PRINCIPAL), principalBefore));
-        lots.addAll(classify(businessDate, post));
+        lots.addAll(classify(businessDate, lastAccrualDate, post));
         if (principalOutstanding.signum() == 0 && future.isEmpty() && dues(businessDate).isEmpty()) {
             if (provisionHeld.signum() > 0) {
                 lots.add(post.provision(provisionHeld.negate()));
@@ -544,7 +580,7 @@ public final class LoanAccount {
                 suspense = ZERO;
                 capitalisedSuspense = ZERO;
             }
-            status = Status.CLOSED;               // fully repaid; any advance stays payable to the borrower
+            close(Status.CLOSED);                 // fully repaid; any advance stays payable to the borrower
         }
         return new Result(lots, "Received " + plain(amount) + (split.excess().signum() > 0 ? ", advance " + plain(split.excess()) : "")
                 + (status == Status.CLOSED ? "; loan closed" : ""));
@@ -738,7 +774,7 @@ public final class LoanAccount {
             suspense = ZERO;
         }
         capitalisedSuspense = ZERO;
-        status = Status.CLOSED;
+        close(Status.CLOSED);
         return new Result(lots, "Pre-closed for " + plain(amount));
     }
 
@@ -786,7 +822,7 @@ public final class LoanAccount {
             split = new Appropriation.Result(reduce(split, advance), split.excess());
         }
         lots.add(post.repayment(amount, split, false, businessDate, "Cancellation"));
-        status = Status.CANCELLED;
+        close(Status.CANCELLED);
         return new Result(lots, "Cancelled in cooling-off; received " + plain(amount));
     }
 
@@ -1173,7 +1209,7 @@ public final class LoanAccount {
         LocalDate firstPaymentDue = rows.get(Math.min(m, rows.size() - 1)).dueDate();
         restructure = new RestructureStatus(day, restructure == null ? 1 : restructure.count() + 1, classBefore, balance,
                 firstPaymentDue, firstPaymentDue.plusYears(1), false, null);
-        lots.addAll(classify(day, post));      // DPD from any arrears kept; the upgrade is blocked
+        lots.addAll(classify(day, lastAccrualDate, post));      // DPD from any arrears kept; the upgrade is blocked
 
         BigDecimal arrearsKept = overdueInterest.subtract(capitalised);
         BigDecimal npvAfter = RestructureSimulation.npv(arrearsKept, rows.stream().map(Instalment::instalment).toList(), rateBefore);

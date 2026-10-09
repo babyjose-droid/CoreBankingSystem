@@ -21,6 +21,24 @@ export function assetClassLabel(c: AssetClass | undefined | null): string {
 }
 
 /** Asset classification badge; the title spells out SMA vs NPA for colour-blind users and tooltips. */
+/** True for a loan that has ended (repaid, pre-closed or cancelled): nothing is outstanding or past due. */
+export const isClosedLoan = (status: string | null | undefined) => status === 'CLOSED' || status === 'CANCELLED';
+
+/**
+ * The asset class of a loan as staff should read it. A closed loan has nothing past due: its class is shown only
+ * when it was an NPA at closure (kept for history and the credit bureau), labelled as such.
+ */
+export function LoanClass({ status, value }: { status: string | null | undefined; value: AssetClass | undefined | null }) {
+  if (!isClosedLoan(status)) return <AssetClassBadge value={value} />;
+  if (!value || !NPA_CLASSES.includes(value)) return <span className="muted">—</span>;
+  return (
+    <span data-testid="class-at-closure">
+      <span className="muted">at closure: </span>
+      <AssetClassBadge value={value} />
+    </span>
+  );
+}
+
 export function AssetClassBadge({ value }: { value: AssetClass | undefined | null }) {
   if (!value) return <span className="muted">—</span>;
   const npa = NPA_CLASSES.includes(value);

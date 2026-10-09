@@ -91,6 +91,9 @@ public class LoanStore {
                 rs == null || !rs.underMonitoring() ? null : rs.specifiedPeriodMinEnd(), rs != null && rs.defaulted(),
                 a.sanctioned(), a.disbursedAmount(), a.undrawn(), a.classFloor() == null ? null : a.classFloor().name(),
                 a.classFloorUntil(), loanId);
+        // Day-end no longer visits a closed loan: the day it closed gets its last history row (nothing outstanding,
+        // nothing past due), so a report for a later date does not read the class of the day-end before closure.
+        if (a.status() == LoanAccount.Status.CLOSED || a.status() == LoanAccount.Status.CANCELLED) recordDpd(jdbc, loanId, asOf, a);
     }
 
     /** The instalment now payable; null (shown as the EMI as sanctioned) once nothing is left to demand. */

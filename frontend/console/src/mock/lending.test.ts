@@ -47,7 +47,7 @@ describe('lending mock API', () => {
     expect(own.status).toBe(403); // the maker has no approval:approve
     await mockCall(server, 'checker', 'POST', `/api/v1/approvals/${rev.body.id}/approve`, {});
     const after = (await mockCall(server, 'maker', 'GET', `/api/v1/loans/${loan.id}`)).body;
-    expect(after).toMatchObject({ dpd: 52, assetClass: 'SMA1', overdueAmount: '10954.00' });
+    expect(after).toMatchObject({ dpd: 51, assetClass: 'SMA1', overdueAmount: '10954.00' });
   });
 
   it('checker cannot repay; waiver applies on approval', async () => {
