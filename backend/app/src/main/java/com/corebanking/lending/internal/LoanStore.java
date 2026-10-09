@@ -1,6 +1,7 @@
 package com.corebanking.lending.internal;
 
 import com.corebanking.calc.ScheduleGenerator.Instalment;
+import com.corebanking.lending.engine.Amendment;
 import com.corebanking.lending.engine.LoanAccount;
 import com.corebanking.lending.engine.RestructureStatus;
 import com.corebanking.ledger.TransactionLot;
@@ -33,35 +34,44 @@ public class LoanStore {
 
     public Loaded lock(JdbcTemplate jdbc, UUID loanId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state "
+                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state, rate_reset_preference "
                         + "FROM lending.loan_account WHERE id = ? FOR UPDATE", loanId);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + loanId);
-        return toLoaded(rows.get(0));
+        return toLoaded(jdbc, rows.get(0));
     }
 
     /** The loan as it is, without taking the row lock (read-only uses: what falls due, documents). */
     public Loaded read(JdbcTemplate jdbc, UUID loanId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state "
+                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state, rate_reset_preference "
                         + "FROM lending.loan_account WHERE id = ?", loanId);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + loanId);
-        return toLoaded(rows.get(0));
+        return toLoaded(jdbc, rows.get(0));
     }
 
     public Loaded lockByNo(JdbcTemplate jdbc, String loanNo) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state "
+                "SELECT id, loan_no, customer_id, status, product_snapshot::text AS params, state::text AS state, rate_reset_preference "
                         + "FROM lending.loan_account WHERE loan_no = ? FOR UPDATE", loanNo);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + loanNo);
-        return toLoaded(rows.get(0));
+        return toLoaded(jdbc, rows.get(0));
     }
 
-    private Loaded toLoaded(Map<String, Object> r) {
+    /**
+     * The engine account with what it needs that is not its state: benchmark rates for a floating-rate reset and the
+     * borrower's standing choice at a reset (column rate_reset_preference).
+     */
+    private Loaded toLoaded(JdbcTemplate jdbc, Map<String, Object> r) {
         String state = (String) r.get("state");
         LoanAccount a = null;
         if (state != null && !state.equals("{}")) {
             LoanAccount.Params p = json.read((String) r.get("params"), LoanAccount.Params.class);
             a = LoanAccount.restore(p, json.read(state, LoanAccount.Snapshot.class));
+            if (p.floating() != null) {
+                a.useBenchmarks(new BenchmarkHistory(jdbc));
+                Object pref = r.get("rate_reset_preference");
+                if (pref != null) a.resetPreference(Amendment.RateResetOption.valueOf((String) pref));
+            }
         }
         return new Loaded((UUID) r.get("id"), (String) r.get("loan_no"), (UUID) r.get("customer_id"), (String) r.get("status"), a);
     }
@@ -76,6 +86,7 @@ public class LoanStore {
             case WRITTEN_OFF -> "WRITTEN_OFF";
         };
         RestructureStatus rs = a.restructureStatus();
+        // next_rate_reset: the engine's for a floating loan (null once switched to fixed); left alone otherwise
         jdbc.update("""
                 UPDATE lending.loan_account
                    SET state = ?::jsonb, status = ?, principal_outstanding = ?, overdue_amount = ?, next_due_date = ?,
@@ -83,17 +94,42 @@ public class LoanStore {
                        closed_on = CASE WHEN ? IN ('CLOSED','CANCELLED') AND closed_on IS NULL THEN ?::date ELSE closed_on END,
                        current_rate = ?, current_emi = ?, restructured_on = ?, restructure_count = ?, upgrade_not_before = ?,
                        restructure_defaulted = ?, sanctioned_amount = ?, disbursed_amount = ?, undrawn_amount = ?,
-                       class_floor = ?, class_floor_until = ?, version = version + 1
+                       class_floor = ?, class_floor_until = ?,
+                       next_rate_reset = CASE WHEN ? THEN ?::date ELSE next_rate_reset END, rate_outside_band = ?, rate_fixed_since = ?,
+                       version = version + 1
                  WHERE id = ?
                 """, json.write(a.snapshot()), status, a.principalOutstanding(), a.overdueAmount(asOf), a.nextDueDate(),
                 a.dpd(), a.assetClass().name(), a.npaSince(), a.suspense(), a.provisionHeld(), status, Date.valueOf(asOf),
                 a.ratePercent(), currentEmi(a), rs == null ? null : rs.restructuredOn(), rs == null ? 0 : rs.count(),
                 rs == null || !rs.underMonitoring() ? null : rs.specifiedPeriodMinEnd(), rs != null && rs.defaulted(),
                 a.sanctioned(), a.disbursedAmount(), a.undrawn(), a.classFloor() == null ? null : a.classFloor().name(),
-                a.classFloorUntil(), loanId);
+                a.classFloorUntil(), a.params().floating() != null, a.nextRateReset(), a.rateReset() != null && a.rateReset().outsideBand(),
+                a.rateReset() == null ? null : a.rateReset().fixedSince(), loanId);
         // Day-end no longer visits a closed loan: the day it closed gets its last history row (nothing outstanding,
         // nothing past due), so a report for a later date does not read the class of the day-end before closure.
         if (a.status() == LoanAccount.Status.CLOSED || a.status() == LoanAccount.Status.CANCELLED) recordDpd(jdbc, loanId, asOf, a);
+    }
+
+    /** Rate history of a benchmark, read once per account load (rates are append-only, V18). */
+    static final class BenchmarkHistory implements LoanAccount.BenchmarkRates {
+        private final JdbcTemplate jdbc;
+        private final Map<String, java.util.TreeMap<LocalDate, java.math.BigDecimal>> cache = new java.util.HashMap<>();
+
+        BenchmarkHistory(JdbcTemplate jdbc) {
+            this.jdbc = jdbc;
+        }
+
+        @Override
+        public java.math.BigDecimal rateOn(String code, LocalDate date) {
+            var history = cache.computeIfAbsent(code, c -> {
+                var m = new java.util.TreeMap<LocalDate, java.math.BigDecimal>();
+                jdbc.query("SELECT effective_from, rate FROM lending.benchmark_rate WHERE benchmark_code = ?",
+                        (org.springframework.jdbc.core.RowCallbackHandler) rs -> m.put(rs.getDate(1).toLocalDate(), rs.getBigDecimal(2)), c);
+                return m;
+            });
+            var e = history.floorEntry(date);
+            return e == null ? null : e.getValue();
+        }
     }
 
     /** The instalment now payable; null (shown as the EMI as sanctioned) once nothing is left to demand. */

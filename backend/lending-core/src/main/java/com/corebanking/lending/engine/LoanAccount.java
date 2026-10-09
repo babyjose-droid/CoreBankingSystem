@@ -31,7 +31,21 @@ public final class LoanAccount {
     public record Params(String loanNo, String branch, String supplierState, String recipientState, BigDecimal ratePercent,
                          BigDecimal penalRatePercent, DayCount dayCount, Rounding rounding, List<Component> sequence,
                          Appropriation.Mode mode, int coolingOffDays, BigDecimal securedPortion, LoanPostings.GlMap gl,
-                         List<FeeRule> fees) {
+                         List<FeeRule> fees, FloatingRate floating) {
+
+        /** As before the automatic floating-rate reset: a fixed rate. */
+        public Params(String loanNo, String branch, String supplierState, String recipientState, BigDecimal ratePercent,
+                      BigDecimal penalRatePercent, DayCount dayCount, Rounding rounding, List<Component> sequence,
+                      Appropriation.Mode mode, int coolingOffDays, BigDecimal securedPortion, LoanPostings.GlMap gl, List<FeeRule> fees) {
+            this(loanNo, branch, supplierState, recipientState, ratePercent, penalRatePercent, dayCount, rounding, sequence, mode,
+                    coolingOffDays, securedPortion, gl, fees, null);
+        }
+
+        public Params withFloating(FloatingRate f) {
+            return new Params(loanNo, branch, supplierState, recipientState, ratePercent, penalRatePercent, dayCount, rounding, sequence,
+                    mode, coolingOffDays, securedPortion, gl, fees, f);
+        }
+
         public Params {
             Objects.requireNonNull(loanNo);
             Objects.requireNonNull(branch);
@@ -43,6 +57,73 @@ public final class LoanAccount {
             gl = gl == null ? LoanPostings.GlMap.starter() : gl;
             fees = fees == null ? List.of() : List.copyOf(fees);
         }
+    }
+
+    /**
+     * A benchmark-linked rate, frozen at booking (product version, US-043): rate = benchmark + spread, reset every
+     * {@code resetMonths} months from disbursal at day-end (RBI 18-Aug-2023 on reset of floating rates).
+     *
+     * @param defaultOption   what a reset changes unless the borrower chose otherwise: the lender's board policy
+     * @param maxTenureMonths product maximum tenure; a tenure elongation beyond it falls back to a higher EMI
+     * @param minRate         product rate band. It bounds negotiated rates only (D-14): a reset outside it is applied
+     * @param maxRate         and flagged, not refused
+     */
+    public record FloatingRate(String benchmarkCode, BigDecimal spread, int resetMonths, Amendment.RateResetOption defaultOption,
+                               Integer maxTenureMonths, BigDecimal minRate, BigDecimal maxRate) {
+        public FloatingRate {
+            Objects.requireNonNull(benchmarkCode, "benchmarkCode");
+            Objects.requireNonNull(spread, "spread");
+            if (resetMonths < 1 || resetMonths > 60) throw new IllegalArgumentException("resetMonths must be 1..60");
+            defaultOption = defaultOption == null ? Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI : defaultOption;
+            if (defaultOption == Amendment.RateResetOption.CHANGE_BOTH) {
+                throw new IllegalArgumentException("the default at a reset is KEEP_EMI_CHANGE_TENURE or KEEP_TENURE_CHANGE_EMI");
+            }
+        }
+
+        boolean outsideBand(BigDecimal rate) {
+            return (minRate != null && rate.compareTo(minRate) < 0) || (maxRate != null && rate.compareTo(maxRate) > 0);
+        }
+    }
+
+    /**
+     * Where the loan's rate schedule stands.
+     *
+     * @param next         next floating-rate reset date; null for a fixed rate or once switched to fixed
+     * @param fixedSince   the day a floating loan was switched to a fixed rate
+     * @param outsideBand  the rate set by the last reset is outside the product band (D-14)
+     * @param stepsApplied elapsed-tenure steps in force (1 = the booked rate)
+     */
+    public record RateResetState(LocalDate next, LocalDate fixedSince, Boolean outsideBand, Integer stepsApplied) {
+        public RateResetState {
+            outsideBand = Boolean.TRUE.equals(outsideBand);
+            stepsApplied = stepsApplied == null ? 1 : stepsApplied;
+        }
+    }
+
+    /** What changed a rate at day-end. */
+    public enum RateCause { BENCHMARK_RESET, TENURE_STEP }
+
+    /**
+     * A rate change made by the day-end: a benchmark reset (also when the rate stays the same, which only moves the
+     * next reset date) or an elapsed-tenure step.
+     *
+     * @param resetDates     reset dates covered: more than one when day-end catches up; the rate is the benchmark's on
+     *                       the last one (interest already accrued is never re-rated)
+     * @param applied        what the change did: the requested option, or KEEP_TENURE_CHANGE_EMI when keeping the EMI
+     *                       would breach the maximum tenure or amortise negatively ({@code fallbackReason})
+     * @param effect         before/after figures; null when nothing changed
+     */
+    public record RateChange(RateCause cause, LocalDate day, List<LocalDate> resetDates, String benchmarkCode, BigDecimal benchmarkRate,
+                             BigDecimal spread, BigDecimal rateBefore, BigDecimal rateAfter, Amendment.RateResetOption requested,
+                             Amendment.RateResetOption applied, String fallbackReason, boolean outsideBand, LocalDate nextReset,
+                             Amendment.Effect effect) {
+        public boolean changed() { return effect != null; }
+    }
+
+    /** Benchmark rates by date (lending.benchmark_rate): the rate in force on a date, or null. Not part of the state. */
+    @FunctionalInterface
+    public interface BenchmarkRates {
+        BigDecimal rateOn(String benchmarkCode, LocalDate date);
     }
 
     /**
@@ -104,6 +185,7 @@ public final class LoanAccount {
      * @param interestInAdvance    broken-period interest deducted at disbursal, not yet set against its demand
      * @param classFloor           asset class the account is held at or below by a manual override, until
      *                             {@code classFloorUntil} (inclusive); an override never upgrades
+     * @param rateReset            next floating-rate reset and elapsed-tenure steps applied; null for a plain fixed rate
      */
     public record Snapshot(Status status, LocalDate disbursedOn, BigDecimal disbursedAmount, BigDecimal principalOutstanding,
                            List<Instalment> futureSchedule, List<DemandRow> demands, List<ChargeRow> charges,
@@ -111,7 +193,23 @@ public final class LoanAccount {
                            BigDecimal excess, AssetClass assetClass, LocalDate npaSince, int dpd, BigDecimal suspense,
                            BigDecimal provisionHeld, int chargeSeq, BigDecimal ratePercent, BigDecimal capitalisedSuspense,
                            RestructureStatus restructure, LoanTerms terms, BigDecimal sanctioned, List<TrancheRow> tranches,
-                           Boolean preEmi, BigDecimal interestInAdvance, AssetClass classFloor, LocalDate classFloorUntil) {}
+                           Boolean preEmi, BigDecimal interestInAdvance, AssetClass classFloor, LocalDate classFloorUntil,
+                           RateResetState rateReset) {
+
+        /** As stored before the automatic rate reset (V24 fills {@code rateReset} in for floating loans). */
+        public Snapshot(Status status, LocalDate disbursedOn, BigDecimal disbursedAmount, BigDecimal principalOutstanding,
+                        List<Instalment> futureSchedule, List<DemandRow> demands, List<ChargeRow> charges,
+                        BigDecimal accruedNotDemanded, BigDecimal carriedInterest, LocalDate lastAccrualDate,
+                        BigDecimal excess, AssetClass assetClass, LocalDate npaSince, int dpd, BigDecimal suspense,
+                        BigDecimal provisionHeld, int chargeSeq, BigDecimal ratePercent, BigDecimal capitalisedSuspense,
+                        RestructureStatus restructure, LoanTerms terms, BigDecimal sanctioned, List<TrancheRow> tranches,
+                        Boolean preEmi, BigDecimal interestInAdvance, AssetClass classFloor, LocalDate classFloorUntil) {
+            this(status, disbursedOn, disbursedAmount, principalOutstanding, futureSchedule, demands, charges, accruedNotDemanded,
+                    carriedInterest, lastAccrualDate, excess, assetClass, npaSince, dpd, suspense, provisionHeld, chargeSeq, ratePercent,
+                    capitalisedSuspense, restructure, terms, sanctioned, tranches, preEmi, interestInAdvance, classFloor, classFloorUntil,
+                    null);
+        }
+    }
 
     public record Result(List<TransactionLot> lots, String summary) {}
 
@@ -152,6 +250,11 @@ public final class LoanAccount {
     private BigDecimal interestInAdvance;
     private AssetClass classFloor;
     private LocalDate classFloorUntil;
+    private RateResetState rateReset;
+    // not state: supplied by whoever loads the account, and drained after each day-end
+    private BenchmarkRates benchmarks;
+    private Amendment.RateResetOption resetPreference;
+    private final List<RateChange> rateChanges = new ArrayList<>();
 
     private LoanAccount(Params p, Snapshot s) {
         this.p = p;
@@ -190,13 +293,19 @@ public final class LoanAccount {
         interestInAdvance = s.interestInAdvance() == null ? BigDecimal.ZERO : s.interestInAdvance();
         classFloor = s.classFloor();
         classFloorUntil = s.classFloorUntil();
+        rateReset = s.rateReset();
+        if (rateReset == null && p.floating() != null && disbursedOn != null) {
+            // floating state stored before V24: the next anniversary of disbursal after the last day-end
+            rateReset = new RateResetState(followingReset(lastAccrualDate), null, false, 1);
+        }
+        rateChanges.clear();
     }
 
     public Snapshot snapshot() {
         return new Snapshot(status, disbursedOn, disbursedAmount, principalOutstanding, List.copyOf(future), List.copyOf(demands),
                 List.copyOf(charges), accruedNotDemanded, carriedInterest, lastAccrualDate, excess, assetClass, npaSince, dpd,
                 suspense, provisionHeld, chargeSeq, rate, capitalisedSuspense, restructure, terms, sanctioned, List.copyOf(tranches),
-                preEmi, interestInAdvance, classFloor, classFloorUntil);
+                preEmi, interestInAdvance, classFloor, classFloorUntil, rateReset);
     }
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
@@ -240,7 +349,9 @@ public final class LoanAccount {
         LoanAccount a = new LoanAccount(p, new Snapshot(Status.ACTIVE, terms.disbursalDate(), firstTranche, firstTranche,
                 schedule, List.of(), List.of(), ZERO, ZERO, terms.disbursalDate().minusDays(1), ZERO, AssetClass.STANDARD,
                 null, 0, ZERO, ZERO, 0, plan.accrualRatePercent(), ZERO, null, terms, terms.principal(), List.of(), pre, advance,
-                null, null));
+                null, null, p.floating() == null && terms.options().rateSteps().isEmpty() ? null
+                        : new RateResetState(p.floating() == null ? null : terms.disbursalDate().plusMonths(p.floating().resetMonths()),
+                                null, false, 1)));
         LoanPostings post = a.postings(businessDate);
         List<FeeRule.Charge> deducted = new ArrayList<>();
         List<TransactionLot> lots = new ArrayList<>();
@@ -272,13 +383,14 @@ public final class LoanAccount {
     private static void requireTrancheable(LoanTerms t) {
         LoanTerms.Options o = t.options();
         boolean method = switch (t.method()) {
-            case EQUATED, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST -> true;
+            case EQUATED, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST, TRANCHE_BULLET -> true;
             case FIXED_PRINCIPAL -> o.principalEvery() == 1;
             case STEP_EQUATED, STRUCTURED -> false;
         };
-        if (!method || o.interestBasis() != LoanTerms.InterestBasis.DAILY_REDUCING || o.fixedInstalment() != null || t.balloon().signum() > 0) {
+        if (!method || o.interestBasis() != LoanTerms.InterestBasis.DAILY_REDUCING || o.fixedInstalment() != null || t.balloon().signum() > 0
+                || !o.rateSteps().isEmpty()) {
             throw new IllegalArgumentException("disbursement in tranches is available for equated, fixed-principal and bullet loans"
-                    + " on the daily-reducing basis without a balloon");
+                    + " on the daily-reducing basis without a balloon or an elapsed-tenure rate table");
         }
     }
 
@@ -333,6 +445,9 @@ public final class LoanAccount {
             carriedInterest = ZERO;
             rollPreEmi(due.dueDate());
         }
+        // 1b. rate changes due today: elapsed-tenure steps and the floating-rate reset; the night's accrual below is
+        //     already at the new rate
+        applyRateChanges(day);
         // 2. apply any advance (excess) against dues
         if (excess.signum() > 0 && !dues(day).isEmpty()) {
             Appropriation.Result split = Appropriation.allocate(dues(day), excess, p.sequence(), p.mode());
@@ -629,6 +744,7 @@ public final class LoanAccount {
                     RepaymentMethod.EQUATED, 0, ZERO, p.dayCount(), p.rounding(), false);
             rebuilt = ScheduleBuilder.build(t);
             if (mode == PrepaymentMode.REDUCE_TENURE) rebuilt = keepEmi(rebuilt, emiBefore, t);
+            else rebuilt = overlayPendingSteps(rebuilt, demands.size());
         } else {
             rebuilt = rebuildOnMethod(mode, businessDate, emiBefore);
         }
@@ -653,6 +769,10 @@ public final class LoanAccount {
         }
         if (terms.method() == RepaymentMethod.FIXED_PRINCIPAL && terms.options().principalEvery() > 1) {
             throw new IllegalStateException("part-prepayment is not available when principal and interest fall due at different intervals");
+        }
+        if (terms.method() == RepaymentMethod.TRANCHE_BULLET) {
+            throw new IllegalStateException("part-prepayment is not available when each tranche is repaid on its own date: repay a tranche"
+                    + " at its maturity, or pre-close");
         }
         if (mode == PrepaymentMode.REDUCE_TENURE && (!equatedFamily()
                 || terms.options().interestBasis() != LoanTerms.InterestBasis.DAILY_REDUCING || terms.options().fixedInstalment() != null)) {
@@ -898,10 +1018,20 @@ public final class LoanAccount {
      */
     public Result amend(Amendment a, LocalDate businessDate) {
         Amendment.Effect e = computeAmendment(a, businessDate);
+        applyEffect(e);
+        if (rateReset != null && (a.kind() == Amendment.Kind.RATE_CHANGE || a.kind() == Amendment.Kind.SWITCH_TO_FIXED)) {
+            // a negotiated rate is within the band (the service checks it); a switch to fixed ends the resets
+            boolean toFixed = a.kind() == Amendment.Kind.SWITCH_TO_FIXED;
+            rateReset = new RateResetState(toFixed ? null : rateReset.next(), toFixed ? businessDate : rateReset.fixedSince(), false,
+                    rateReset.stepsApplied());
+        }
+        return new Result(List.of(), describe(e));
+    }
+
+    private void applyEffect(Amendment.Effect e) {
         future = new ArrayList<>(e.scheduleAfter());
         rate = e.rateAfter();
         carriedInterest = ZERO;              // now inside the next instalment's interest
-        return new Result(List.of(), describe(e));
     }
 
     private static String describe(Amendment.Effect e) {
@@ -918,8 +1048,20 @@ public final class LoanAccount {
     }
 
     private Amendment.Effect computeAmendment(Amendment a, LocalDate businessDate) {
-        requireActive();
+        return computeAmendment(a, businessDate, false);
+    }
+
+    /** {@code system}: a rate change the day-end makes under the contract (reset, step), also on a frozen account. */
+    private Amendment.Effect computeAmendment(Amendment a, LocalDate businessDate, boolean system) {
+        if (system) {
+            if (status != Status.ACTIVE && status != Status.FROZEN) throw new IllegalStateException("account is " + status);
+        } else {
+            requireActive();
+        }
         requireMonthlyEmi("amendments");
+        if (a.kind() == Amendment.Kind.SWITCH_TO_FIXED && !floatingNow()) {
+            throw new IllegalStateException("the loan is not on a floating rate: change the rate with RATE_CHANGE");
+        }
         if (future.isEmpty()) throw new IllegalStateException("no instalments left to amend");
         LocalDate start = lastAccrualDate.plusDays(1);
         LocalDate nextDue = future.get(0).dueDate();
@@ -939,7 +1081,7 @@ public final class LoanAccount {
         LocalDate firstDue = nextDue;
         LocalDate basisEnd = null;
         switch (a.kind()) {
-            case RATE_CHANGE -> {
+            case RATE_CHANGE, SWITCH_TO_FIXED -> {
                 newRate = a.newRatePercent();
                 switch (a.rateOption()) {
                     case KEEP_TENURE_CHANGE_EMI -> n = remainingBefore;
@@ -993,16 +1135,19 @@ public final class LoanAccount {
         requireNoNegativeAmortisation(emi, balance, newRate);
         List<Instalment> rows = rows(balance, newRate, emi, n, moratorium, firstDue, anchorDay, start, accruedNotDemanded, basisEnd,
                 MAX_INSTALMENTS - demands.size());
+        if (n != null) rows = overlayPendingSteps(rows, 0);       // the tenure is kept: later elapsed-tenure steps still apply
         int remainingAfter = rows.size();
         if (remainingAfter > remainingBefore && demands.size() + remainingAfter > maxTotal) {
             throw new IllegalArgumentException("the new schedule needs " + remainingAfter + " more instalments, which takes the loan to "
                     + (demands.size() + remainingAfter) + " months, beyond the maximum tenure of " + maxTotal + " months");
         }
         LocalDate maturityAfter = rows.get(rows.size() - 1).dueDate();
-        BigDecimal overdue = demands.stream().filter(d -> !d.dueDate().isAfter(businessDate))
+        // past due: a demand of today is not overdue before the day ends (a reset on a due date runs after its demand)
+        BigDecimal overdue = demands.stream().filter(d -> d.dueDate().isBefore(businessDate))
                 .map(d -> d.principalUnpaid().add(d.interestUnpaid())).reduce(ZERO, BigDecimal::add);
         // a market rate reset may lower the EMI of a borrower in arrears; any other concession is a restructure
-        boolean concession = maturityAfter.isAfter(maturityBefore) || (a.kind() != Amendment.Kind.RATE_CHANGE && emi.compareTo(emiBefore) < 0);
+        boolean rateKind = a.kind() == Amendment.Kind.RATE_CHANGE || a.kind() == Amendment.Kind.SWITCH_TO_FIXED;
+        boolean concession = maturityAfter.isAfter(maturityBefore) || (!rateKind && emi.compareTo(emiBefore) < 0);
         if (overdue.signum() > 0 && concession) {
             throw new IllegalStateException("the loan has " + overdue.toPlainString() + " overdue; extending the tenure or lowering the EMI"
                     + " of a borrower in arrears is a restructure (RBI prudential framework): collect the dues first or restructure");
@@ -1098,6 +1243,210 @@ public final class LoanAccount {
             prev = due;
         }
         return rows;
+    }
+
+    // ------------------------------------------------------------------------------------------------ rate resets and steps
+    /**
+     * Elapsed-tenure steps whose month has come (the step from month m applies once instalment m-1 is demanded: from
+     * its due date), then the floating-rate reset if its date has come. Both go through the amendment code a rate
+     * change uses, so schedule, EMI, tenure and history stay consistent. Runs inside {@link #endOfDay} after the
+     * day's demands.
+     */
+    private void applyRateChanges(LocalDate day) {
+        // A frozen account changes nothing while frozen, a scheduled rate change included: its reset date passes and
+        // the first day-end after it is unfrozen catches the reset up (at the benchmark of the latest date passed)
+        // and any step reached. The loan shows a reset date in the past meanwhile (GET /rate-resets/upcoming: held).
+        if (status != Status.ACTIVE) return;
+        List<LoanTerms.RateStep> steps = terms == null ? List.of() : terms.options().rateSteps();
+        int applied = rateReset == null ? 1 : rateReset.stepsApplied();
+        while (applied < steps.size() && demands.size() >= steps.get(applied).fromMonth() - 1) {
+            LoanTerms.RateStep step = steps.get(applied++);
+            BigDecimal before = rate;
+            RateOutcome o = step.ratePercent().compareTo(rate) == 0 ? null
+                    : changeRate(step.ratePercent(), Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, null, day);
+            rateReset = new RateResetState(rateReset == null ? null : rateReset.next(), rateReset == null ? null : rateReset.fixedSince(),
+                    rateReset != null && rateReset.outsideBand(), applied);
+            rateChanges.add(new RateChange(RateCause.TENURE_STEP, day, List.of(day), null, null, null, before, rate,
+                    Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, o == null ? null : o.applied(), o == null ? null : o.fallbackReason(),
+                    false, null, o == null ? null : o.effect()));
+        }
+        FloatingRate f = p.floating();
+        if (f == null || !floatingNow() || rateReset.next() == null || rateReset.next().isAfter(day)) return;
+        List<LocalDate> dates = new ArrayList<>();
+        LocalDate next = rateReset.next();
+        while (!next.isAfter(day)) {
+            dates.add(next);
+            next = followingReset(next);
+        }
+        LocalDate on = dates.get(dates.size() - 1);
+        if (benchmarks == null) throw new IllegalStateException("loan " + p.loanNo() + " is due for a rate reset but no benchmark rates were supplied");
+        BigDecimal benchmark = benchmarks.rateOn(f.benchmarkCode(), on);
+        if (benchmark == null) throw new IllegalStateException("no rate is recorded for benchmark " + f.benchmarkCode() + " on or before " + on);
+        BigDecimal newRate = benchmark.add(f.spread()).max(ZERO);
+        Amendment.RateResetOption requested = resetPreference != null ? resetPreference : f.defaultOption();
+        BigDecimal before = rate;
+        RateOutcome o = newRate.compareTo(rate) == 0 ? null : changeRate(newRate, requested, f.maxTenureMonths(), day);
+        boolean outside = f.outsideBand(rate);
+        rateReset = new RateResetState(next, null, outside, rateReset.stepsApplied());
+        rateChanges.add(new RateChange(RateCause.BENCHMARK_RESET, day, List.copyOf(dates), f.benchmarkCode(), benchmark, f.spread(), before,
+                rate, requested, o == null ? null : o.applied(), o == null ? null : o.fallbackReason(), outside, next,
+                o == null ? null : o.effect()));
+    }
+
+    /** The first reset date after {@code after}: anniversaries of disbursal every {@code resetMonths} months. */
+    private LocalDate followingReset(LocalDate after) {
+        int m = p.floating().resetMonths();
+        for (int k = 1; ; k++) {
+            LocalDate d = disbursedOn.plusMonths((long) m * k);
+            if (d.isAfter(after)) return d;
+        }
+    }
+
+    private boolean floatingNow() {
+        return p.floating() != null && rateReset != null && rateReset.fixedSince() == null;
+    }
+
+    private record RateOutcome(Amendment.Effect effect, Amendment.RateResetOption applied, String fallbackReason) {}
+
+    /**
+     * Moves the loan to {@code newRate} from {@code day}. A monthly EMI loan goes through the amendment code with the
+     * option asked for; keeping the EMI falls back to keeping the tenure when the longer tenure would pass the
+     * product's maximum, would amortise negatively, or would extend the loan of a borrower in arrears (RBI
+     * 18-Aug-2023: no negative amortisation; an extension in arrears is a restructure). Any other loan keeps its
+     * tenure and its instalments follow the rate.
+     */
+    private RateOutcome changeRate(BigDecimal newRate, Amendment.RateResetOption requested, Integer maxTenure, LocalDate day) {
+        if (future.isEmpty()) {             // everything is demanded: nothing accrues any more
+            rate = newRate;
+            return new RateOutcome(null, requested, "no instalments left to re-schedule");
+        }
+        boolean emiLoan = fullyDrawn() && monthlyEmi() && (terms == null || terms.balloon().signum() == 0);
+        if (emiLoan) {
+            try {
+                Amendment.Effect e = computeAmendment(Amendment.rate(newRate, requested, maxTenure), day, true);
+                applyEffect(e);
+                return new RateOutcome(e, requested, null);
+            } catch (IllegalArgumentException | IllegalStateException ex) {
+                if (requested == Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI) throw ex;
+                Amendment.Effect e = computeAmendment(Amendment.rate(newRate, Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, maxTenure), day, true);
+                applyEffect(e);
+                return new RateOutcome(e, Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, ex.getMessage());
+            }
+        }
+        Amendment.Effect e = repriceFuture(newRate, day);
+        return new RateOutcome(e, Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI,
+                requested == Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI ? null
+                        : "only a monthly EMI loan, fully disbursed, can keep its EMI: the instalments follow the rate");
+    }
+
+    /**
+     * Any other method at a new rate, tenure and due dates kept: an equated loan gets a new instalment over the
+     * instalments left; on the others only the interest changes (principal falls due as before). Interest accrued at
+     * the old rate since the period began is carried into the next demand.
+     */
+    private Amendment.Effect repriceFuture(BigDecimal newRate, LocalDate day) {
+        List<Instalment> before = List.copyOf(future);
+        BigDecimal rateBefore = rate;
+        BigDecimal emiBefore = currentEmi();
+        BigDecimal interestBefore = future.stream().map(Instalment::interest).reduce(ZERO, BigDecimal::add).add(carriedInterest);
+        BigDecimal balance = future.stream().map(Instalment::principal).reduce(ZERO, BigDecimal::add);
+        LocalDate nextDue = future.get(0).dueDate();
+        List<Instalment> rows;
+        if (equatedFamily() && balance.signum() > 0) {
+            LoanTerms t = baseTerms().rescheduled(balance, newRate, future.size(), day, nextDue, RepaymentMethod.EQUATED, leadingInterestOnly());
+            rows = renumber(ScheduleBuilder.build(t), demands.size());
+        } else {
+            rows = new ArrayList<>();
+            LocalDate prev = day;
+            for (Instalment r : future) {
+                BigDecimal interest = p.rounding().apply(periodInterest(r.openingBalance(), newRate, prev, r.dueDate()));
+                rows.add(new Instalment(r.number(), r.dueDate(), r.days(), r.openingBalance(), interest, r.principal(),
+                        r.principal().add(interest), r.closingBalance()));
+                prev = r.dueDate();
+            }
+        }
+        carriedInterest = accruedNotDemanded;
+        future = new ArrayList<>(rows);
+        rate = newRate;
+        BigDecimal interestAfter = rows.stream().map(Instalment::interest).reduce(ZERO, BigDecimal::add).add(carriedInterest);
+        return new Amendment.Effect(Amendment.Kind.RATE_CHANGE, balance, accruedNotDemanded, rateBefore, newRate, emiBefore, currentEmi(),
+                before.size(), rows.size(), nextDue, rows.get(0).dueDate(), before.get(before.size() - 1).dueDate(),
+                rows.get(rows.size() - 1).dueDate(), interestBefore, interestAfter, ZERO, before, List.copyOf(rows));
+    }
+
+    /**
+     * Elapsed-tenure steps not reached yet, laid over rows just rebuilt at the rate in force, so the schedule shows
+     * them as the KFS did. {@code offset}: demands raised before the rows' own numbering.
+     */
+    private List<Instalment> overlayPendingSteps(List<Instalment> rows, int offset) {
+        if (terms == null || terms.options().rateSteps().isEmpty()) return rows;
+        List<Instalment> out = rows;
+        for (LoanTerms.RateStep step : terms.options().rateSteps()) {
+            if (step.fromMonth() - 1 <= demands.size()) continue;            // in force already
+            for (int i = 1; i < out.size(); i++) {
+                if (out.get(i).number() + offset >= step.fromMonth()) {
+                    out = ScheduleBuilder.restep(out, i, step.ratePercent(), p.dayCount(), p.rounding());
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * TRANCHE_BULLET rows from {@code from}: each tranche's principal on its own maturity (tranche date plus the
+     * tenor; the first tranche's is the loan's first maturity), interest on the balance by days, on the regular due
+     * dates up to the last maturity and on each maturity, or only on the maturities with {@code interestAtMaturity}.
+     */
+    private List<Instalment> trancheBulletRows(LoanTerms t, LocalDate from) {
+        java.util.TreeMap<LocalDate, BigDecimal> due = new java.util.TreeMap<>();
+        for (TrancheRow tr : tranches) {
+            LocalDate maturity = tr.no() == 1 ? ScheduleBuilder.dueDate(t, t.tenorMonths()) : t.frequency().plus(tr.date(), t.tenorMonths());
+            if (maturity.isAfter(from)) due.merge(maturity, tr.amount(), BigDecimal::add);
+        }
+        if (due.isEmpty()) throw new IllegalStateException("every tranche has matured");
+        if (!t.options().interestAtMaturity()) {
+            LocalDate lastMaturity = due.lastKey();
+            for (int k = 1; k <= MAX_INSTALMENTS * 2; k++) {
+                LocalDate d = ScheduleBuilder.dueDate(t, k);
+                if (d.isAfter(lastMaturity)) break;
+                if (d.isAfter(from)) due.putIfAbsent(d, ZERO);
+            }
+        }
+        List<Instalment> rows = new ArrayList<>();
+        BigDecimal bal = due.values().stream().reduce(ZERO, BigDecimal::add);
+        LocalDate prev = from;
+        int k = demands.size();
+        for (java.util.Map.Entry<LocalDate, BigDecimal> e : due.entrySet()) {
+            BigDecimal interest = p.rounding().apply(periodInterest(bal, rate, prev, e.getKey()));
+            rows.add(new Instalment(++k, e.getKey(), p.dayCount().days(prev, e.getKey()), bal, interest, e.getValue(),
+                    e.getValue().add(interest), bal.subtract(e.getValue())));
+            bal = bal.subtract(e.getValue());
+            prev = e.getKey();
+        }
+        return rows;
+    }
+
+    /** Benchmark rates for resets; set by whoever loads the account (the service reads lending.benchmark_rate). */
+    public LoanAccount useBenchmarks(BenchmarkRates rates) {
+        this.benchmarks = rates;
+        return this;
+    }
+
+    /** The borrower's choice at a reset (RBI 18-Aug-2023); null = the product's default. Kept by the service, not the state. */
+    public LoanAccount resetPreference(Amendment.RateResetOption option) {
+        if (option == Amendment.RateResetOption.CHANGE_BOTH) {
+            throw new IllegalArgumentException("a standing choice is KEEP_EMI_CHANGE_TENURE or KEEP_TENURE_CHANGE_EMI");
+        }
+        this.resetPreference = option;
+        return this;
+    }
+
+    /** Rate changes made by the day-ends run since the last call, oldest first. */
+    public List<RateChange> drainRateChanges() {
+        List<RateChange> out = List.copyOf(rateChanges);
+        rateChanges.clear();
+        return out;
     }
 
     // ------------------------------------------------------------------------------------------------ restructure (P2-3)
@@ -1401,6 +1750,10 @@ public final class LoanAccount {
         LocalDate nextDue = future.get(0).dueDate();
         int remaining = future.size();
         LoanTerms t;
+        if (base.method() == RepaymentMethod.TRANCHE_BULLET) {
+            future = trancheBulletRows(base, from);
+            return;
+        }
         if (base.method() == RepaymentMethod.BULLET_TOTAL_INTEREST) {
             t = base.rescheduled(principalOutstanding, rate, 1, from, future.get(remaining - 1).dueDate(), base.method(), 0);
         } else if (base.method() == RepaymentMethod.EQUATED) {
@@ -1570,6 +1923,8 @@ public final class LoanAccount {
     public boolean preEmi() { return preEmi; }
     public List<TrancheRow> tranches() { return List.copyOf(tranches); }
     public BigDecimal interestInAdvance() { return interestInAdvance; }
+    public RateResetState rateReset() { return rateReset; }
+    public LocalDate nextRateReset() { return floatingNow() ? rateReset.next() : null; }
     public AssetClass classFloor() { return classFloor; }
     public LocalDate classFloorUntil() { return classFloorUntil; }
     public Status status() { return status; }

@@ -53,6 +53,21 @@ public record LoanTerms(BigDecimal principal, BigDecimal ratePercent, int tenorM
      */
     public enum BpiMode { NONE, ADD_TO_FIRST_INSTALMENT, SEPARATE_DEMAND, DEDUCT_AT_DISBURSAL }
 
+    /**
+     * One step of an elapsed-tenure rate table ("Elapsed-Tenure Interest Rate Slab"): the annual rate from instalment
+     * {@code fromMonth} (1-based) of a monthly loan, that is from the due date of the instalment before it. Steps are
+     * known at booking, so the schedule, the KFS and the APR show every step.
+     */
+    public record RateStep(int fromMonth, BigDecimal ratePercent) {
+        public RateStep {
+            Objects.requireNonNull(ratePercent, "ratePercent");
+            if (fromMonth < 1) throw new IllegalArgumentException("a rate step starts at month 1 or later");
+            if (ratePercent.signum() < 0 || ratePercent.compareTo(BigDecimal.valueOf(100)) > 0) {
+                throw new IllegalArgumentException("a rate step's rate must be 0..100");
+            }
+        }
+    }
+
     /** One row of a STRUCTURED schedule: the principal falling due on a date. */
     public record CustomRow(LocalDate dueDate, BigDecimal principal) {
         public CustomRow {
@@ -69,9 +84,12 @@ public record LoanTerms(BigDecimal principal, BigDecimal ratePercent, int tenorM
      * @param fixedInstalment EQUATED: the instalment is given and the rate follows from it ("Tenure Amount and
      *                        Installment")
      * @param customRows      STRUCTURED: principal by date; must add up to the principal
+     * @param rateSteps       elapsed-tenure rate table (monthly EQUATED loans); empty for a single rate
+     * @param interestAtMaturity TRANCHE_BULLET: interest falls due with each tranche's bullet instead of every period
      */
     public record Options(Frequency frequency, InterestBasis interestBasis, BpiMode bpiMode, BigDecimal stepPercent,
-                          Integer stepEvery, Integer principalEvery, BigDecimal fixedInstalment, List<CustomRow> customRows) {
+                          Integer stepEvery, Integer principalEvery, BigDecimal fixedInstalment, List<CustomRow> customRows,
+                          List<RateStep> rateSteps, Boolean interestAtMaturity) {
 
         public static final Options NONE = new Options(null, null, null, null, null, null, null, null);
 
@@ -81,41 +99,63 @@ public record LoanTerms(BigDecimal principal, BigDecimal ratePercent, int tenorM
             bpiMode = bpiMode == null ? BpiMode.NONE : bpiMode;
             principalEvery = principalEvery == null ? 1 : principalEvery;
             customRows = customRows == null ? List.of() : List.copyOf(customRows);
+            rateSteps = rateSteps == null ? List.of() : List.copyOf(rateSteps);
+            interestAtMaturity = Boolean.TRUE.equals(interestAtMaturity);
+        }
+
+        /** As before the elapsed-tenure table and tranche bullets (state stored before V24 has neither). */
+        public Options(Frequency frequency, InterestBasis interestBasis, BpiMode bpiMode, BigDecimal stepPercent, Integer stepEvery,
+                       Integer principalEvery, BigDecimal fixedInstalment, List<CustomRow> customRows) {
+            this(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows, null, null);
         }
 
         public static Options of(Frequency frequency) {
             return new Options(frequency, null, null, null, null, null, null, null);
         }
 
+        public Options withRateSteps(List<RateStep> steps) {
+            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows,
+                    steps, interestAtMaturity);
+        }
+
+        public Options withInterestAtMaturity(boolean atMaturity) {
+            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows,
+                    rateSteps, atMaturity);
+        }
+
         public Options withBasis(InterestBasis basis) {
-            return new Options(frequency, basis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows);
+            return new Options(frequency, basis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows, rateSteps, interestAtMaturity);
         }
 
         public Options withBpi(BpiMode mode) {
-            return new Options(frequency, interestBasis, mode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows);
+            return new Options(frequency, interestBasis, mode, stepPercent, stepEvery, principalEvery, fixedInstalment, customRows, rateSteps, interestAtMaturity);
         }
 
         public Options withStep(BigDecimal percent, int every) {
-            return new Options(frequency, interestBasis, bpiMode, percent, every, principalEvery, fixedInstalment, customRows);
+            return new Options(frequency, interestBasis, bpiMode, percent, every, principalEvery, fixedInstalment, customRows, rateSteps, interestAtMaturity);
         }
 
         public Options withPrincipalEvery(int n) {
-            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, n, fixedInstalment, customRows);
+            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, n, fixedInstalment, customRows, rateSteps, interestAtMaturity);
         }
 
         public Options withFixedInstalment(BigDecimal instalment) {
-            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, instalment, customRows);
+            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, instalment, customRows, rateSteps, interestAtMaturity);
         }
 
         public Options withCustomRows(List<CustomRow> rows) {
-            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, rows);
+            return new Options(frequency, interestBasis, bpiMode, stepPercent, stepEvery, principalEvery, fixedInstalment, rows, rateSteps, interestAtMaturity);
         }
 
-        /** Same frequency, nothing else: what a schedule rebuilt mid-life keeps. */
+        /**
+         * Same frequency, nothing else: what a schedule rebuilt mid-life keeps. Rate steps are not kept: a step that
+         * has not been reached is applied on its date by the day-end (LoanAccount), from whatever schedule is then
+         * in force.
+         */
         public Options plain() {
             boolean byPeriod = interestBasis != InterestBasis.DAILY_REDUCING || fixedInstalment != null;
             return new Options(frequency, byPeriod ? InterestBasis.PERIODIC_REDUCING : InterestBasis.DAILY_REDUCING,
-                    null, null, null, principalEvery, null, null);
+                    null, null, null, principalEvery, null, null, null, interestAtMaturity);
         }
     }
 
@@ -157,12 +197,21 @@ public record LoanTerms(BigDecimal principal, BigDecimal ratePercent, int tenorM
         }
         if (options.principalEvery() < 1) throw new IllegalArgumentException("principalEvery must be at least 1");
         if (options.principalEvery() > 1) {
-            if (method != RepaymentMethod.FIXED_PRINCIPAL) throw new IllegalArgumentException("principalEvery applies to FIXED_PRINCIPAL loans only");
+            if (method != RepaymentMethod.FIXED_PRINCIPAL) {
+                throw new IllegalArgumentException("principalEvery applies to FIXED_PRINCIPAL loans only");
+            }
             if (tenorMonths % options.principalEvery() != 0) {
                 throw new IllegalArgumentException("the tenor must be a multiple of principalEvery (" + options.principalEvery() + ")");
             }
         }
         boolean flat = options.interestBasis() == InterestBasis.FLAT;
+        if (options.interestAtMaturity() && method != RepaymentMethod.TRANCHE_BULLET) {
+            throw new IllegalArgumentException("interestAtMaturity applies to TRANCHE_BULLET loans only");
+        }
+        if (method == RepaymentMethod.TRANCHE_BULLET && options.interestBasis() != InterestBasis.DAILY_REDUCING) {
+            throw new IllegalArgumentException(method + " accrues on the daily-reducing basis");
+        }
+        checkRateSteps(options, method, ratePercent, tenorMonths, balloon);
         if (flat || options.fixedInstalment() != null) {
             String what = flat ? "a flat rate" : "a given instalment";
             if (method != RepaymentMethod.EQUATED) throw new IllegalArgumentException(what + " applies to EQUATED loans only");
@@ -201,6 +250,30 @@ public record LoanTerms(BigDecimal principal, BigDecimal ratePercent, int tenorM
             }
         } else if (!options.customRows().isEmpty()) {
             throw new IllegalArgumentException("schedule rows apply to STRUCTURED loans only");
+        }
+    }
+
+    /**
+     * An elapsed-tenure rate table: monthly EQUATED loans on the daily-reducing basis whose instalments are numbered
+     * from 1 (no broken-period row of their own), steps in ascending order from month 1 at the booked rate.
+     */
+    private static void checkRateSteps(Options o, RepaymentMethod method, BigDecimal ratePercent, int tenor, BigDecimal balloon) {
+        List<RateStep> steps = o.rateSteps();
+        if (steps.isEmpty()) return;
+        if (method != RepaymentMethod.EQUATED || o.frequency() != Frequency.MONTHLY || o.interestBasis() != InterestBasis.DAILY_REDUCING
+                || o.fixedInstalment() != null || balloon.signum() > 0) {
+            throw new IllegalArgumentException("an elapsed-tenure rate table applies to monthly EQUATED loans on the daily-reducing basis"
+                    + " without a balloon");
+        }
+        if (o.bpiMode() == BpiMode.SEPARATE_DEMAND || o.bpiMode() == BpiMode.DEDUCT_AT_DISBURSAL) {
+            throw new IllegalArgumentException("an elapsed-tenure rate table needs the broken-period interest in the first instalment");
+        }
+        if (steps.get(0).fromMonth() != 1) throw new IllegalArgumentException("the first rate step starts at month 1");
+        if (steps.get(0).ratePercent().compareTo(ratePercent) != 0) {
+            throw new IllegalArgumentException("the loan's rate must be the first step's rate " + steps.get(0).ratePercent().toPlainString());
+        }
+        for (int i = 1; i < steps.size(); i++) {
+            if (steps.get(i).fromMonth() <= steps.get(i - 1).fromMonth()) throw new IllegalArgumentException("rate steps must be in ascending months");
         }
     }
 

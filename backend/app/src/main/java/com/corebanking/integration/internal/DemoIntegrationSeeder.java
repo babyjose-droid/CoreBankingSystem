@@ -35,7 +35,11 @@ class DemoIntegrationSeeder implements DemoTenantSeeder {
             new String[] {"LOAN_DISBURSED", "100000000002",
                     "Your loan {{loan_no}} of Rs {{amount}} was disbursed on {{date}}. Rs {{net_amount}} is paid to your bank account."},
             new String[] {"PAYMENT_RECEIVED", "100000000003",
-                    "We received Rs {{amount}} towards your loan {{loan_no}} on {{date}}. Thank you."});
+                    "We received Rs {{amount}} towards your loan {{loan_no}} on {{date}}. Thank you."},
+            // RBI 18-Aug-2023: the borrower is told what a floating-rate reset did to the EMI and the tenure
+            new String[] {"RATE_RESET", "100000000004",
+                    "The interest rate of your loan {{loan_no}} is reset from {{old_rate}}% to {{new_rate}}%. EMI Rs {{old_emi}} -> Rs {{new_emi}};"
+                            + " instalments left {{old_tenure}} -> {{new_tenure}}. You may choose a higher EMI or a longer tenure, or prepay."});
 
     private final JdbcTemplate jdbc;
     private final ProviderConfigService providers;

@@ -103,7 +103,7 @@ SELECT pg_temp.expect_fail($q$
       rate_after,maturity_after,interest_before,interest_after,applied_figures,approval_id,made_by,checked_by,business_date)
   VALUES (gen_random_uuid(),'00000000-0000-0000-0000-00000000aa01',3,'00000000-0000-0000-0000-00000000bb04','EMI_CHANGE','{}',1,1,1,1,1,1,
           '2027-01-01',0,0,'{}',NULL,'maker','checker1','2026-10-20') $q$,
-  '23502', 'H8 every amendment links to its approval');
+  '23514', 'H8 every amendment links to its approval (V24: all but the day-end''s rate resets and steps)');
 
 -- Immutability and reversal ------------------------------------------------------------------------------------
 SELECT pg_temp.expect_fail($q$ UPDATE lending.loan_amendment SET emi_after = 1 WHERE seq = 1 $q$, '42501', 'I1 history is immutable');

@@ -227,9 +227,9 @@ SELECT pg_temp.check((SELECT count(*) = 2 AND bool_and(due_date IN ('2026-07-31'
 -- ---------------------------------------------------------------------------------------------------------
 -- R: reports and branch scope
 -- ---------------------------------------------------------------------------------------------------------
-SELECT pg_temp.check((SELECT count(*) FROM reporting.report_definition) = 9
+SELECT pg_temp.check((SELECT count(*) FROM reporting.report_definition) >= 9
                      AND (SELECT bool_and(to_regprocedure(sql_function || '(text,jsonb)') IS NOT NULL) FROM reporting.report_definition),
-                     'R1 nine reports in the catalogue, each with its function');
+                     'R1 the nine reports of V16 (and those added later) in the catalogue, each with its function');
 SELECT pg_temp.check((SELECT bool_and(permission = CASE code WHEN 'BUREAU_CONSUMER' THEN 'bureau:export' ELSE 'report:run' END)
                              AND bool_and(contains_pii = (code = 'BUREAU_CONSUMER')) AND bool_and(all_branches_only = (code = 'BUREAU_CONSUMER'))
                         FROM reporting.report_definition),

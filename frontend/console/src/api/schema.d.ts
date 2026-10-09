@@ -954,9 +954,69 @@ export interface paths {
         put?: never;
         /**
          * Propose a rate of the benchmark from an effective date (maker-checker)
-         * @description Permission benchmark:propose. The history is append-only: the effective date must be later than every rate on record (409 otherwise), and a wrong rate is corrected by a later one. An approved rate is used for new bookings from its effective date. It does not change a running loan: the loan becomes due for a reset on its next reset date, and the reset is a RATE_CHANGE amendment (the borrower chooses between EMI and tenure).
+         * @description Permission benchmark:propose. The history is append-only: the effective date must be later than every rate on record (409 otherwise), and a wrong rate is corrected by a later one. An approved rate is used for new bookings from its effective date. A running loan follows it at its next reset date: the day-end sets the rate to the benchmark rate in force on that date plus the loan's spread (history kind RATE_RESET).
          */
         post: operations["proposeBenchmarkRate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rate-resets/upcoming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Floating-rate loans whose next reset falls within the next n days, with the estimated new EMI
+         * @description Permission loan:view; the caller's branches. The projected rate is the benchmark rate recorded for the reset date (the latest one on record if none is recorded yet) plus the loan's spread; the day-end applies it on the reset date even outside the product band (D-14), which projectedOutsideBand shows. estimatedEmi and estimatedInstalmentsLeft apply that rate to the loan as it is today with the option the reset would use. A frozen account's reset is held (held = true, the reset date may be past) until it is unfrozen. Also as report RATE_RESETS_DUE (without the estimate).
+         */
+        get: operations["listRateResetsUpcoming"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rate-resets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rate resets and elapsed-tenure steps applied at day-end in a period
+         * @description Permission loan:view; the caller's branches. A reset undone by a reversal is left out (the replayed day-end records it again). Also as report RATE_RESETS_APPLIED.
+         */
+        get: operations["listRateResetsApplied"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loans/{id}/rate-reset-preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the borrower's choice of what a floating-rate reset changes (RBI 18-Aug-2023; maker-checker)
+         * @description Permission loan:amend. Maker-checker (entity LOAN_RESET_PREFERENCE); audited when applied (RATE_RESET_PREFERENCE). It changes no figure until the next reset. option null returns the loan to the product's default. At the reset a longer tenure is still refused beyond the product's maximum tenure, for negative amortisation and for a borrower in arrears; the EMI is then raised instead and the history says why. A combination of EMI and tenure, or a switch to a fixed rate, is an amendment (RATE_CHANGE with CHANGE_BOTH, SWITCH_TO_FIXED). 409 when the loan is not on a floating rate.
+         */
+        post: operations["proposeRateResetPreference"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4124,7 +4184,13 @@ export interface components {
             /** @description Floating products: rate = benchmark + spread when the application gives no rate. Needs spread, resetFrequencyMonths and rateType FLOATING. */
             benchmarkCode?: string | null;
             spread?: number | string | null;
+            /** @description Floating products: the day-end resets the rate to benchmark + spread every so many months from disbursal */
             resetFrequencyMonths?: number | null;
+            /**
+             * @description Floating products: what a reset changes unless the borrower chose otherwise (the lender's board policy, RBI 18-Aug-2023; absent = KEEP_TENURE_CHANGE_EMI, product owner decision 10-Oct-2026). Keeping the EMI falls back to a higher EMI when the longer tenure would pass maxTenorMonths or amortise negatively. Only monthly EMI loans can keep the EMI; on other methods the instalments follow the rate.
+             * @enum {string}
+             */
+            resetOption?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI";
             minAmount: number | string;
             maxAmount: number | string;
             /** @description Counted in periods of the frequency (months for MONTHLY) */
@@ -4361,8 +4427,93 @@ export interface components {
             overrideUntil?: string | null;
             benchmarkCode?: string | null;
             spread?: string | null;
-            /** Format: date */
+            /**
+             * Format: date
+             * @description Next floating-rate reset; null for a fixed rate and after a switch to fixed
+             */
             nextRateReset?: string | null;
+            resetFrequencyMonths?: number | null;
+            /** @description Benchmark rate in force on the business date */
+            benchmarkRate?: string | null;
+            /**
+             * @description The borrower's choice; null = resetDefault
+             * @enum {string|null}
+             */
+            resetPreference?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI" | null;
+            /**
+             * @description The product's default, frozen at booking
+             * @enum {string|null}
+             */
+            resetDefault?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI" | null;
+            /** @description The last reset set a rate outside the product band (applied, D-14) */
+            rateOutsideBand?: boolean;
+            /**
+             * Format: date
+             * @description A floating loan switched to a fixed rate
+             */
+            rateFixedSince?: string | null;
+        };
+        RateResetDue: {
+            /** Format: uuid */
+            loanId?: string;
+            loanNo?: string;
+            customerNo?: string;
+            customerName?: string;
+            branch?: string;
+            productCode?: string;
+            /** Format: date */
+            nextRateReset?: string;
+            benchmarkCode?: string;
+            benchmarkRate?: string | null;
+            spread?: string;
+            currentRate?: string;
+            projectedRate?: string | null;
+            projectedOutsideBand?: boolean | null;
+            /** @enum {string} */
+            resetOption?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI";
+            principalOutstanding?: string;
+            currentEmi?: string | null;
+            /** @description A frozen account: the reset waits until the account is unfrozen */
+            held?: boolean;
+            /** @description The EMI after the reset, applied to the loan as it is today */
+            estimatedEmi?: string | null;
+            estimatedInstalmentsLeft?: number | null;
+            /** @description Why there is no estimate, or that a longer tenure falls back to a higher EMI */
+            estimateNote?: string | null;
+        };
+        RateResetApplied: {
+            /** Format: date */
+            effectiveDate?: string;
+            /** Format: uuid */
+            loanId?: string;
+            loanNo?: string;
+            customerNo?: string;
+            branch?: string;
+            productCode?: string;
+            /** @enum {string} */
+            kind?: "RATE_RESET" | "RATE_STEP";
+            benchmarkCode?: string | null;
+            benchmarkRate?: string | null;
+            spread?: string | null;
+            rateBefore?: string;
+            rateAfter?: string;
+            emiBefore?: string;
+            emiAfter?: string;
+            tenureBefore?: number;
+            tenureAfter?: number;
+            /** Format: date */
+            maturityBefore?: string | null;
+            /** Format: date */
+            maturityAfter?: string;
+            requestedOption?: string | null;
+            appliedOption?: string | null;
+            /** @description Why the EMI was raised instead of the tenure */
+            fallbackReason?: string | null;
+            outsideBand?: boolean;
+            /** @description Reset dates covered, space-separated: more than one on a catch-up */
+            resetDates?: string | null;
+            /** Format: date */
+            postedOn?: string;
         };
         LoanSchedule: {
             demands?: {
@@ -4400,7 +4551,7 @@ export interface components {
             id?: string;
             seq?: number;
             /**
-             * @description EOD (a day-end entry) is listed only with dayEnd=true
+             * @description EOD (a day-end entry) is listed only with dayEnd=true. RATE_RESET and RATE_STEP: rate changes made by the day-end (no money moves; not reversible on their own)
              * @example DISBURSEMENT
              * @example REPAYMENT
              * @example PREPAYMENT
@@ -4412,6 +4563,8 @@ export interface components {
              * @example FREEZE
              * @example AMENDMENT
              * @example RESTRUCTURE
+             * @example RATE_RESET
+             * @example RATE_STEP
              * @example EOD
              */
             type?: string;
@@ -4431,17 +4584,20 @@ export interface components {
         };
         /** @description Fields used depend on kind; reason is required when proposing. */
         AmendmentRequest: {
-            /** @enum {string} */
-            kind: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "MATURITY_CHANGE";
+            /**
+             * @description SWITCH_TO_FIXED: a floating-rate loan moves to the fixed newRatePercent (within the band) with rateOption, and is no longer reset
+             * @enum {string}
+             */
+            kind: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "MATURITY_CHANGE" | "SWITCH_TO_FIXED";
             /**
              * Format: date
              * @description MATURITY_CHANGE: the last instalment falls due in this month, on the loan's due day; the EMI is recomputed
              */
             newMaturityDate?: string | null;
-            /** @description RATE_CHANGE: new annual rate, within the product band */
+            /** @description RATE_CHANGE, SWITCH_TO_FIXED: new annual rate, within the product band */
             newRatePercent?: number | string;
             /**
-             * @description RATE_CHANGE: the borrower's choice (RBI 18-Aug-2023)
+             * @description RATE_CHANGE, SWITCH_TO_FIXED: the borrower's choice (RBI 18-Aug-2023)
              * @enum {string}
              */
             rateOption?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI" | "CHANGE_BOTH";
@@ -4552,9 +4708,12 @@ export interface components {
             seq?: number;
             /** Format: uuid */
             txnId?: string;
-            /** @enum {string} */
-            kind?: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "MATURITY_CHANGE" | "SANCTION_CHANGE" | "NPA_OVERRIDE" | "RESTRUCTURE";
-            /** @description The request as proposed */
+            /**
+             * @description RATE_RESET (floating-rate reset) and RATE_STEP (elapsed-tenure step) are made by the day-end: no approval, no checker
+             * @enum {string}
+             */
+            kind?: "RATE_CHANGE" | "TENURE_CHANGE" | "EMI_CHANGE" | "DUE_DAY_CHANGE" | "MATURITY_CHANGE" | "SANCTION_CHANGE" | "NPA_OVERRIDE" | "RESTRUCTURE" | "SWITCH_TO_FIXED" | "RATE_RESET" | "RATE_STEP";
+            /** @description The request as proposed; for RATE_RESET / RATE_STEP: benchmark, spread, options requested and applied, fallback reason, outsideBand, reset dates */
             parameters?: {
                 [key: string]: unknown;
             };
@@ -4581,9 +4740,9 @@ export interface components {
             };
             differsFromProposal?: boolean;
             /** Format: uuid */
-            approvalId?: string;
+            approvalId?: string | null;
             madeBy?: string;
-            checkedBy?: string;
+            checkedBy?: string | null;
             /** Format: date */
             businessDate?: string;
             reason?: string | null;
@@ -6677,6 +6836,80 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["BenchmarkRateInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listRateResetsUpcoming: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description By reset date */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateResetDue"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listRateResetsApplied: {
+        parameters: {
+            query?: {
+                /** @description Default: first day of the business month */
+                from?: string;
+                /** @description Default: the business date */
+                to?: string;
+                outsideBandOnly?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description By effective date */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateResetApplied"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeRateResetPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string|null} */
+                    option?: "KEEP_EMI_CHANGE_TENURE" | "KEEP_TENURE_CHANGE_EMI" | null;
+                    /** @description How the borrower gave the instruction */
+                    reason: string;
+                };
             };
         };
         responses: {

@@ -102,8 +102,19 @@ public class LoanService {
     record Resolved(ProductService.Product product, LoanAccount.Params params, LoanTerms terms, BigDecimal rate,
                     String rateExplanation, String supplierState, String recipientState, ScheduleBuilder.Plan plan) {}
 
-    /** The figures of an application that do not depend on the customer: tenor, rate and terms on the product. */
-    private record Priced(LoanTerms terms, ScheduleBuilder.Plan plan, BigDecimal rate, String explanation) {}
+    /**
+     * The figures of an application that do not depend on the customer: tenor, rate and terms on the product.
+     * {@code spread}: over the benchmark, for a floating-rate product (null otherwise).
+     */
+    private record Priced(LoanTerms terms, ScheduleBuilder.Plan plan, BigDecimal rate, String explanation, BigDecimal spread) {}
+
+    /** The floating-rate link frozen into a new loan: reset at day-end every resetFrequencyMonths (null for a fixed rate). */
+    private static LoanAccount.FloatingRate floating(ProductService.Product product, BigDecimal spread) {
+        ProductService.Product p = product.withDefaults();
+        if (p.benchmarkCode() == null || spread == null) return null;
+        return new LoanAccount.FloatingRate(p.benchmarkCode(), spread, p.resetFrequencyMonths(),
+                Amendment.RateResetOption.valueOf(p.resetOption()), p.maxTenorMonths(), p.minRate(), p.maxRate());
+    }
 
     /**
      * Terms and rate of an application on a product. The rate comes, in this order, from the agreed instalment, the
@@ -176,7 +187,7 @@ public class LoanService {
             throw ApiException.invalid("rate " + plain(rate) + "% must be within the product band " + p.minRate().stripTrailingZeros().toPlainString()
                     + "% to " + p.maxRate().stripTrailingZeros().toPlainString() + "%");
         }
-        return new Priced(terms, plan, rate, explanation);
+        return new Priced(terms, plan, rate, explanation, p.benchmarkCode() == null ? null : p.spread());
     }
 
     private Resolved resolve(Application a, String loanNo) {
@@ -199,7 +210,7 @@ public class LoanService {
         LocalDate disbursal = a.disbursalDate() == null ? days.current().businessDate() : a.disbursalDate();
         Priced priced = price(p, a, disbursal);
         LoanAccount.Params params = products.params(p, loanNo, branch, supplier, recipient, priced.plan().accrualRatePercent(),
-                a.securedPortion() == null ? BigDecimal.ZERO : a.securedPortion());
+                a.securedPortion() == null ? BigDecimal.ZERO : a.securedPortion()).withFloating(floating(p, priced.spread()));
         return new Resolved(p, params, priced.terms(), priced.rate(), priced.explanation(), supplier, recipient, priced.plan());
     }
 
@@ -241,7 +252,8 @@ public class LoanService {
                 q.rate() == null && !derived && !priced ? p.minRate() : q.rate(), disbursal, q.firstDueDate(), q.moratoriumMonths(),
                 q.balloon(), null, null, null, q.instalment(), q.maturityAmount(), rows);
         Priced pr = price(p, a, disbursal);
-        LoanAccount.Params params = products.params(p, "PREVIEW", "PREVIEW", "00", "00", pr.plan().accrualRatePercent(), BigDecimal.ZERO);
+        LoanAccount.Params params = products.params(p, "PREVIEW", "PREVIEW", "00", "00", pr.plan().accrualRatePercent(), BigDecimal.ZERO)
+                .withFloating(floating(p, pr.spread()));
         Map<String, Object> m = kfs(new Resolved(p, params, pr.terms(), pr.rate(), pr.explanation(), "00", "00", pr.plan()));
         m.put("placeOfSupply", null);
         m.put("draft", true);
@@ -694,7 +706,7 @@ public class LoanService {
         if (l.account() == null) throw ApiException.conflict("loan is " + l.status() + ": there is no disbursement to reverse");
         Integer others = jdbc.queryForObject("""
                 SELECT count(*) FROM lending.loan_txn
-                 WHERE loan_id = ? AND reversed_by IS NULL AND txn_type NOT IN ('DISBURSEMENT','EOD','REVERSAL')
+                 WHERE loan_id = ? AND reversed_by IS NULL AND txn_type NOT IN ('DISBURSEMENT','EOD','REVERSAL','RATE_RESET','RATE_STEP')
                 """, Integer.class, loanId);
         if (others != null && others > 0) {
             throw ApiException.conflict("the loan has " + others + " transaction(s) after the disbursement; the disbursement can no"
@@ -882,11 +894,15 @@ public class LoanService {
         if (List.of("DISBURSEMENT", "REVERSAL", "EOD").contains(t.get("txn_type"))) {
             throw ApiException.conflict(t.get("txn_type") + " cannot be reversed; use cancellation for a disbursement");
         }
+        if (List.of("RATE_RESET", "RATE_STEP").contains(t.get("txn_type"))) {
+            throw ApiException.conflict("a scheduled rate change follows the contract and is not reversed on its own: the day-end that"
+                    + " made it would make it again; a reversal of an earlier transaction replays it");
+        }
         if (restructuredSince(jdbc, loanId, t.get("seq"))) throw ApiException.conflict(RESTRUCTURE_NOT_REVERSIBLE);
         if (standsSince(jdbc, loanId, t.get("seq"))) throw ApiException.conflict(STANDING_NOT_REVERSIBLE);
         Integer later = jdbc.queryForObject("""
                 SELECT count(*) FROM lending.loan_txn WHERE loan_id = ? AND seq > ? AND reversed_by IS NULL
-                   AND txn_type NOT IN ('EOD','REVERSAL')
+                   AND txn_type NOT IN ('EOD','REVERSAL','RATE_RESET','RATE_STEP')
                 """, Integer.class, loanId, t.get("seq"));
         String loanNo = jdbc.queryForObject("SELECT loan_no FROM lending.loan_account WHERE id = ?", String.class, loanId);
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -1068,7 +1084,7 @@ public class LoanService {
         recordHistory(new History(loanId, txn, a.kind().name(), requestMap(req), e.emiBefore(), e.emiAfter(), e.remainingBefore(),
                 e.remainingAfter(), e.rateBefore(), e.rateAfter(), e.maturityBefore(), e.maturityAfter(), e.interestBefore(),
                 e.interestAfter(), proposed, applied, differs, r, bd, req.reason()));
-        if (a.kind() == Amendment.Kind.RATE_CHANGE) {
+        if (a.kind() == Amendment.Kind.RATE_CHANGE || a.kind() == Amendment.Kind.SWITCH_TO_FIXED) {
             // RBI 18-Aug-2023: a reset of the rate, and what it does to EMI and tenure, is communicated to the borrower
             events.rateReset(jdbc, loanId, bd, applied, req.rateOption());
         }
@@ -1394,6 +1410,154 @@ public class LoanService {
         return l.loanNo();
     }
 
+    static final String RESET_PREFERENCE = "LOAN_RESET_PREFERENCE";
+
+    /**
+     * Proposes the borrower's standing choice for what a floating-rate reset changes (RBI 18-Aug-2023: a higher EMI,
+     * a longer tenure, or a combination; null = the product's default, the lender's board policy). Through
+     * maker-checker (entity LOAN_RESET_PREFERENCE): it changes what the next reset does to the borrower's EMI or
+     * tenure. At the reset the engine still refuses a tenure past the product's maximum or a negative amortisation
+     * and raises the EMI instead. A combination is agreed reset by reset as a RATE_CHANGE amendment.
+     */
+    @Transactional
+    public ApprovalRequest proposeResetPreference(UUID loanId, String option, String reason) {
+        if (reason == null || reason.isBlank()) throw ApiException.invalid("a reason is required: how the borrower gave the instruction");
+        if (option != null && !List.of("KEEP_EMI_CHANGE_TENURE", "KEEP_TENURE_CHANGE_EMI").contains(option)) {
+            throw ApiException.invalid("option must be KEEP_TENURE_CHANGE_EMI, KEEP_EMI_CHANGE_TENURE or null (the product's default)");
+        }
+        Map<String, Object> l = resetPreferenceTarget(loanId);
+        if (java.util.Objects.equals(option, l.get("rate_reset_preference"))) throw ApiException.conflict("the loan already has this choice");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("loanId", loanId.toString());
+        payload.put("loanNo", l.get("loan_no"));
+        payload.put("option", option);
+        payload.put("reason", reason.trim());
+        Map<String, Object> current = new LinkedHashMap<>();
+        current.put("option", l.get("rate_reset_preference"));
+        return approvals.propose(RESET_PREFERENCE, "UPDATE", (String) l.get("loan_no"), payload, current, null,
+                (String) l.get("branch_code"), null);
+    }
+
+    private Map<String, Object> resetPreferenceTarget(UUID loanId) {
+        Map<String, Object> l = jdbc.queryForMap("""
+                SELECT loan_no, branch_code, status, benchmark_code, rate_fixed_since, rate_reset_preference
+                  FROM lending.loan_account WHERE id = ? FOR UPDATE
+                """, loanId);
+        if (l.get("benchmark_code") == null || l.get("rate_fixed_since") != null) {
+            throw ApiException.conflict("the loan is not on a floating rate: there is no reset to choose for");
+        }
+        if (!List.of("SANCTIONED", "ACTIVE", "FROZEN").contains(l.get("status"))) throw ApiException.conflict("loan is " + l.get("status"));
+        return l;
+    }
+
+    /** Not private: the applier holds this service's lazy proxy (a private method would run on the proxy itself). */
+    String applyResetPreference(ApprovalRequest r) {
+        UUID loanId = UUID.fromString(String.valueOf(r.payload().get("loanId")));
+        Map<String, Object> l = resetPreferenceTarget(loanId);
+        Object option = r.payload().get("option");
+        jdbc.update("UPDATE lending.loan_account SET rate_reset_preference = ?, version = version + 1 WHERE id = ?", option, loanId);
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("from", String.valueOf(l.get("rate_reset_preference")));
+        detail.put("to", String.valueOf(option));
+        detail.put("approvalId", r.id().toString());
+        audit.record(CurrentUser.username(), "RATE_RESET_PREFERENCE", "LOAN", (String) l.get("loan_no"), detail);
+        return (String) l.get("loan_no");
+    }
+
+    @Service
+    static class ResetPreferenceApplier implements ApprovalApplier {
+        private final LoanService loans;
+
+        ResetPreferenceApplier(@org.springframework.context.annotation.Lazy LoanService loans) {
+            this.loans = loans;
+        }
+
+        @Override public String entityType() { return RESET_PREFERENCE; }
+
+        @Override public String apply(ApprovalRequest r) {
+            return loans.applyResetPreference(r);
+        }
+    }
+
+    /**
+     * Floating-rate loans whose next reset falls within {@code days} days (or has passed and is held: a frozen account),
+     * in the caller's branches, with the rate the reset would set and an estimate of the new EMI and instalments: the
+     * reset applied to the loan as it is today with the option it would use (as the engine, a longer tenure that is not
+     * allowed falls back to a higher EMI). The estimate moves with payments and benchmark rates recorded before the date.
+     */
+    public List<Map<String, Object>> resetsUpcoming(int days) {
+        if (days < 0 || days > 366) throw ApiException.invalid("days must be 0..366");
+        LocalDate bd = this.days.current().businessDate();
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT loan_id AS "loanId", loan_no AS "loanNo", customer_no AS "customerNo", customer_name AS "customerName",
+                       branch_code AS branch, product_code AS "productCode", next_rate_reset::text AS "nextRateReset",
+                       benchmark_code AS "benchmarkCode", benchmark_rate::text AS "benchmarkRate", spread::text AS spread,
+                       current_rate::text AS "currentRate", projected_rate::text AS "projectedRate",
+                       projected_outside_band AS "projectedOutsideBand", reset_option AS "resetOption",
+                       principal_outstanding::text AS "principalOutstanding", current_emi::text AS "currentEmi"
+                  FROM reporting.rpt_rate_resets_due(?, jsonb_build_object('days', ?::text))
+                """, scope.user(), String.valueOf(days));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>(r);
+            LoanStore.Loaded l = store.read(jdbc, (UUID) r.get("loanId"));
+            LoanAccount a = l.account();
+            m.put("held", a != null && a.status() == LoanAccount.Status.FROZEN);
+            m.put("estimatedEmi", null);
+            m.put("estimatedInstalmentsLeft", null);
+            m.put("estimateNote", null);
+            Object projected = r.get("projectedRate");
+            if (a == null || projected == null) {
+                m.put("estimateNote", "no benchmark rate recorded yet");
+            } else {
+                Amendment.RateResetOption option = Amendment.RateResetOption.valueOf((String) r.get("resetOption"));
+                Integer maxTenure = a.params().floating() == null ? null : a.params().floating().maxTenureMonths();
+                BigDecimal rate = new BigDecimal((String) projected);
+                try {
+                    Amendment.Effect e;
+                    try {
+                        e = a.previewAmendment(Amendment.rate(rate, option, maxTenure), bd);
+                    } catch (IllegalArgumentException | IllegalStateException ex) {
+                        if (option == Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI) throw ex;
+                        e = a.previewAmendment(Amendment.rate(rate, Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, maxTenure), bd);
+                        m.put("estimateNote", "a longer tenure is not possible: the EMI changes instead");
+                    }
+                    m.put("estimatedEmi", plain(e.emiAfter()));
+                    m.put("estimatedInstalmentsLeft", e.remainingAfter());
+                } catch (IllegalArgumentException | IllegalStateException ex) {
+                    m.put("estimateNote", "no estimate: the loan is not on a monthly EMI");
+                }
+            }
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** Rate resets and elapsed-tenure steps applied in the period (default: this month), in the caller's branches. */
+    public List<Map<String, Object>> resetsApplied(String from, String to, boolean outsideBandOnly) {
+        LocalDate bd = days.current().businessDate();
+        LocalDate f;
+        LocalDate t;
+        try {
+            f = from == null || from.isBlank() ? bd.withDayOfMonth(1) : LocalDate.parse(from);
+            t = to == null || to.isBlank() ? bd : LocalDate.parse(to);
+        } catch (java.time.format.DateTimeParseException e) {
+            throw ApiException.invalid("from and to are dates as YYYY-MM-DD");
+        }
+        if (t.isBefore(f)) throw ApiException.invalid("'to' cannot be before 'from'");
+        return jdbc.queryForList("""
+                SELECT effective_date::text AS "effectiveDate", loan_id AS "loanId", loan_no AS "loanNo", customer_no AS "customerNo",
+                       branch_code AS branch, product_code AS "productCode", kind, benchmark_code AS "benchmarkCode",
+                       benchmark_rate::text AS "benchmarkRate", spread::text AS spread, rate_before::text AS "rateBefore",
+                       rate_after::text AS "rateAfter", emi_before::text AS "emiBefore", emi_after::text AS "emiAfter",
+                       tenure_before AS "tenureBefore", tenure_after AS "tenureAfter", maturity_before::text AS "maturityBefore",
+                       maturity_after::text AS "maturityAfter", requested_option AS "requestedOption", applied_option AS "appliedOption",
+                       fallback_reason AS "fallbackReason", outside_band AS "outsideBand", reset_dates AS "resetDates",
+                       posted_on::text AS "postedOn"
+                  FROM reporting.rpt_rate_resets_applied(?, jsonb_build_object('from', ?::text, 'to', ?::text, 'outsideBandOnly', ?::text))
+                """, scope.user(), f.toString(), t.toString(), String.valueOf(outsideBandOnly));
+    }
+
     /** Amendment and restructure history, newest first. */
     public List<Map<String, Object>> amendments(UUID loanId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
@@ -1440,7 +1604,7 @@ public class LoanService {
                 h.differs(), h.approval().id(), h.approval().maker(), CurrentUser.username(), h.businessDate(), h.reason());
     }
 
-    private static Map<String, Object> figures(Amendment.Effect e) {
+    static Map<String, Object> figures(Amendment.Effect e) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("rateBefore", plain(e.rateBefore()));
         m.put("rateAfter", plain(e.rateAfter()));
@@ -1564,8 +1728,17 @@ public class LoanService {
                        l.frequency, coalesce(l.disbursed_amount, 0)::text AS "disbursedAmount", l.undrawn_amount::text AS "undrawnAmount",
                        l.multiple_disbursements AS "multipleDisbursements", l.pre_emi AS "preEmi", l.top_up_allowed AS "topUpAllowed",
                        l.class_floor AS "overrideClass", l.class_floor_until::text AS "overrideUntil",
-                       l.benchmark_code AS "benchmarkCode", l.spread::text AS spread, l.next_rate_reset::text AS "nextRateReset"
+                       l.benchmark_code AS "benchmarkCode", l.spread::text AS spread, l.next_rate_reset::text AS "nextRateReset",
+                       l.reset_frequency_months AS "resetFrequencyMonths",
+                       CASE WHEN l.benchmark_code IS NOT NULL
+                            THEN lending.benchmark_rate_on(l.benchmark_code, (SELECT business_date FROM platform.business_day WHERE id = 1))::text
+                       END AS "benchmarkRate",
+                       l.rate_reset_preference AS "resetPreference",
+                       CASE WHEN l.benchmark_code IS NOT NULL
+                            THEN coalesce(l.product_snapshot->'floating'->>'defaultOption', p.rate_reset_option) END AS "resetDefault",
+                       l.rate_outside_band AS "rateOutsideBand", l.rate_fixed_since::text AS "rateFixedSince"
                   FROM lending.loan_account l JOIN customer.customer c ON c.id = l.customer_id
+                  JOIN lending.loan_product p ON p.code = l.product_code
                  WHERE l.id = ?
                 """, id);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + id);
@@ -1756,13 +1929,16 @@ public class LoanService {
         private final PostingService posting;
         private final BusinessDays days;
         private final Json json;
+        private final RateChangeRecorder rateChanges;
 
-        ReversalApplier(JdbcTemplate jdbc, LoanStore store, PostingService posting, BusinessDays days, Json json) {
+        ReversalApplier(JdbcTemplate jdbc, LoanStore store, PostingService posting, BusinessDays days, Json json,
+                        RateChangeRecorder rateChanges) {
             this.jdbc = jdbc;
             this.store = store;
             this.posting = posting;
             this.days = days;
             this.json = json;
+            this.rateChanges = rateChanges;
         }
 
         @Override public String entityType() { return "LOAN_REVERSAL"; }
@@ -1812,6 +1988,9 @@ public class LoanService {
                 // an amendment undone by the state restore is marked reversed in its history
                 jdbc.update("UPDATE lending.loan_amendment SET reversed_by = ? WHERE txn_id = ? AND reversed_by IS NULL", reversalId, t.get("id"));
             }
+            // rate resets and steps undone with them were made again by the replayed day-ends: recorded anew, after
+            // the reversal (the state before them is the restored one)
+            rateChanges.record(jdbc, loanId, a, json.read((String) target.get("sb"), LoanAccount.Snapshot.class), bd, r.maker(), true);
             return String.valueOf(r.payload().get("loanNo"));
         }
     }

@@ -24,6 +24,9 @@ import type {
   LoanSummary,
   LoanAmendment,
   LoanTxn,
+  RateResetApplied,
+  RateResetDue,
+  RateResetOption,
   Money,
   PreclosureQuote,
   RestructureSimulation,
@@ -392,5 +395,33 @@ export function useProposeNpaRelease(id: string) {
   return useMutation({
     mutationFn: (reason: string) => unwrap<Approval>(api.POST('/api/v1/loans/{id}/npa-override/release', { params: { path: { id } }, body: { reason } }) as never),
     onSuccess: after,
+  });
+}
+
+// ---- floating-rate reset (V24)
+/** Proposes the borrower's reset choice (maker-checker); it applies when a checker approves it. */
+export function useProposeResetPreference(id: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: (b: { option: RateResetOption | null; reason: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/loans/{id}/rate-reset-preference', { params: { path: { id } }, body: b }) as never),
+    onSuccess: after,
+  });
+}
+
+export function useRateResetsUpcoming(days: number) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['rate-resets', 'upcoming', days],
+    queryFn: () => unwrap<RateResetDue[]>(api.GET('/api/v1/rate-resets/upcoming', { params: { query: { days } } })),
+  });
+}
+
+export function useRateResetsApplied(q: { from?: string; to?: string; outsideBandOnly?: boolean }) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['rate-resets', 'applied', q],
+    queryFn: () => unwrap<RateResetApplied[]>(api.GET('/api/v1/rate-resets', { params: { query: q } })),
   });
 }

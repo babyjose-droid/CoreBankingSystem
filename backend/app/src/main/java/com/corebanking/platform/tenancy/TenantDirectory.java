@@ -29,6 +29,7 @@ public class TenantDirectory {
             Map.entry("/api/v1/loan-products/", "LENDING"),
             Map.entry("/api/v1/loan-product-templates/", "LENDING"),
             Map.entry("/api/v1/deferred-receipts/", "LENDING"),
+            Map.entry("/api/v1/rate-resets/", "LENDING"),
             Map.entry("/api/v1/casa/", "CASA"),
             Map.entry("/api/v1/deposits/", "TD"),
             Map.entry("/api/v1/collections/", "COLLECTIONS"),

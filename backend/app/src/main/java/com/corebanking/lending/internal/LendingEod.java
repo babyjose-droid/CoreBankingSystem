@@ -20,7 +20,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Lending end-of-day (US-076 – US-078, US-081, US-042):
  * <ol>
- *   <li><b>Loan day-end</b> — per loan, in its own transaction: raise due demands, accrue interest, adjust advances,
+ *   <li><b>Loan day-end</b> — per loan, in its own transaction: raise due demands, reset a floating rate whose reset
+ *       date has come (benchmark + spread) and apply elapsed-tenure rate steps, accrue interest, adjust advances,
  *       charge penal on overdue amounts, classify (SMA/NPA, suspense), provision. One failing loan is an EOD
  *       exception, not a failed EOD; above 5% failures the step fails (something systemic).</li>
  *   <li><b>Borrower-level NPA</b> — every loan of a borrower with an NPA loan becomes NPA.</li>
@@ -34,10 +35,12 @@ class LendingEod implements EodStepProvider {
     private static final String USER = "eod";
     private final LoanStore store;
     private final LoanEventPublisher events;
+    private final RateChangeRecorder rateChanges;
 
-    LendingEod(LoanStore store, LoanEventPublisher events) {
+    LendingEod(LoanStore store, LoanEventPublisher events, RateChangeRecorder rateChanges) {
         this.store = store;
         this.events = events;
+        this.rateChanges = rateChanges;
     }
 
     @Override
@@ -80,7 +83,7 @@ class LendingEod implements EodStepProvider {
             private Provisioning.Rates rates;
             private LocalDate through;
 
-            @Override public String name() { return "Loan day-end (demands, accrual, penal, DPD/NPA, provisioning)"; }
+            @Override public String name() { return "Loan day-end (demands, rate resets, accrual, penal, DPD/NPA, provisioning)"; }
 
             @Override public List<String> items(EodEngine.Context ctx) {
                 rates = LoanService.rates(jdbc);
@@ -110,6 +113,8 @@ class LendingEod implements EodStepProvider {
                         if (!r.lots().isEmpty()) {
                             store.recordTxn(jdbc, id, "EOD", d, ctx.businessDate(), null, r.lots(), before, r.summary(), null, USER);
                         }
+                        // a reset that cannot be made (no benchmark rate) has thrown: the loan is an EOD exception
+                        rateChanges.record(jdbc, id, a, before, ctx.businessDate(), USER, false);
                         store.recordDpd(jdbc, id, d, a);
                         last = d;
                         any = true;

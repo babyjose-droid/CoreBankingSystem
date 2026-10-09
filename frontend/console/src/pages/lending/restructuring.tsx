@@ -14,8 +14,15 @@ const KIND_LABEL: Record<AmendmentKind, string> = {
   EMI_CHANGE: 'EMI change',
   DUE_DAY_CHANGE: 'Due-day change',
   MATURITY_CHANGE: 'Maturity date change',
+  SWITCH_TO_FIXED: 'Switch to a fixed rate',
 };
-const OTHER_KIND_LABEL: Record<string, string> = { RESTRUCTURE: 'Restructure', SANCTION_CHANGE: 'Sanction change', NPA_OVERRIDE: 'NPA override' };
+const OTHER_KIND_LABEL: Record<string, string> = {
+  RESTRUCTURE: 'Restructure',
+  SANCTION_CHANGE: 'Sanction change',
+  NPA_OVERRIDE: 'NPA override',
+  RATE_RESET: 'Rate reset (day-end)',
+  RATE_STEP: 'Rate step (day-end)',
+};
 export const amendmentKindLabel = (k: string | undefined) => OTHER_KIND_LABEL[k ?? ''] ?? KIND_LABEL[k as AmendmentKind] ?? k ?? '';
 
 const RATE_OPTIONS: Array<{ value: RateOption; label: string }> = [
@@ -62,9 +69,13 @@ export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void
   const propose = useProposeAmendment(loan.id!);
   const toast = useProposalToast();
 
-  const both = kind === 'RATE_CHANGE' && f.rateOption === 'CHANGE_BOTH';
+  // a switch to fixed is a rate change that also ends the floating-rate resets
+  const rateKind = kind === 'RATE_CHANGE' || kind === 'SWITCH_TO_FIXED';
+  const floating = !!loan.benchmarkCode && !loan.rateFixedSince;
+  const kinds = (Object.keys(KIND_LABEL) as AmendmentKind[]).filter((k) => k !== 'SWITCH_TO_FIXED' || floating);
+  const both = rateKind && f.rateOption === 'CHANGE_BOTH';
   const errs: Record<string, string | null> = {
-    rate: kind === 'RATE_CHANGE' && !isRate(f.rate) ? 'Enter the new rate' : null,
+    rate: rateKind && !isRate(f.rate) ? 'Enter the new rate' : null,
     instalments: (kind === 'TENURE_CHANGE' || (both && !f.emi)) && !isInt(f.instalments, 1, 480) ? (both ? 'Instalments (1-480) or a new EMI' : '1 to 480') : null,
     emi: (kind === 'EMI_CHANGE' || (both && !f.instalments)) && !moneyInput(f.emi) ? (both ? 'A new EMI or the instalments' : 'Enter the new EMI') : null,
     dueDay: kind === 'DUE_DAY_CHANGE' && !isInt(f.dueDay, 1, 31) ? '1 to 31 (31 = month end)' : null,
@@ -73,7 +84,7 @@ export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void
   const valid = Object.values(errs).every((e) => !e);
   const request: AmendmentRequest = {
     kind,
-    ...(kind === 'RATE_CHANGE' ? { newRatePercent: f.rate.trim(), rateOption: f.rateOption } : {}),
+    ...(rateKind ? { newRatePercent: f.rate.trim(), rateOption: f.rateOption } : {}),
     ...((kind === 'TENURE_CHANGE' || (both && f.instalments)) ? { remainingInstalments: Number(f.instalments) } : {}),
     ...((kind === 'EMI_CHANGE' || (both && !f.instalments && f.emi)) ? { newEmi: moneyInput(f.emi) ?? f.emi } : {}),
     ...(kind === 'DUE_DAY_CHANGE' ? { newDueDay: Number(f.dueDay) } : {}),
@@ -126,10 +137,18 @@ export function AmendDialog({ loan, onClose }: { loan: Loan; onClose: () => void
     >
       <div className="stack">
         <div className="form-grid">
-          <Select label="Change" value={kind} onChange={(e) => setKind(e.target.value as AmendmentKind)} options={(Object.keys(KIND_LABEL) as AmendmentKind[]).map((k) => ({ value: k, label: KIND_LABEL[k] }))} />
-          {kind === 'RATE_CHANGE' && (
+          <Select label="Change" value={kind} onChange={(e) => setKind(e.target.value as AmendmentKind)} options={kinds.map((k) => ({ value: k, label: KIND_LABEL[k] }))} />
+          {rateKind && (
             <>
-              <Input label="New rate % p.a." required numeric value={f.rate} onChange={(e) => set({ rate: e.target.value })} hint={`Now ${pct(loan.currentRate ?? loan.rate)}`} error={err('rate')} />
+              <Input
+                label={kind === 'SWITCH_TO_FIXED' ? 'Fixed rate % p.a.' : 'New rate % p.a.'}
+                required
+                numeric
+                value={f.rate}
+                onChange={(e) => set({ rate: e.target.value })}
+                hint={kind === 'SWITCH_TO_FIXED' ? `Now ${pct(loan.currentRate ?? loan.rate)} floating; within the product band. No more resets after the switch.` : `Now ${pct(loan.currentRate ?? loan.rate)}`}
+                error={err('rate')}
+              />
               <Select label="Borrower's choice" value={f.rateOption} onChange={(e) => set({ rateOption: e.target.value as RateOption })} options={RATE_OPTIONS} hint="RBI 18-Aug-2023: the borrower chooses" />
             </>
           )}

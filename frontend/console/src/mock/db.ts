@@ -100,6 +100,7 @@ export type ApprovalPayload =
   | { kind: 'LOAN_PRODUCT'; product: LoanProduct }
   | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null; amount?: number | null }
   | { kind: 'LOAN_SANCTION_CHANGE'; loanId: string; newAmount: number; reason: string; figures: Record<string, unknown> }
+  | { kind: 'LOAN_RESET_PREFERENCE'; loanId: string; option: 'KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI' | null; reason: string }
   | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
   | { kind: 'LOAN_REVERSAL'; loanId: string; txnId: string; reason: string }
@@ -270,6 +271,11 @@ export interface StoredLoan {
   parties: StoredLoanParty[];
   /** Derived state as of the last refresh (after every change and every day-end). */
   state: LoanState;
+  /** Floating rate (V24): next reset once one has run, the borrower's choice, the D-14 flag, a switch to fixed. */
+  nextRateReset?: string | null;
+  resetPreference?: 'KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI' | null;
+  rateOutsideBand?: boolean;
+  rateFixedSince?: string | null;
 }
 
 import type { IntegrationDb } from './integrations';

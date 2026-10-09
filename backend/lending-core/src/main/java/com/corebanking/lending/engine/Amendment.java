@@ -28,7 +28,11 @@ import java.util.Objects;
 public record Amendment(Kind kind, BigDecimal newRatePercent, RateResetOption rateOption, Integer remainingInstalments,
                         BigDecimal newEmi, Integer newDueDay, Integer maxTenureMonths, String reason, LocalDate newMaturityDate) {
 
-    public enum Kind { RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, MATURITY_CHANGE }
+    /**
+     * SWITCH_TO_FIXED: a floating-rate loan moves to a fixed rate (RBI 18-Aug-2023: the borrower may switch at a reset);
+     * like RATE_CHANGE, and the loan's rate is no longer reset to its benchmark.
+     */
+    public enum Kind { RATE_CHANGE, TENURE_CHANGE, EMI_CHANGE, DUE_DAY_CHANGE, MATURITY_CHANGE, SWITCH_TO_FIXED }
 
     /** RBI 18-Aug-2023: the options offered to the borrower on a rate reset. */
     public enum RateResetOption { KEEP_EMI_CHANGE_TENURE, KEEP_TENURE_CHANGE_EMI, CHANGE_BOTH }
@@ -39,7 +43,7 @@ public record Amendment(Kind kind, BigDecimal newRatePercent, RateResetOption ra
             throw new IllegalArgumentException("maxTenureMonths must be 1..480");
         }
         switch (kind) {
-            case RATE_CHANGE -> {
+            case RATE_CHANGE, SWITCH_TO_FIXED -> {
                 if (newRatePercent == null) throw new IllegalArgumentException("newRatePercent is required for a rate change");
                 if (newRatePercent.signum() < 0 || newRatePercent.compareTo(BigDecimal.valueOf(100)) > 0) {
                     throw new IllegalArgumentException("newRatePercent must be 0..100");

@@ -129,4 +129,39 @@ class LoanStateJsonTest {
         assertEquals(r1.summary(), r2.summary());
         assertEquals(a.snapshot(), b.snapshot());
     }
+
+    /**
+     * V24: the floating-rate link in the parameters and the reset state, round trip; and parameters and state of a
+     * floating loan booked before V24 as the migration fills them in (product_snapshot.floating, state.rateReset).
+     */
+    @Test
+    @SuppressWarnings("unchecked")      // JSON objects read as plain maps to stand in for V24's rewrite
+    void floating_rate_link_and_reset_state_round_trip_and_load_as_migrated() {
+        LocalDate open = LocalDate.of(2026, 6, 30);
+        var floating = new LoanAccount.FloatingRate("REPO", new BigDecimal("3"), 3, Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, 36,
+                new BigDecimal("8"), new BigDecimal("12"));
+        var params = new LoanAccount.Params("10010000000019", "HO", "32", "32", new BigDecimal("9"), null, null, null, null, null, 3,
+                BigDecimal.ZERO, null, List.of(), floating);
+        assertEquals(params, mapper.readValue(mapper.writeValueAsString(params), LoanAccount.Params.class));
+        LoanAccount.BenchmarkRates repo = (code, date) -> date.isBefore(LocalDate.of(2026, 9, 1)) ? new BigDecimal("6") : new BigDecimal("6.5");
+        LoanAccount a = LoanAccount.disburse(params, LoanTerms.equated(new BigDecimal("200000"), new BigDecimal("9"), 24, open), open)
+                .account().useBenchmarks(repo);
+        for (LocalDate d = open; !d.isAfter(LocalDate.of(2026, 10, 2)); d = d.plusDays(1)) a.endOfDay(d, Provisioning.starter());
+        assertEquals(new BigDecimal("9.5"), a.ratePercent());
+        LoanAccount.Snapshot s2 = mapper.readValue(mapper.writeValueAsString(a.snapshot()), LoanAccount.Snapshot.class);
+        assertEquals(a.snapshot(), s2);
+        assertEquals(LocalDate.of(2026, 12, 30), LoanAccount.restore(params, s2).nextRateReset());
+
+        // as V24 writes them: the floating object built from the loan's columns, rateReset with the next date as text
+        java.util.Map<String, Object> p = mapper.readValue(mapper.writeValueAsString(params.withFloating(null)), java.util.Map.class);
+        p.put("floating", mapper.readValue("{\"benchmarkCode\": \"REPO\", \"spread\": 3.0000, \"resetMonths\": 3, \"defaultOption\":"
+                + " \"KEEP_EMI_CHANGE_TENURE\", \"maxTenureMonths\": 60, \"minRate\": 8.0000, \"maxRate\": 12.0000}", java.util.Map.class));
+        LoanAccount.Params migrated = mapper.readValue(mapper.writeValueAsString(p), LoanAccount.Params.class);
+        assertEquals("REPO", migrated.floating().benchmarkCode());
+        java.util.Map<String, Object> st = mapper.readValue(mapper.writeValueAsString(a.snapshot()), java.util.Map.class);
+        st.put("rateReset", mapper.readValue("{\"next\": \"2026-09-30\", \"fixedSince\": null, \"outsideBand\": false, \"stepsApplied\": 1}",
+                java.util.Map.class));
+        LoanAccount b = LoanAccount.restore(migrated, mapper.readValue(mapper.writeValueAsString(st), LoanAccount.Snapshot.class));
+        assertEquals(LocalDate.of(2026, 9, 30), b.rateReset().next());
+    }
 }

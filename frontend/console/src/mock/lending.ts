@@ -32,7 +32,9 @@ const REVERSIBLE = new Set([...FINANCIAL].filter((t) => t !== 'RESTRUCTURE'));
 /** Replayed, but never reversible; and nothing before one of these can be reversed either. */
 const IRREVERSIBLE = new Set(['RESTRUCTURE', 'SANCTION_CHANGE', 'NPA_OVERRIDE', 'NPA_RELEASE']);
 const isTranche = (e: StoredLoanEvent) => e.type === 'DISBURSEMENT' && (e.data.tranche ?? 1) > 1;
-const isReplayed = (e: StoredLoanEvent) => FINANCIAL.has(e.type) || IRREVERSIBLE.has(e.type) || isTranche(e);
+/** Rate changes made by the day-end (floating-rate reset): replayed, but neither reversible nor undone by a reversal. */
+const SYSTEM = new Set(['RATE_RESET']);
+const isReplayed = (e: StoredLoanEvent) => FINANCIAL.has(e.type) || IRREVERSIBLE.has(e.type) || SYSTEM.has(e.type) || isTranche(e);
 const blocksReversal = (e: StoredLoanEvent) => IRREVERSIBLE.has(e.type) || isTranche(e);
 const BLOCKED = () => conflict('Cannot be reversed', 'A restructure, tranche draw, sanction change or NPA override happened since; these cannot be reversed, so nothing before them can be either');
 /** The benchmark's rate (% p.a.) in force on `date`, or undefined when the benchmark is unknown or has no rate yet. */
@@ -658,6 +660,18 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
     case 'RESTRUCTURE':
       restructureState(loan, st, e.data.restructure!, e.valueDate);
       break;
+    case 'RATE_RESET':
+      // the option asked for; keeping the EMI falls back to a higher EMI when the tenure cannot be lengthened
+      try {
+        amendState(loan, st, e.data.amendment!, e.valueDate, true);
+      } catch {
+        try {
+          amendState(loan, st, { ...e.data.amendment!, rateOption: 'KEEP_TENURE_CHANGE_EMI' }, e.valueDate, true);
+        } catch {
+          /* nothing left to re-schedule */
+        }
+      }
+      break;
     case 'DISBURSEMENT': // a later tranche: interest runs on it from its own date
       st.drawn += amt;
       replanFuture(loan, st, futurePrincipal(st) + amt, e.valueDate);
@@ -826,7 +840,13 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     overrideUntil: st.overrideUntil,
     benchmarkCode: loan.product.benchmarkCode ?? null,
     spread: loan.product.spread === null || loan.product.spread === undefined ? null : String(loan.product.spread),
-    nextRateReset: loan.product.benchmarkCode && loan.disbursedOn ? C.addMonths(loan.disbursedOn, loan.product.resetFrequencyMonths ?? 12) : null,
+    nextRateReset: loan.product.benchmarkCode && loan.disbursedOn && !loan.rateFixedSince ? nextResetOf(loan) : null,
+    resetFrequencyMonths: loan.product.benchmarkCode ? (loan.product.resetFrequencyMonths ?? null) : null,
+    benchmarkRate: loan.product.benchmarkCode ? (benchmarkRate(db, loan.product.benchmarkCode, db.businessDate)?.toString() ?? null) : null,
+    resetPreference: loan.product.benchmarkCode ? (loan.resetPreference ?? null) : null,
+    resetDefault: loan.product.benchmarkCode ? (loan.product.resetOption ?? 'KEEP_TENURE_CHANGE_EMI') : null,
+    rateOutsideBand: !!loan.rateOutsideBand,
+    rateFixedSince: loan.rateFixedSince ?? null,
     custom: maskCustom(db, 'LOAN_ACCOUNT', loan.custom),
     restructuredOn: st.restructuredOn,
     restructureCount: st.restructureCount,
@@ -1028,6 +1048,14 @@ export function disburse(db: MockDb, loan: StoredLoan, by: string, at: string, m
 // ------------------------------------------------------------------ approvals
 export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: { entityId?: string | null }, checker: string, at: string): boolean {
   switch (p.kind) {
+    case 'LOAN_RESET_PREFERENCE': {
+      const loan = db.loans.find((l) => l.id === p.loanId);
+      if (!loan) throw notFound('Loan');
+      loan.resetPreference = p.option;
+      appendAudit(db, at, checker, 'RATE_RESET_PREFERENCE', 'LOAN', loan.loanNo, { to: String(p.option), reason: p.reason });
+      approval.entityId = loan.loanNo;
+      return true;
+    }
     case 'LOAN_PRODUCT': {
       const i = db.loanProducts.findIndex((x) => x.code === p.product.code);
       const version = i >= 0 ? (db.loanProducts[i].version ?? 1) + 1 : 1;
@@ -1070,7 +1098,7 @@ export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: {
       const target = loan.events.find((e) => e.id === p.txnId);
       if (!target) throw notFound('Transaction');
       if (target.reversedBy) throw conflict('Transaction already reversed');
-      const later = loan.events.filter((e) => isReplayed(e) && !e.reversedBy && e.seq > target.seq);
+      const later = loan.events.filter((e) => isReplayed(e) && !SYSTEM.has(e.type) && !e.reversedBy && e.seq > target.seq);
       if (later.some(blocksReversal)) throw BLOCKED();
       const rev = addEvent(db, loan, checker, at, {
         type: 'REVERSAL',
@@ -1097,9 +1125,99 @@ export function lendingDayEnd(db: MockDb): number {
   for (const loan of db.loans) {
     if (!loan.disbursedOn || loan.state.closedOn) continue;
     refreshLoan(db, loan);
+    if (dayEndResets(db, loan)) refreshLoan(db, loan);
     n += 1;
   }
   return n;
+}
+
+// ------------------------------------------------------------------ floating-rate reset (V24)
+/** The loan's next reset date: anniversaries of disbursal every resetFrequencyMonths. */
+export function nextResetOf(loan: StoredLoan): string | null {
+  if (!loan.product.benchmarkCode || !loan.disbursedOn || loan.rateFixedSince) return null;
+  return loan.nextRateReset ?? C.addMonths(loan.disbursedOn, loan.product.resetFrequencyMonths ?? 12);
+}
+
+/**
+ * Resets whose date has passed (the mock runs its day-end after opening the next date): rate = benchmark on the last
+ * reset date + spread, applied even outside the band and flagged (D-14); the date moves on even when the rate stays.
+ */
+function dayEndResets(db: MockDb, loan: StoredLoan): boolean {
+  let next = nextResetOf(loan);
+  // a frozen account's reset is held until it is unfrozen (as the backend engine)
+  if (!next || next >= db.businessDate || loan.state.status !== 'ACTIVE') return false;
+  const months = loan.product.resetFrequencyMonths ?? 12;
+  const anniversary = (k: number) => C.addMonths(loan.disbursedOn!, months * k);
+  let k = 1;
+  while (anniversary(k) < next) k++;
+  const dates: string[] = [];
+  for (; anniversary(k) < db.businessDate; k++) dates.push(anniversary(k));
+  next = anniversary(k);
+  loan.nextRateReset = next;
+  const on = dates[dates.length - 1];
+  const benchmark = on ? benchmarkRate(db, loan.product.benchmarkCode!, on) : undefined;
+  if (benchmark === undefined) return false;
+  const rate = Math.round((benchmark + C.num(loan.product.spread ?? 0)) * 10000) / 10000;
+  const before = loan.state.rate;
+  loan.rateOutsideBand = rate < C.num(loan.product.minRate) || rate > C.num(loan.product.maxRate);
+  if (Math.abs(rate - before) < 1e-9) return false;
+  const option = loan.resetPreference ?? loan.product.resetOption ?? 'KEEP_TENURE_CHANGE_EMI';
+  const at = new Date().toISOString();
+  const emiBefore = loan.state.emi ?? 0;
+  const remainingBefore = loan.state.rows.length - loan.state.raised;
+  const ev = addEvent(db, loan, 'eod', at, {
+    type: 'RATE_RESET', valueDate: on, amount: null,
+    summary: `Rate reset: ${loan.product.benchmarkCode} ${benchmark}% + spread ${C.num(loan.product.spread ?? 0)}% = ${rate}% (was ${before}%)${loan.rateOutsideBand ? '; outside the product rate band (applied, D-14)' : ''}; next reset ${next}`,
+    data: { amendment: { kind: 'RATE_CHANGE', newRatePercent: String(rate), rateOption: option } },
+  });
+  refreshLoan(db, loan);
+  const st = loan.state;
+  const remainingAfter = st.rows.length - st.raised;
+  const applied = option === 'KEEP_EMI_CHANGE_TENURE' && remainingAfter === remainingBefore && st.emi !== emiBefore ? 'KEEP_TENURE_CHANGE_EMI' : option;
+  loan.amendments.push({
+    id: uuid(), seq: loan.amendments.length + 1, txnId: ev.id, kind: 'RATE_RESET',
+    parameters: { benchmarkCode: loan.product.benchmarkCode, benchmarkRate: String(benchmark), spread: String(loan.product.spread), requestedOption: option, appliedOption: applied, outsideBand: loan.rateOutsideBand, resetDates: dates },
+    emiBefore: C.fromPaise(emiBefore), emiAfter: C.fromPaise(st.emi ?? 0), tenureBefore: remainingBefore, tenureAfter: remainingAfter,
+    rateBefore: C.pct(before), rateAfter: C.pct(st.rate), maturityBefore: null, maturityAfter: st.rows[st.rows.length - 1]?.dueDate,
+    interestBefore: '0', interestAfter: '0', proposedFigures: null, appliedFigures: {}, differsFromProposal: false,
+    approvalId: null, madeBy: 'eod', checkedBy: null, businessDate: on, reason: ev.summary, reversedBy: null, createdAt: at,
+  });
+  return true;
+}
+
+/** The EMI the reset would set on the loan as it is today: tenure kept (a kept EMI is shown as is; the tenure is computed at the reset). */
+function estimate(l: StoredLoan, projected: number | null) {
+  const left = l.state.rows.length - l.state.raised;
+  if (projected === null) return { estimatedEmi: null, estimatedInstalmentsLeft: null, estimateNote: 'no benchmark rate recorded yet' };
+  if (l.state.emi === null || left < 1) return { estimatedEmi: null, estimatedInstalmentsLeft: null, estimateNote: 'no estimate: the loan is not on a monthly EMI' };
+  const option = l.resetPreference ?? l.product.resetOption ?? 'KEEP_TENURE_CHANGE_EMI';
+  if (option === 'KEEP_EMI_CHANGE_TENURE') return { estimatedEmi: C.fromPaise(l.state.emi), estimatedInstalmentsLeft: null, estimateNote: 'the EMI is kept; the instalments left are set at the reset' };
+  return { estimatedEmi: C.fromPaise(C.pmt(futurePrincipal(l.state), projected, left)), estimatedInstalmentsLeft: left, estimateNote: null };
+}
+
+/** Reset rows for the console's operations page and the reset report. */
+export function rateResetsDue(db: MockDb, loans: StoredLoan[], days: number) {
+  const until = addDays(db.businessDate, days);
+  return loans
+    .filter((l) => l.product.benchmarkCode && l.disbursedOn && !l.state.closedOn && !l.rateFixedSince)
+    .map((l) => ({ l, next: nextResetOf(l)! }))
+    .filter(({ next }) => next <= until)
+    .sort((a, b) => a.next.localeCompare(b.next) || a.l.loanNo.localeCompare(b.l.loanNo))
+    .map(({ l, next }) => {
+      const b = benchmarkRate(db, l.product.benchmarkCode!, next > db.businessDate ? next : db.businessDate);
+      const projected = b === undefined ? null : b + C.num(l.product.spread ?? 0);
+      const sv = summaryView(db, l);
+      return {
+        loanId: l.id, loanNo: l.loanNo, customerNo: sv.customerNo, customerName: sv.customerName, branch: l.branch, productCode: l.product.code,
+        nextRateReset: next, benchmarkCode: l.product.benchmarkCode!, benchmarkRate: b === undefined ? null : String(b), spread: String(l.product.spread),
+        currentRate: C.pct(l.state.rate), projectedRate: projected === null ? null : String(projected),
+        projectedOutsideBand: projected === null ? null : projected < C.num(l.product.minRate) || projected > C.num(l.product.maxRate),
+        resetOption: (l.resetPreference ?? l.product.resetOption ?? 'KEEP_TENURE_CHANGE_EMI') as 'KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI',
+        principalOutstanding: sv.principalOutstanding ?? '0', currentEmi: sv.currentEmi ?? null,
+        held: l.state.status === 'FROZEN',
+        ...estimate(l, projected),
+      };
+    });
 }
 
 // ------------------------------------------------------------------ product validation
@@ -1131,7 +1249,9 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
     if (p.rateType !== 'FLOATING') errors.push({ field: 'rateType', message: 'A benchmark needs rate type FLOATING' });
     if (Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'A benchmark needs a spread' });
     if (!Number.isInteger(p.resetFrequencyMonths) || (p.resetFrequencyMonths ?? 0) < 1 || (p.resetFrequencyMonths ?? 0) > 60) errors.push({ field: 'resetFrequencyMonths', message: 'Reset frequency must be 1 to 60 months' });
+    if (basis !== 'DAILY_REDUCING') errors.push({ field: 'interestBasis', message: 'A benchmark-linked product accrues on the daily-reducing basis' });
   }
+  if (p.resetOption && !['KEEP_EMI_CHANGE_TENURE', 'KEEP_TENURE_CHANGE_EMI'].includes(p.resetOption)) errors.push({ field: 'resetOption', message: 'Keep the EMI or keep the tenure' });
   const [minA, maxA] = [n(p.minAmount), n(p.maxAmount)];
   if (!(minA > 0)) errors.push({ field: 'minAmount', message: 'Minimum amount must be positive' });
   if (!(maxA >= minA)) errors.push({ field: 'maxAmount', message: 'Maximum amount must be at least the minimum' });
@@ -1180,6 +1300,7 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
     benchmarkCode: p.benchmarkCode || null,
     spread: p.benchmarkCode ? s(p.spread) : null,
     resetFrequencyMonths: p.benchmarkCode ? (p.resetFrequencyMonths ?? null) : null,
+    resetOption: p.resetOption ?? 'KEEP_TENURE_CHANGE_EMI',
     minAmount: C.fromPaise(C.toPaise(String(p.minAmount))),
     maxAmount: C.fromPaise(C.toPaise(String(p.maxAmount))),
     minTenorMonths: p.minTenorMonths,
@@ -1262,6 +1383,50 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (s === 'FROZEN') throw conflict('Loan is frozen', `Loan ${loan.loanNo}: the account is frozen; transactions are blocked until it is unfrozen`);
     if (s !== 'ACTIVE') throw conflict('Loan is not active', `Loan ${loan.loanNo} is ${s}`);
   }
+
+  // ---- floating-rate reset (V24): the borrower's choice, resets due and applied
+  on('POST', '/api/v1/loans/{id}/rate-reset-preference', ({ user, params, body }) => {
+    require(user, P.loanAmend);
+    const loan = findLoan(params.id);
+    const b = (body ?? {}) as { option?: string | null; reason?: string };
+    if (!b.reason?.trim()) throw bad('A reason is required: how the borrower gave the instruction', [{ field: 'reason', message: 'Required' }]);
+    if (b.option !== null && b.option !== undefined && !['KEEP_EMI_CHANGE_TENURE', 'KEEP_TENURE_CHANGE_EMI'].includes(b.option)) {
+      throw bad('Keep the EMI or keep the tenure', [{ field: 'option', message: 'Invalid' }]);
+    }
+    if (!loan.product.benchmarkCode || loan.rateFixedSince) throw conflict('Not on a floating rate', 'The loan is not on a floating rate: there is no reset to choose for');
+    const option = (b.option ?? null) as StoredLoan['resetPreference'] & ('KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI' | null);
+    if ((loan.resetPreference ?? null) === option) throw conflict('No change', 'The loan already has this choice');
+    return propose(user, 'LOAN_RESET_PREFERENCE', 'UPDATE', { kind: 'LOAN_RESET_PREFERENCE', loanId: loan.id, option, reason: b.reason.trim() },
+      { loanId: loan.id, loanNo: loan.loanNo, option, reason: b.reason.trim() }, { option: loan.resetPreference ?? null }, loan.loanNo);
+  });
+  on('GET', '/api/v1/rate-resets/upcoming', ({ user, url }) => {
+    require(user, P.loanView);
+    const days = Number(url.searchParams.get('days') ?? '30');
+    if (!Number.isInteger(days) || days < 0 || days > 366) throw bad('days must be 0..366', [{ field: 'days', message: '0 to 366' }]);
+    return { status: 200, body: rateResetsDue(db, db.loans, days) };
+  });
+  on('GET', '/api/v1/rate-resets', ({ user, url }) => {
+    require(user, P.loanView);
+    const from = url.searchParams.get('from') || `${db.businessDate.slice(0, 8)}01`;
+    const to = url.searchParams.get('to') || db.businessDate;
+    const outside = url.searchParams.get('outsideBandOnly') === 'true';
+    const rows = db.loans.flatMap((l) =>
+      l.amendments
+        .filter((a) => (a.kind === 'RATE_RESET' || a.kind === 'RATE_STEP') && !a.reversedBy && a.businessDate! >= from && a.businessDate! <= to)
+        .filter((a) => !outside || (a.parameters as { outsideBand?: boolean }).outsideBand)
+        .map((a) => {
+          const prm = a.parameters as Record<string, unknown>;
+          return {
+            effectiveDate: a.businessDate!, loanId: l.id, loanNo: l.loanNo, customerNo: summaryView(db, l).customerNo, branch: l.branch, productCode: l.product.code,
+            kind: a.kind as 'RATE_RESET' | 'RATE_STEP', benchmarkCode: (prm.benchmarkCode as string) ?? null, benchmarkRate: (prm.benchmarkRate as string) ?? null, spread: (prm.spread as string) ?? null,
+            rateBefore: a.rateBefore!, rateAfter: a.rateAfter!, emiBefore: a.emiBefore!, emiAfter: a.emiAfter!, tenureBefore: a.tenureBefore!, tenureAfter: a.tenureAfter!,
+            maturityBefore: a.maturityBefore ?? null, maturityAfter: a.maturityAfter!, requestedOption: (prm.requestedOption as string) ?? null, appliedOption: (prm.appliedOption as string) ?? null,
+            fallbackReason: (prm.fallbackReason as string) ?? null, outsideBand: !!prm.outsideBand, resetDates: ((prm.resetDates as string[]) ?? []).join(' '), postedOn: a.businessDate!,
+          };
+        }),
+    );
+    return { status: 200, body: rows.sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate) || a.loanNo.localeCompare(b.loanNo)) };
+  });
   function positiveAmount(v: unknown, field = 'amount'): number {
     const a = money(v);
     if (a === null || Number.isNaN(a) || a <= 0) throw bad('Amount must be a positive decimal', [{ field, message: 'Enter an amount greater than zero' }]);
@@ -1575,7 +1740,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     if (!REVERSIBLE.has(txn.type)) throw bad(`${txn.type} transactions cannot be reversed`, [{ field: 'txnId', message: 'Not reversible' }]);
     if (txn.reversedBy) throw conflict('Transaction already reversed');
     if (hasPending('LOAN_REVERSAL', (p) => p.kind === 'LOAN_REVERSAL' && p.loanId === loan.id)) throw conflict('Reversal already pending', `Loan ${loan.loanNo} already has a reversal awaiting approval`);
-    const later = loan.events.filter((e) => isReplayed(e) && !e.reversedBy && e.seq > txn.seq);
+    const later = loan.events.filter((e) => isReplayed(e) && !SYSTEM.has(e.type) && !e.reversedBy && e.seq > txn.seq);
     if (later.some(blocksReversal)) throw BLOCKED();
     return propose(
       user, 'LOAN_REVERSAL', 'REVERSE',

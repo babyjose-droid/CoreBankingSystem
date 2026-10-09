@@ -34,6 +34,7 @@ class LendingController {
     record ChargeRequest(String feeCode, BigDecimal base) {}
     record Waiver(BigDecimal amount, String reason) {}
     record Reason(String reason) {}
+    record ResetPreference(String option, String reason) {}
 
     private final ProductService products;
     private final LoanService loans;
@@ -227,6 +228,27 @@ class LendingController {
     @PreAuthorize("hasAuthority('loan:view')")
     List<Map<String, Object>> amendments(@PathVariable UUID id) {
         return loans.amendments(visible(id));
+    }
+
+    // ---- floating-rate reset (V24) ----------------------------------------------------------------
+    @PostMapping("/loans/{id}/rate-reset-preference")
+    @PreAuthorize("hasAuthority('loan:amend')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> proposeResetPreference(@PathVariable UUID id, @RequestBody ResetPreference r) {
+        return ApprovalView.of(loans.proposeResetPreference(visible(id), r == null ? null : r.option(), r == null ? null : r.reason()));
+    }
+
+    @GetMapping("/rate-resets/upcoming")
+    @PreAuthorize("hasAuthority('loan:view')")
+    List<Map<String, Object>> resetsUpcoming(@RequestParam(defaultValue = "30") int days) {
+        return loans.resetsUpcoming(days);
+    }
+
+    @GetMapping("/rate-resets")
+    @PreAuthorize("hasAuthority('loan:view')")
+    List<Map<String, Object>> resetsApplied(@RequestParam(required = false) String from, @RequestParam(required = false) String to,
+                                            @RequestParam(defaultValue = "false") boolean outsideBandOnly) {
+        return loans.resetsApplied(from, to, outsideBandOnly);
     }
 
     // ---- sanctioned amount and asset-class override (P2-6) ---------------------------------------

@@ -118,7 +118,8 @@ function requireEmiLoan(loan: StoredLoan, st: LoanState) {
  * Applies an amendment to `st` (mutates). Returns the broken-period interest of a due-day change.
  * Throws 422/409 problems for invalid requests.
  */
-export function amendState(loan: StoredLoan, st: LoanState, req: AmendmentRequest, asOf: string): number {
+/** `anyRate`: a day-end reset follows the benchmark even outside the product band (D-14). */
+export function amendState(loan: StoredLoan, st: LoanState, req: AmendmentRequest, asOf: string, anyRate = false): number {
   requireEmiLoan(loan, st);
   const fut = future(st);
   if (fut.length === 0) throw conflict('Nothing left to amend', 'Every instalment has already been demanded');
@@ -130,8 +131,9 @@ export function amendState(loan: StoredLoan, st: LoanState, req: AmendmentReques
   let dates: string[] | null = null;
   let broken = 0;
   switch (req?.kind) {
-    case 'RATE_CHANGE': {
-      rate = rateIn(loan, req.newRatePercent);
+    case 'RATE_CHANGE':
+    case 'SWITCH_TO_FIXED': {
+      rate = anyRate ? num(req.newRatePercent) : rateIn(loan, req.newRatePercent);
       const opt = req.rateOption;
       if (opt === 'KEEP_TENURE_CHANGE_EMI') emi = C.pmt(bal, rate, n);
       else if (opt === 'KEEP_EMI_CHANGE_TENURE') n = solveTenure(bal, rate, emi);

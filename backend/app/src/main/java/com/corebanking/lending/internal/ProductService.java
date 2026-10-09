@@ -46,7 +46,9 @@ public class ProductService {
                           // P2-6 (US-039, US-050, US-054); every one is optional and defaults as in V18
                           String frequency, String interestBasis, String bpiMode, BigDecimal stepPercent, Integer stepEvery,
                           Integer principalEvery, Boolean multipleDisbursements, Boolean preEmi, Boolean topUpAllowed,
-                          String benchmarkCode, BigDecimal spread, Integer resetFrequencyMonths) {
+                          String benchmarkCode, BigDecimal spread, Integer resetFrequencyMonths,
+                          // V24: what a floating-rate reset changes unless the borrower chose otherwise (board policy)
+                          String resetOption) {
 
         /** The product with every optional setting filled in with its default. */
         Product withDefaults() {
@@ -61,7 +63,7 @@ public class ProductService {
                     frequency == null ? "MONTHLY" : frequency, interestBasis == null ? "DAILY_REDUCING" : interestBasis,
                     bpiMode == null ? "NONE" : bpiMode, stepPercent, stepEvery, principalEvery == null ? 1 : principalEvery,
                     Boolean.TRUE.equals(multipleDisbursements), Boolean.TRUE.equals(preEmi), Boolean.TRUE.equals(topUpAllowed),
-                    benchmarkCode, spread, resetFrequencyMonths);
+                    benchmarkCode, spread, resetFrequencyMonths, resetOption == null ? "KEEP_TENURE_CHANGE_EMI" : resetOption);
         }
     }
 
@@ -93,7 +95,7 @@ public class ProductService {
                        cooling_off_days, secured, array_to_string(appropriation_sequence, ',') AS seq, appropriation_mode,
                        prepayment_mode, status, gl_map::text AS gl_map, version, frequency, interest_basis, bpi_mode, step_percent,
                        step_every, principal_every, multiple_disbursements, pre_emi, top_up_allowed, benchmark_code, spread,
-                       reset_frequency_months
+                       reset_frequency_months, rate_reset_option
                   FROM lending.loan_product WHERE code = ?
                 """, code);
         if (rows.isEmpty()) throw ApiException.notFound("loan product " + code);
@@ -116,7 +118,8 @@ public class ProductService {
                 (String) r.get("frequency"), (String) r.get("interest_basis"), (String) r.get("bpi_mode"),
                 (BigDecimal) r.get("step_percent"), (Integer) r.get("step_every"), (Integer) r.get("principal_every"),
                 (Boolean) r.get("multiple_disbursements"), (Boolean) r.get("pre_emi"), (Boolean) r.get("top_up_allowed"),
-                (String) r.get("benchmark_code"), (BigDecimal) r.get("spread"), (Integer) r.get("reset_frequency_months"));
+                (String) r.get("benchmark_code"), (BigDecimal) r.get("spread"), (Integer) r.get("reset_frequency_months"),
+                (String) r.get("rate_reset_option"));
     }
 
     /** Product templates (US-038): starting points for the product wizard, seeded in V18. Nothing here is a live product. */
@@ -229,6 +232,11 @@ public class ProductService {
         if (d.resetFrequencyMonths() != null && (d.resetFrequencyMonths() < 1 || d.resetFrequencyMonths() > 60)) {
             throw ApiException.invalid("resetFrequencyMonths must be 1..60");
         }
+        if (!List.of("KEEP_EMI_CHANGE_TENURE", "KEEP_TENURE_CHANGE_EMI").contains(d.resetOption())) {
+            throw ApiException.invalid("resetOption must be KEEP_TENURE_CHANGE_EMI or KEEP_EMI_CHANGE_TENURE");
+        }
+        // a reset re-prices the balance by days: as the engine, only on the daily-reducing basis
+        if (d.benchmarkCode() != null && !daily) throw ApiException.invalid("a benchmark-linked product accrues on the daily-reducing basis");
         for (Fee f : d.fees()) {
             if (Boolean.TRUE.equals(f.deductFromDisbursal()) && !"DISBURSEMENT".equals(f.event()) && !"EVERY_DISBURSEMENT".equals(f.event())) {
                 throw ApiException.invalid("fee " + f.code() + ": only a DISBURSEMENT or EVERY_DISBURSEMENT fee can be deducted from the payout");
@@ -310,10 +318,10 @@ public class ProductService {
                         max_moratorium_months, cooling_off_days, secured, appropriation_sequence, appropriation_mode, prepayment_mode,
                         gl_principal, gl_interest_income, gl_interest_receivable, gl_map, status, version, effective_from, updated_by,
                         frequency, interest_basis, bpi_mode, step_percent, step_every, principal_every, multiple_disbursements,
-                        pre_emi, top_up_allowed, benchmark_code, spread, reset_frequency_months)
+                        pre_emi, top_up_allowed, benchmark_code, spread, reset_frequency_months, rate_reset_option)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::text[], ?, ?, ?, ?, ?, ?::jsonb, ?, 1,
                             (SELECT business_date FROM platform.business_day WHERE id = 1), ?,
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, repayment_method = EXCLUDED.repayment_method,
                         min_amount = EXCLUDED.min_amount, max_amount = EXCLUDED.max_amount, min_tenor_months = EXCLUDED.min_tenor_months,
                         max_tenor_months = EXCLUDED.max_tenor_months, min_rate = EXCLUDED.min_rate, max_rate = EXCLUDED.max_rate,
@@ -329,7 +337,7 @@ public class ProductService {
                         step_percent = EXCLUDED.step_percent, step_every = EXCLUDED.step_every, principal_every = EXCLUDED.principal_every,
                         multiple_disbursements = EXCLUDED.multiple_disbursements, pre_emi = EXCLUDED.pre_emi,
                         top_up_allowed = EXCLUDED.top_up_allowed, benchmark_code = EXCLUDED.benchmark_code, spread = EXCLUDED.spread,
-                        reset_frequency_months = EXCLUDED.reset_frequency_months
+                        reset_frequency_months = EXCLUDED.reset_frequency_months, rate_reset_option = EXCLUDED.rate_reset_option
                     """, p.code(), p.name(), p.repaymentMethod(), p.minAmount(), p.maxAmount(), p.minTenorMonths(), p.maxTenorMonths(),
                     p.minRate(), p.maxRate(), p.interestTableCode(), p.rateType() == null ? "FIXED" : p.rateType(),
                     p.dayCount() == null ? "ACTUAL_365" : p.dayCount(), p.rounding() == null ? "RUPEE_HALF_UP" : p.rounding(),
@@ -339,7 +347,8 @@ public class ProductService {
                     p.prepaymentMode() == null ? "REDUCE_EMI" : p.prepaymentMode(), gl.principal(), gl.interestIncome(),
                     gl.interestReceivable(), json.write(gl), p.status() == null ? "ACTIVE" : p.status(), r.maker(),
                     d.frequency(), d.interestBasis(), d.bpiMode(), d.stepPercent(), d.stepEvery(), d.principalEvery(),
-                    d.multipleDisbursements(), d.preEmi(), d.topUpAllowed(), d.benchmarkCode(), d.spread(), d.resetFrequencyMonths());
+                    d.multipleDisbursements(), d.preEmi(), d.topUpAllowed(), d.benchmarkCode(), d.spread(), d.resetFrequencyMonths(),
+                    d.resetOption());
             jdbc.update("DELETE FROM lending.fee_rule WHERE product_code = ?", p.code());
             for (Fee f : p.fees() == null ? List.<Fee>of() : p.fees()) {
                 jdbc.update("""

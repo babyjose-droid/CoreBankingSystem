@@ -67,6 +67,9 @@ function accruedNow(loan: StoredLoan, asOf: string): number {
 
 export function previewAmendment(db: MockDb, loan: StoredLoan, req: AmendmentRequest): AmendmentPreview {
   const asOf = db.businessDate;
+  if (req?.kind === 'SWITCH_TO_FIXED' && (!loan.product.benchmarkCode || loan.rateFixedSince)) {
+    throw conflict('Not on a floating rate', `Loan ${loan.loanNo} is not on a floating rate: change the rate with a rate change`);
+  }
   const st = cloneState(loan.state);
   const before = figuresOf(st);
   const current = st.rows.slice(st.raised).map(toRow);
@@ -85,7 +88,7 @@ export function previewAmendment(db: MockDb, loan: StoredLoan, req: AmendmentReq
 
 function cleanRequest(req: AmendmentRequest): AmendmentRequest {
   const keep: Record<string, unknown> = { kind: req.kind };
-  if (req.kind === 'RATE_CHANGE') Object.assign(keep, { newRatePercent: String(req.newRatePercent), rateOption: req.rateOption });
+  if (req.kind === 'RATE_CHANGE' || req.kind === 'SWITCH_TO_FIXED') Object.assign(keep, { newRatePercent: String(req.newRatePercent), rateOption: req.rateOption });
   if (req.remainingInstalments !== undefined && req.remainingInstalments !== null && (req.kind === 'TENURE_CHANGE' || req.rateOption === 'CHANGE_BOTH')) keep.remainingInstalments = req.remainingInstalments;
   if (req.newEmi !== undefined && req.newEmi !== null && req.newEmi !== '' && (req.kind === 'EMI_CHANGE' || (req.rateOption === 'CHANGE_BOTH' && keep.remainingInstalments === undefined))) keep.newEmi = String(req.newEmi);
   if (req.kind === 'DUE_DAY_CHANGE') keep.newDueDay = req.newDueDay;
@@ -127,6 +130,11 @@ export function applyAmendmentApproval(
     applied = figs;
     const ev = addEvent(db, loan, checker, at, { type: 'AMENDMENT', valueDate: db.businessDate, amount: null, summary: `${p.request.kind.replace(/_/g, ' ').toLowerCase()}: ${summaryOf(figs)}`, data: { amendment: p.request, reason: p.request.reason } });
     txnId = ev.id;
+    if (p.request.kind === 'SWITCH_TO_FIXED') {
+      loan.rateFixedSince = db.businessDate;   // no more resets
+      loan.nextRateReset = null;
+      loan.rateOutsideBand = false;
+    }
   } else {
     const option = simulateOption(loan, loan.state, p.terms, db.businessDate);
     const { schedule: _s, ...figs } = option;

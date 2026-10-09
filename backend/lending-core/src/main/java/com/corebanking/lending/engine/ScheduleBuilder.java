@@ -1,6 +1,9 @@
 package com.corebanking.lending.engine;
 
+import com.corebanking.calc.DayCount;
+import com.corebanking.calc.EmiCalculator;
 import com.corebanking.calc.RateSolver;
+import com.corebanking.calc.Rounding;
 import com.corebanking.calc.ScheduleGenerator;
 import com.corebanking.calc.ScheduleGenerator.Instalment;
 import com.corebanking.lending.engine.LoanTerms.BpiMode;
@@ -51,8 +54,49 @@ public final class ScheduleBuilder {
             case FIXED_PRINCIPAL -> fixedPrincipal(t);
             case BULLET_TOTAL_INTEREST -> bulletTotal(t);
             case BULLET_PERIODIC_INTEREST -> bulletPeriodic(t);
+            case TRANCHE_BULLET -> t.options().interestAtMaturity() ? bulletTotal(t) : bulletPeriodic(t);
             case STRUCTURED -> structured(t);
         };
+    }
+
+    /**
+     * The rows from index {@code from} on, re-priced at {@code ratePercent} with the instalment recomputed over the rows
+     * left (the tenure is kept): an elapsed-tenure rate step. Dates, numbers and leading interest-only rows are kept;
+     * the last row clears the balance. Interest is by actual days from the previous row's due date, as
+     * {@link LoanAccount} computes it when it applies the step on its date, so the two agree.
+     */
+    public static List<Instalment> restep(List<Instalment> rows, int from, BigDecimal ratePercent, DayCount dayCount, Rounding rounding) {
+        if (from < 1 || from >= rows.size()) return rows;
+        List<Instalment> out = new ArrayList<>(rows.subList(0, from));
+        BigDecimal bal = rows.get(from).openingBalance();
+        int n = rows.size() - from;
+        int moratorium = 0;
+        while (moratorium < n - 1 && rows.get(from + moratorium).principal().signum() == 0) moratorium++;
+        BigDecimal emi = bal.signum() == 0 ? BigDecimal.ZERO : EmiCalculator.pmt(bal, ratePercent, n - moratorium, rounding);
+        LocalDate prev = rows.get(from - 1).dueDate();
+        for (int k = 0; k < n; k++) {
+            Instalment r = rows.get(from + k);
+            BigDecimal interest = rounding.apply(bal.multiply(ratePercent.divide(HUNDRED, MC), MC)
+                    .multiply(dayCount.yearFraction(prev, r.dueDate()), MC));
+            BigDecimal principal;
+            if (k < moratorium) {
+                principal = BigDecimal.ZERO;
+            } else if (k == n - 1) {
+                principal = bal;
+            } else {
+                principal = emi.subtract(interest);
+                if (principal.signum() <= 0) {
+                    throw new IllegalArgumentException("at " + ratePercent.stripTrailingZeros().toPlainString() + "% the instalment of "
+                            + emi.toPlainString() + " does not cover the interest of " + interest.toPlainString() + " due on " + r.dueDate()
+                            + "; the loan would negatively amortise");
+                }
+                principal = principal.min(bal);
+            }
+            out.add(new Instalment(r.number(), r.dueDate(), r.days(), bal, interest, principal, principal.add(interest), bal.subtract(principal)));
+            bal = bal.subtract(principal);
+            prev = r.dueDate();
+        }
+        return Collections.unmodifiableList(out);
     }
 
     /** Due date of instalment n (1-based), month-end anchored when the anchor is a month end. */
@@ -231,6 +275,7 @@ public final class ScheduleBuilder {
 
     // ------------------------------------------------------------------------------------------------ methods
     private static Plan equated(LoanTerms t) {
+        if (!t.options().rateSteps().isEmpty()) return stepped(t);
         Frame fr = new Frame(t);
         boolean stepped = t.method() == RepaymentMethod.STEP_EQUATED;
         return rows(fr, (k, bal, standard) -> {
@@ -242,6 +287,21 @@ public final class ScheduleBuilder {
             }
             return principal;
         }, fr.emi(1 + t.moratoriumMonths()));
+    }
+
+    /**
+     * Elapsed-tenure rate table: the loan at the first step's rate, then from each later step the instalments left
+     * re-priced at that step's rate over the same tenure ({@link #restep}). The whole stepped schedule is disclosed.
+     */
+    private static Plan stepped(LoanTerms t) {
+        List<LoanTerms.RateStep> steps = t.options().rateSteps();
+        Plan base = equated(new LoanTerms(t.principal(), t.ratePercent(), t.tenorMonths(), t.disbursalDate(), t.firstDueDate(), t.method(),
+                t.moratoriumMonths(), t.balloon(), t.dayCount(), t.rounding(), t.extraDayOnFirst(), t.options().withRateSteps(null)));
+        List<Instalment> rows = base.schedule();
+        for (LoanTerms.RateStep step : steps.subList(1, steps.size())) {
+            rows = restep(rows, step.fromMonth() - 1, step.ratePercent(), t.dayCount(), t.rounding());
+        }
+        return new Plan(rows, base.emi(), base.accrualRatePercent(), base.brokenPeriodInterest(), base.bpiDeducted());
     }
 
     private static Plan fixedPrincipal(LoanTerms t) {

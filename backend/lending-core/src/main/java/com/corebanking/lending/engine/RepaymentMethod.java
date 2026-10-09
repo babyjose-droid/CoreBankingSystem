@@ -23,5 +23,11 @@ public enum RepaymentMethod {
      * Principal as assigned to each date by the lender ("Periodic Assigned Principal And Accrued Interest"; seasonal
      * and irregular schedules), with the interest accrued on the balance.
      */
-    STRUCTURED
+    STRUCTURED,
+    /**
+     * Each tranche is repaid as its own bullet at its own maturity, the tranche date plus the loan's tenor (reference
+     * method 18 "Tranche Bullet Tranche Repayment"). Interest falls due every period on the amount outstanding, or,
+     * with {@code interestAtMaturity}, with each bullet.
+     */
+    TRANCHE_BULLET
 }

@@ -49,6 +49,7 @@ import { SystemPropertiesPage } from './pages/masters/SystemPropertiesPage';
 import { TerritoryPage } from './pages/masters/TerritoryPage';
 import { CustomFieldsPage } from './pages/masters/CustomFieldsPage';
 import { DeferredReceiptsPage } from './pages/platform/DeferredReceiptsPage';
+import { RateResetsPage } from './pages/lending/rateResets';
 import { JobsPage } from './pages/platform/JobsPage';
 import { SessionsPage } from './pages/platform/SessionsPage';
 import { SupportAccessPage } from './pages/platform/SupportAccessPage';
@@ -153,6 +154,7 @@ export function AppRoutes() {
         <Route path="masters/amount-limits" element={guard(P.limitView, <AmountLimitsPage />)} />
         <Route path="masters/custom-fields" element={guard(P.customFieldView, <CustomFieldsPage />)} />
         <Route path="deferred-receipts" element={guard(P.loanView, <DeferredReceiptsPage />)} />
+        <Route path="rate-resets" element={guard(P.loanView, <RateResetsPage />)} />
         <Route path="jobs" element={guard(P.jobView, <JobsPage />)} />
         <Route path="support-access" element={guard(P.supportAccessApprove, <SupportAccessPage />)} />
         <Route path="sessions" element={<SessionsPage />} />

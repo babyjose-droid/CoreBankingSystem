@@ -8,6 +8,7 @@ import { useLoanProduct } from '../../api/lendingHooks';
 import { P, hasPermission } from '../../auth/permissions';
 import { Dialog, Button, Card, DateTimeText, EmptyState, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { BPI_LABEL, FREQUENCY_LABEL, INTEREST_BASIS_LABEL, REPAYMENT_METHOD_LABEL, describeFee, pct } from './common';
+import { RESET_OPTION_LABEL } from './rateResets';
 
 export function LoanProductDetailPage() {
   const { code } = useParams();
@@ -109,6 +110,8 @@ export function LoanProductDetailPage() {
                 <dd>
                   <span className="mono">{p.benchmarkCode}</span> + {String(p.spread)}% · reset every {p.resetFrequencyMonths} months
                 </dd>
+                <dt>At a reset</dt>
+                <dd>{RESET_OPTION_LABEL[p.resetOption ?? 'KEEP_TENURE_CHANGE_EMI']} (default; the borrower may choose otherwise)</dd>
               </>
             )}
             <dt>Broken-period interest</dt>

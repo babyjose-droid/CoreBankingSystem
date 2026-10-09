@@ -7,6 +7,7 @@ import { Banner, Button, Card, Checkbox, ErrorBanner, Input, PageHeader, Select,
 import { KfsView } from './KfsView';
 import { useProposalToast } from '../proposal';
 import { BPI_LABEL, FREQUENCY_LABEL, INTEREST_BASIS_LABEL, REPAYMENT_METHOD_LABEL } from './common';
+import { RESET_HELP, RESET_OPTION_LABEL } from './rateResets';
 
 type Seq = NonNullable<LoanProduct['appropriationSequence']>[number];
 const SEQ: Seq[] = ['INTEREST', 'PRINCIPAL', 'PENAL', 'FEE'];
@@ -53,6 +54,7 @@ interface Draft {
   benchmarkCode: string;
   spread: string;
   resetFrequencyMonths: string;
+  resetOption: NonNullable<LoanProduct['resetOption']>;
   rounding: NonNullable<LoanProduct['rounding']>;
   penalChargeRate: string;
   maxMoratoriumMonths: string;
@@ -110,6 +112,7 @@ function toDraft(p: LoanProduct | null): Draft {
     benchmarkCode: s(p?.benchmarkCode),
     spread: s(p?.spread),
     resetFrequencyMonths: s(p?.resetFrequencyMonths),
+    resetOption: p?.resetOption ?? 'KEEP_TENURE_CHANGE_EMI',
     rounding: p?.rounding ?? 'RUPEE_HALF_UP',
     penalChargeRate: s(p?.penalChargeRate),
     maxMoratoriumMonths: s(p?.maxMoratoriumMonths ?? 0),
@@ -203,6 +206,7 @@ function toProduct(d: Draft): LoanProduct {
     benchmarkCode: d.rateType === 'FLOATING' ? opt(d.benchmarkCode) : null,
     spread: d.rateType === 'FLOATING' && d.benchmarkCode ? opt(d.spread) : null,
     resetFrequencyMonths: d.rateType === 'FLOATING' && d.benchmarkCode && d.resetFrequencyMonths ? Number(d.resetFrequencyMonths) : null,
+    resetOption: d.resetOption,
     rounding: d.rounding,
     penalChargeRate: opt(d.penalChargeRate),
     maxMoratoriumMonths: Number(d.maxMoratoriumMonths),
@@ -349,7 +353,17 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
                 {d.benchmarkCode && (
                   <>
                     <Input label="Spread % over the benchmark" required numeric value={d.spread} onChange={(e) => set({ spread: e.target.value })} error={err('spread')} />
-                    <Input label="Rate reset every (months)" required numeric value={d.resetFrequencyMonths} onChange={(e) => set({ resetFrequencyMonths: e.target.value })} error={err('resetFrequencyMonths')} hint="Resets are not automatic yet" />
+                    <Input label="Rate reset every (months)" required numeric value={d.resetFrequencyMonths} onChange={(e) => set({ resetFrequencyMonths: e.target.value })} error={err('resetFrequencyMonths')} hint="From disbursal; the day-end resets the rate to the benchmark on that date + the spread" />
+                    <Select
+                      label="At a reset (default)"
+                      value={d.resetOption}
+                      onChange={(e) => set({ resetOption: e.target.value as Draft['resetOption'] })}
+                      options={[
+                        { value: 'KEEP_EMI_CHANGE_TENURE', label: RESET_OPTION_LABEL.KEEP_EMI_CHANGE_TENURE },
+                        { value: 'KEEP_TENURE_CHANGE_EMI', label: RESET_OPTION_LABEL.KEEP_TENURE_CHANGE_EMI },
+                      ]}
+                      hint={`Board policy; the borrower may choose otherwise on the loan. ${RESET_HELP}`}
+                    />
                   </>
                 )}
               </>

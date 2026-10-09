@@ -14,8 +14,11 @@ import { TranchesTab } from './completion';
 import { LoanDocumentsTab, LoanPartiesTab } from './LoanDocuments';
 import { LoanActionDialog, type LoanAction } from './loanActions';
 import { amendmentKindLabel } from './restructuring';
+import { FloatingRateCard } from './rateResets';
 
 const REVERSIBLE = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION', 'AMENDMENT']);
+/** Rate changes made by the day-end under the contract: no maker or checker. */
+const SYSTEM_KINDS = new Set(['RATE_RESET', 'RATE_STEP']);
 
 export function LoanDetailPage() {
   const { id } = useParams();
@@ -120,6 +123,7 @@ export function LoanDetailPage() {
         </div>
       )}
       <LoanSummaryStats loan={loan} coolingOffEnd={inCoolingOff ? coolingOffEnd : null} />
+      <FloatingRateCard loan={loan} />
       {customDefs.length > 0 && Object.keys(loan.custom ?? {}).length > 0 && (
         <Card title="Additional details">
           <CustomFieldValues defs={customDefs} values={loan.custom as Record<string, unknown>} />
@@ -388,7 +392,7 @@ function AmendmentsTab({ loan }: { loan: Loan }) {
           { key: 'tenure', header: 'Instalments left', render: (a) => arrow(a.tenureBefore, a.tenureAfter) },
           { key: 'maturity', header: 'Maturity', render: (a) => (<span><DateText value={a.maturityBefore} /> → <DateText value={a.maturityAfter} /></span>) },
           { key: 'interest', header: 'Interest to come', render: (a) => (<span><MoneyText value={a.interestBefore} /> → <MoneyText value={a.interestAfter} /></span>) },
-          { key: 'who', header: 'Maker / checker', render: (a) => <span className="mono">{a.madeBy} / {a.checkedBy}</span> },
+          { key: 'who', header: 'Maker / checker', render: (a) => (SYSTEM_KINDS.has(a.kind ?? '') ? <span className="muted">Day-end</span> : <span className="mono">{a.madeBy} / {a.checkedBy}</span>) },
           { key: 'reason', header: 'Reason', render: (a) => a.reason ?? '' },
           {
             key: 'flags',
@@ -396,6 +400,7 @@ function AmendmentsTab({ loan }: { loan: Loan }) {
             render: (a) => (
               <span className="row" style={{ gap: 4 }}>
                 {a.differsFromProposal && <Badge tone="warn" title="The loan changed after the proposal; the figures at approval were applied">Differs from proposal</Badge>}
+                {(a.parameters as { outsideBand?: boolean } | undefined)?.outsideBand && <Badge tone="warn" title="Applied although outside the product rate band (D-14)">Outside band</Badge>}
                 {a.reversedBy && <Badge>Reversed</Badge>}
               </span>
             ),
