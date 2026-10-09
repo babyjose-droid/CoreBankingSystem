@@ -68,9 +68,12 @@ class ProviderConfigService {
     private final AuditLog audit;
     private final JdkHttpTransport http;
     private final Set<String> enabled;
+    private final MailEmailSender smtp;
 
     ProviderConfigService(JdbcTemplate jdbc, ApprovalService approvals, Secrets secrets, Json json, AuditLog audit,
-                          JdkHttpTransport http, @Value("${corebanking.integration.providers-enabled:}") String enabled) {
+                          JdkHttpTransport http, @Value("${corebanking.integration.providers-enabled:}") String enabled,
+                          MailEmailSender smtp) {
+        this.smtp = smtp;
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.secrets = secrets;
@@ -277,7 +280,8 @@ class ProviderConfigService {
 
     Active<EmailSender> email() {
         Resolved r = resolve(ProviderKind.EMAIL);
-        return r == null ? null : new Active<>(r.code(), ProviderCatalog.email(r.code()), r.settings());
+        if (r == null) return null;
+        return new Active<>(r.code(), ProviderCatalog.SMTP.equals(r.code()) ? smtp : ProviderCatalog.email(r.code()), r.settings());
     }
 
     /** The parser of callbacks for the kind, only when {@code provider} is the tenant's active provider of that kind. */

@@ -33,9 +33,10 @@ class EodService {
     private final List<com.corebanking.eod.EodStepProvider> providers;
     private final List<com.corebanking.eod.EodListener> listeners;
     private final Json json;
+    private final com.corebanking.platform.Mail mail;
 
     EodService(TenantDataSources dataSources, AuditLog audit, List<com.corebanking.eod.EodStepProvider> providers,
-               List<com.corebanking.eod.EodListener> listeners, Json json,
+               List<com.corebanking.eod.EodListener> listeners, Json json, com.corebanking.platform.Mail mail,
                @org.springframework.beans.factory.annotation.Value("${corebanking.eod.partitions:4}") int partitions) {
         this.listeners = List.copyOf(listeners);
         this.dataSources = dataSources;
@@ -43,6 +44,7 @@ class EodService {
         this.partitions = partitions;
         this.providers = List.copyOf(providers);
         this.json = json;
+        this.mail = mail;
     }
 
     /** Pending dated approvals, for the start confirmation (GET /eod/pending-approvals). */
@@ -116,10 +118,24 @@ class EodService {
         });
     }
 
-    /** Alert recipients from the schedule. Mail delivery is wired to the notification service in Phase 2. */
+    /**
+     * A failed run is e-mailed to the schedule's alert recipients (no personal data: run, date, failed steps). Without a
+     * mail relay it is only logged. Addresses are never logged.
+     */
     private void alert(JdbcTemplate jdbc, String tenant, long runId) {
         List<String> to = jdbc.queryForList("SELECT unnest(alert_emails) FROM platform.eod_schedule WHERE id = 1", String.class);
-        log.warn("ALERT: EOD run {} for tenant {} FAILED; notify {}", runId, tenant, to);
+        log.warn("ALERT: EOD run {} for tenant {} FAILED; {} alert recipient(s)", runId, tenant, to.size());
+        if (to.isEmpty() || !mail.enabled()) return;
+        List<String> failed = jdbc.queryForList("SELECT name FROM platform.eod_step_run WHERE run_id = ? AND status = 'FAILED' ORDER BY step_no",
+                String.class, runId);
+        LocalDate date = jdbc.queryForObject("SELECT business_date FROM platform.eod_run WHERE id = ?", LocalDate.class, runId);
+        try {
+            mail.send(to, "End of day FAILED for " + tenant + " (" + date + ")",
+                    "End-of-day run " + runId + " for business date " + date + " failed.\nFailed step(s): " + String.join(", ", failed)
+                            + "\nFix the cause and restart the run from the console (End of day → runs).", List.of());
+        } catch (IllegalStateException e) {
+            log.warn("EOD failure alert for run {} of tenant {} could not be e-mailed: {}", runId, tenant, e.getMessage());
+        }
     }
 
     List<Map<String, Object>> runs(String tenant) {

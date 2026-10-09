@@ -220,3 +220,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "mail_domain" {
+  description = "Sending domain for Amazon SES (scheduled reports, EOD alerts, customer e-mail). Null: no SES resources."
+  type        = string
+  default     = null
+}

@@ -23,12 +23,21 @@ public final class ProviderCatalog {
             + " never run against the provider; confirm in the provider's sandbox before use.";
     private static final String SIM = "Built-in simulator: no network, no money. Never for production tenants.";
 
+    /**
+     * E-mail through the deployment's SMTP relay (Amazon SES over SMTP in the cloud tiers, Mailpit locally). The
+     * relay and the sender address belong to the deployment, not the tenant; the application binds the adapter.
+     */
+    public static final String SMTP = "SMTP";
+    private static final String SMTP_NOTE = "Sent through the deployment's SMTP relay (Amazon SES over SMTP, or any SMTP server) from the"
+            + " deployment's sender address; only transactional texts about the customer's own loan, never an attachment.";
+
     private static final List<Spec> SPECS = List.of(
             new Spec(ProviderKind.PAYOUT, Simulator.CODE, Set.of(), Set.of(Simulator.SECRET), Set.of(), true, SIM),
             new Spec(ProviderKind.COLLECTION, Simulator.CODE, Set.of(), Set.of(Simulator.SECRET), Set.of(), true, SIM),
             new Spec(ProviderKind.MANDATE, Simulator.CODE, Set.of(), Set.of(Simulator.SECRET), Set.of(), true, SIM),
             new Spec(ProviderKind.SMS, Simulator.CODE, Set.of(), Set.of(), Set.of(), true, SIM),
             new Spec(ProviderKind.EMAIL, Simulator.CODE, Set.of("fromAddress"), Set.of(), Set.of(), true, SIM),
+            new Spec(ProviderKind.EMAIL, SMTP, Set.of(), Set.of(), Set.of(), true, SMTP_NOTE),
             new Spec(ProviderKind.PAYOUT, EasebuzzSpec.CODE, Set.of("wireBaseUrl", "mode"), Set.of("key", "salt"),
                     Set.of("key", "salt"), false, UNVERIFIED),
             new Spec(ProviderKind.COLLECTION, EasebuzzSpec.CODE, Set.of("environment"), Set.of("key", "salt"),
@@ -72,6 +81,7 @@ public final class ProviderCatalog {
 
     public static EmailSender email(String code) {
         spec(ProviderKind.EMAIL, code);
+        if (code.equals(SMTP)) throw new IllegalArgumentException("the SMTP e-mail adapter is bound by the application");
         return new Simulator.Email();
     }
 

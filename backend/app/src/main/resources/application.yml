@@ -1,6 +1,18 @@
 spring:
   application:
     name: corebanking
+  mail:
+    host: ${SPRING_MAIL_HOST:}
+    port: ${SPRING_MAIL_PORT:587}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SPRING_MAIL_SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SPRING_MAIL_STARTTLS:true}
+      mail.smtp.starttls.required: ${SPRING_MAIL_STARTTLS:true}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
   flyway:
     enabled: false   # TenantMigrator migrates control plane and each tenant explicitly
   threads:
@@ -26,8 +38,23 @@ corebanking:
       password: ${COREBANKING_CONTROL_PASSWORD:}
       maximum-pool-size: 5
   documents:
-    # Root of the file document store (KYC documents). Use an encrypted volume; the S3 store is pending.
+    # KYC documents, report files, NACH files. directory (default): a directory, for dev and standalone installs (use an
+    # encrypted volume). s3: Amazon S3 with SSE-KMS (MinIO in the local stack), see S3DocumentStore.
+    store: ${COREBANKING_DOCUMENTS_STORE:directory}
     dir: ${COREBANKING_DOCUMENTS_DIR:${java.io.tmpdir}/corebanking-documents}
+    s3:
+      bucket: ${COREBANKING_DOCUMENTS_S3_BUCKET:}
+      key-prefix: ${COREBANKING_DOCUMENTS_S3_KEY_PREFIX:}
+      region: ${COREBANKING_DOCUMENTS_S3_REGION:ap-south-1}
+      endpoint: ${COREBANKING_DOCUMENTS_S3_ENDPOINT:}          # empty for AWS; http://minio:9000 locally
+      path-style: ${COREBANKING_DOCUMENTS_S3_PATH_STYLE:false}  # true for MinIO
+      sse: ${COREBANKING_DOCUMENTS_S3_SSE:aws:kms}               # aws:kms | AES256 | none (none only for a local MinIO without KMS)
+      kms-key-id: ${COREBANKING_DOCUMENTS_S3_KMS_KEY_ID:}       # empty: the bucket's default KMS key
+  mail:
+    # Outgoing e-mail (scheduled reports to internal staff, EOD failure alerts, the SMTP e-mail provider) through
+    # an SMTP relay: Amazon SES over SMTP in the cloud tiers, Mailpit locally. Relay settings: spring.mail.*.
+    enabled: ${COREBANKING_MAIL_ENABLED:false}
+    from: ${COREBANKING_MAIL_FROM:no-reply@example.invalid}
   eod:
     partitions: 4
     scheduler-enabled: true

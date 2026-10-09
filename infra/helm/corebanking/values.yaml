@@ -49,6 +49,20 @@ config:
   COREBANKING_OIDC_ISSUER_PREFIX: "https://id.example.in/realms/"
   COREBANKING_OIDC_AUDIENCE: "api"
   TZ: "Asia/Kolkata"
+  # Documents on S3 (bucket from the Terraform s3-documents module; access through the IRSA role). Each tenant's
+  # objects are encrypted with its own KMS key (control.tenant.kms_key_arn); the default key below is for keys
+  # outside a tenant prefix.
+  COREBANKING_DOCUMENTS_STORE: "s3"
+  COREBANKING_DOCUMENTS_S3_BUCKET: "corebanking-ENV-documents"
+  COREBANKING_DOCUMENTS_S3_REGION: "ap-south-1"
+  COREBANKING_DOCUMENTS_S3_SSE: "aws:kms"
+  # COREBANKING_DOCUMENTS_S3_KMS_KEY_ID: "arn:aws:kms:ap-south-1:ACCOUNT:key/PLATFORM-KEY"
+  # E-mail through Amazon SES over SMTP (Terraform module ses). SPRING_MAIL_USERNAME / SPRING_MAIL_PASSWORD (the SES
+  # SMTP credentials) go in the existing Secret, never here.
+  COREBANKING_MAIL_ENABLED: "false"
+  COREBANKING_MAIL_FROM: "no-reply@mail.example.in"
+  SPRING_MAIL_HOST: "email-smtp.ap-south-1.amazonaws.com"
+  SPRING_MAIL_PORT: "587"
   # Extra JVM flags; the image already sets -XX:MaxRAMPercentage=75.
   # JAVA_TOOL_OPTIONS: "-XX:+UseZGC"
 

@@ -163,7 +163,7 @@ export function seedPlatformMore(db: MockDb, seedAt: string, now: number) {
   ];
   db.jobRuns = [
     { id: uuid(), jobCode: 'KYC_EXPIRY', origin: 'SCHEDULE', scheduledFor: ago(6), requestedBy: 'system', status: 'COMPLETED', startedAt: ago(6), finishedAt: ago(5.99), processed: 1, failed: 0, error: null, artifact: null },
-    { id: uuid(), jobCode: 'REPORT_COLLECTIONS', origin: 'SCHEDULE', scheduledFor: ago(50), requestedBy: 'maker', status: 'COMPLETED', startedAt: ago(50), finishedAt: ago(49.99), processed: 12, failed: 0, error: null, artifact: { delivery: 'PENDING_PROVIDER' } },
+    { id: uuid(), jobCode: 'REPORT_COLLECTIONS', origin: 'SCHEDULE', scheduledFor: ago(50), requestedBy: 'maker', status: 'COMPLETED', startedAt: ago(50), finishedAt: ago(49.99), processed: 12, failed: 0, error: null, artifact: { delivery: 'SENT', recipientsSent: 1, recipientsLeftOut: 0 } },
     { id: uuid(), jobCode: 'EXPORT_CLEANUP', origin: 'SCHEDULE', scheduledFor: ago(70), requestedBy: 'system', status: 'FAILED', startedAt: ago(70), finishedAt: ago(69.98), processed: 0, failed: 1, error: 'Document store not reachable', artifact: null },
   ];
 
@@ -387,7 +387,7 @@ export function registerPlatformMoreRoutes(db: MockDb, r: PlatformMoreRouter) {
     if (j.kind === 'DEFERRED_RECEIPTS') Object.assign(run, bookDeferredReceipts(db, now));
     else if (j.kind === 'KYC_EXPIRY') run.processed = db.kycDocuments.filter((d) => d.meta.expiryDate && d.meta.expiryDate < db.businessDate).length;
     else if (j.kind === 'CONSENT_EXPIRY') run.processed = db.consents.filter((c) => c.status === 'ACTIVE' && c.expiresAt && c.expiresAt <= now).length;
-    else if (j.kind === 'REPORT') Object.assign(run, { processed: db.loans.length, artifact: { delivery: 'PENDING_PROVIDER' } });
+    else if (j.kind === 'REPORT') Object.assign(run, { processed: db.loans.length, artifact: { delivery: 'SENT', recipientsSent: 1, recipientsLeftOut: 0 } });
     else run.processed = 1;
     db.jobRuns.push(run);
     appendAudit(db, now, user.username, 'JOB_RUN', 'JOB', j.code ?? null, { processed: run.processed, failed: run.failed });

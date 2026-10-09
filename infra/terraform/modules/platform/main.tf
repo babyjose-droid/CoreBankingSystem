@@ -92,6 +92,18 @@ module "documents" {
   tags = var.tags
 }
 
+# ---- Outgoing e-mail (Amazon SES over SMTP); off until a sending domain is given --------------------
+
+module "mail" {
+  source = "../ses"
+  count  = var.mail_domain == null ? 0 : 1
+
+  name   = var.name
+  domain = var.mail_domain
+
+  tags = var.tags
+}
+
 # ---- Backend IAM role (IRSA) ---------------------------------------------------------------------
 
 data "aws_iam_policy_document" "backend_assume" {

@@ -34,6 +34,11 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-flyway")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.springframework.modulith:spring-modulith-starter-core")
+    // Outgoing e-mail over SMTP (Amazon SES, Mailpit locally): platform.mail.SmtpMail
+    implementation("org.springframework.boot:spring-boot-starter-mail")
+    // Document store on S3 (platform.S3DocumentStore); module versions from the AWS SDK BOM
+    implementation(platform(libs.awssdk.bom))
+    implementation("software.amazon.awssdk:s3")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

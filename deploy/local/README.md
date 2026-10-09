@@ -9,6 +9,8 @@
 | PostgreSQL 16 | `localhost:5432` | databases `control`, `tenant_demo_nbfc`; superuser `postgres` / `postgres-local-only` |
 | Keycloak 26 (dev mode) | http://localhost:8081 | admin console: `admin` / `admin-local-only`; realm `demo-nbfc` |
 | Backend | http://localhost:8080 | health: `/actuator/health` |
+| MinIO (S3 for documents) | http://localhost:9001 (console), API `localhost:9000` | bucket `corebanking-documents`; root user and password in `.env` |
+| Mailpit (mail catcher) | http://localhost:8025 | every e-mail the backend sends |
 | Staff console (optional) | http://localhost:5173 | profile `console`; real backend + Keycloak (`VITE_MOCK=0`), API via the Vite `/api` proxy |
 
 All ports bind to 127.0.0.1 only. The console container shares the backend's network namespace (so the
@@ -124,6 +126,19 @@ Get a token for API testing (browser flow via the console, or the service accoun
 curl -s -d grant_type=client_credentials -d client_id=corebanking-service -d client_secret=change-me \
   http://localhost:8081/realms/demo-nbfc/protocol/openid-connect/token | jq -r .access_token
 ```
+
+## Documents (MinIO) and e-mail (Mailpit)
+
+The backend stores KYC documents, report files and NACH files in **MinIO**, an S3-compatible store, through the same
+code that uses Amazon S3 in the cloud (`COREBANKING_DOCUMENTS_STORE=s3`, path-style, endpoint `http://minio:9000`).
+Every object is written with SSE-KMS under MinIO's built-in key `corebanking-local`; `minio-init` creates the private
+bucket once. `init-env.sh` generates the MinIO root user, password and KMS key into `.env`. If your MinIO image refuses
+SSE-KMS, set `COREBANKING_DOCUMENTS_S3_SSE: none` on the backend (local only). To keep the old directory store, set
+`COREBANKING_DOCUMENTS_STORE: directory`.
+
+E-mail goes to **Mailpit** (http://localhost:8025): scheduled report files (only to addresses on the tenant property
+`mail.internal-domains`, seeded as `demo-nbfc.invalid`), end-of-day failure alerts, and customer messages of the
+`SMTP` e-mail provider (the demo tenant's EMAIL provider when the deployment enables `SMTP`). Nothing leaves your machine.
 
 ## Keycloak admin client (sessions, API clients)
 

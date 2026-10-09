@@ -12,16 +12,18 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
  * {@link DocumentStore} on a directory ({@code corebanking.documents.dir}). Files and directories are created
  * with owner-only permissions. The content type is not stored here: callers keep it with their own metadata.
  * <p>
- * This is the only implementation today. The S3 implementation is pending (it needs the AWS SDK dependency); in
- * the cloud tiers point the directory at an encrypted volume until then.
+ * Selected with {@code corebanking.documents.store=directory} (the default): dev and standalone installs, or a
+ * mounted encrypted volume. The cloud tiers use {@link S3DocumentStore}.
  */
 @Component
+@ConditionalOnProperty(name = "corebanking.documents.store", havingValue = "directory", matchIfMissing = true)
 public class FileDocumentStore implements DocumentStore {
 
     private static final Set<PosixFilePermission> DIR_PERMISSIONS = PosixFilePermissions.fromString("rwx------");

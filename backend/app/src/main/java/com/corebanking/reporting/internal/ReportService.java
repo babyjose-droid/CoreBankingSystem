@@ -127,7 +127,7 @@ public class ReportService {
     /**
      * Runs a report for its schedule (US-113), with the branch scope of the staff user who scheduled it. That user
      * held the report's permission when the schedule was proposed and a checker approved it; the run is recorded
-     * under their name, so they can download the file. E-mail delivery is not built (OI-06).
+     * under their name, so they can download the file. E-mail delivery: ReportJobs (internal recipients only).
      *
      * @param schedule the cron expression that fired, kept on the run
      */
@@ -370,6 +370,30 @@ public class ReportService {
         return rejections
                 ? new Download(DocumentKey.safeFileName(s.fileName() + ".rejected.csv"), CSV_TYPE, content)
                 : new Download(s.fileName(), s.contentType(), content);
+    }
+
+    /**
+     * For e-mail delivery of a scheduled run (ReportJobs): the stored file, checked against its SHA-256 as on download,
+     * and whether the report may be e-mailed at all — a credit-bureau file never is (it goes to the bureau through
+     * its own channel). Audited like a download, under the run's owner. Null when there is no file to send.
+     */
+    Download fileForDelivery(UUID runId) {
+        List<Stored> found = jdbc.query("""
+                SELECT artifact_key, artifact_sha256, content_type, report_code, status, requested_by, file_name, rejected_count
+                  FROM reporting.report_run WHERE id = ? AND artifact_purged_at IS NULL
+                """, (rs, i) -> new Stored(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
+                        rs.getString(7), rs.getInt(8)), runId);
+        if (found.isEmpty() || !"COMPLETED".equals(found.get(0).status())) return null;
+        Stored s = found.get(0);
+        Definition d = definition(s.reportCode()).api();
+        if ("UCRF".equals(d.outputFormat())) return null;
+        byte[] content = store.get(DocumentKey.requireTenant(s.key(), CurrentUser.requireTenant()));
+        if (s.sha256() != null && !s.sha256().equals(sha256(content))) throw new IllegalStateException("the stored report file no longer matches its record");
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("runId", runId.toString());
+        detail.put("part", "e-mail");
+        audit.record(s.requestedBy(), "REPORT_EMAILED", "REPORT", d.code(), detail);
+        return new Download(s.fileName(), s.contentType(), content);
     }
 
     // ------------------------------------------------------------------------------------------------ retention

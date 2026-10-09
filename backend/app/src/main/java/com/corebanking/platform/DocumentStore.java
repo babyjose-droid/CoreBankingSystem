@@ -4,9 +4,9 @@ package com.corebanking.platform;
  * Binary document storage by key (KYC documents, generated reports). Keys are relative paths such as
  * {@code tenants/<code>/kyc/<customer>/<uuid>}; a key never contains {@code ..} and never starts with {@code /}.
  * <p>
- * Implementations: {@link FileDocumentStore} (a directory; dev, standalone installs and a mounted encrypted
- * volume). The S3 implementation (SSE-KMS, one prefix per tenant) is pending: it needs the AWS SDK dependency,
- * which is not on the classpath yet.
+ * Implementations, chosen by {@code corebanking.documents.store}: {@link FileDocumentStore} ({@code directory}, the
+ * default: dev, standalone installs, a mounted encrypted volume) and {@link S3DocumentStore} ({@code s3}: SSE-KMS,
+ * one prefix per tenant; MinIO in the local stack).
  */
 public interface DocumentStore {
 

@@ -3,7 +3,9 @@ package com.corebanking.reporting.internal;
 import com.corebanking.kernel.ReportPeriod;
 import com.corebanking.platform.ApiException;
 import com.corebanking.platform.CurrentUser;
+import com.corebanking.platform.InternalRecipients;
 import com.corebanking.platform.JobHandler;
+import com.corebanking.platform.Mail;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -22,8 +24,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *       business date at run time), {@code parameters} (the report's other parameters), {@code emailTo}
  *       (recipients) and {@code runAs}. {@code runAs} is always the user who proposed the schedule: they had to
  *       hold the report's permission, a checker approved, and the run uses their branch scope and is theirs to
- *       download. E-mail delivery waits for the notification provider (OI-06): the file is stored and the run's
- *       artifact says {@code delivery: PENDING_PROVIDER}.</li>
+ *       download. The file is e-mailed to the recipients on an internal domain (tenant property
+ *       {@code mail.internal-domains}): a report can hold personal data, so never to anyone else, and a credit-bureau
+ *       file is never e-mailed. The run's artifact says how delivery went (SENT, NOT_CONFIGURED, NO_INTERNAL_RECIPIENT,
+ *       NOT_EMAILED, FAILED) and how many recipients were left out — never the addresses.</li>
  *   <li><b>DASHBOARD_REFRESH</b> — stores the whole-book figures of the business date for the dashboard trend.</li>
  *   <li><b>EXPORT_CLEANUP</b> — removes report files older than the retention period: tenant property
  *       {@code reports.retention-days}, else {@code corebanking.reports.retention-days} (default 90).</li>
@@ -33,7 +37,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class ReportJobs {
 
     @Bean
-    JobHandler scheduledReportJob(ReportService reports, JdbcTemplate jdbc) {
+    JobHandler scheduledReportJob(ReportService reports, JdbcTemplate jdbc, Mail mail) {
         return new JobHandler() {
             @Override public String kind() { return "REPORT"; }
 
@@ -92,8 +96,46 @@ class ReportJobs {
                 artifact.put("rows", run.rowCount());
                 artifact.put("requestedBy", run.requestedBy());
                 artifact.put("emailTo", p.get("emailTo") == null ? List.of() : p.get("emailTo"));
-                artifact.put("delivery", "PENDING_PROVIDER");      // stored, not e-mailed: no notification provider yet (OI-06)
-                return new Result(run.rowCount() == null ? 0 : run.rowCount(), 0, artifact);
+                int failed = deliver(run, p.get("emailTo"), artifact);
+                return new Result(run.rowCount() == null ? 0 : run.rowCount(), failed, artifact);
+            }
+
+            /** E-mails the file to the internal recipients; records the outcome on the artifact. Returns 1 on failure. */
+            private int deliver(ReportService.Run run, Object emailTo, Map<String, Object> artifact) {
+                List<String> to = new ArrayList<>();
+                if (emailTo instanceof List<?> l) l.forEach(o -> to.add(String.valueOf(o)));
+                if (to.isEmpty()) {
+                    artifact.put("delivery", "NO_RECIPIENT");
+                    return 0;
+                }
+                if (!mail.enabled()) {
+                    artifact.put("delivery", "NOT_CONFIGURED");     // the file is stored; the deployment has no mail relay
+                    return 0;
+                }
+                InternalRecipients.Split split = InternalRecipients.split(to, InternalRecipients.domains(jdbc));
+                artifact.put("recipientsLeftOut", split.skipped());
+                if (split.internal().isEmpty()) {
+                    artifact.put("delivery", "NO_INTERNAL_RECIPIENT");
+                    return 0;
+                }
+                ReportService.Download file = reports.fileForDelivery(run.id());
+                if (file == null) {
+                    artifact.put("delivery", "NOT_EMAILED");        // a credit-bureau file, or no file
+                    return 0;
+                }
+                try {
+                    mail.send(split.internal(), "Report " + run.reportCode() + " for " + run.businessDate(),
+                            "The scheduled report " + run.reportCode() + " is attached (" + run.rowCount() + " rows).\n"
+                                    + "It may contain personal data: keep it within the lender and delete it when no longer needed.",
+                            List.of(new Mail.Attachment(file.fileName(), file.contentType(), file.content())));
+                    artifact.put("delivery", "SENT");
+                    artifact.put("recipientsSent", split.internal().size());
+                    return 0;
+                } catch (IllegalStateException e) {
+                    artifact.put("delivery", "FAILED");
+                    artifact.put("deliveryError", e.getMessage());
+                    return 1;
+                }
             }
         };
     }

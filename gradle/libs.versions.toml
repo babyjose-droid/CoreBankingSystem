@@ -5,10 +5,13 @@ spring-boot = "4.1.0"
 spring-dependency-management = "1.1.7"
 spring-modulith = "2.1.1"
 archunit = "1.4.1"
+# AWS SDK for Java v2 (S3 document store). Any 2.x release works; Renovate keeps it current.
+awssdk = "2.31.0"
 
 [libraries]
 spring-modulith-bom = { module = "org.springframework.modulith:spring-modulith-bom", version.ref = "spring-modulith" }
 archunit = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
+awssdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awssdk" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }

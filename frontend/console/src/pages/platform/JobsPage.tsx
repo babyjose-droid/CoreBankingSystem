@@ -22,6 +22,21 @@ function CronText({ value }: { value: string | null | undefined }) {
   );
 }
 
+/** How a scheduled report's file was delivered (ReportJobs on the backend); never names a recipient. */
+export function deliveryNote(a: Record<string, unknown> | null | undefined): string {
+  const left = Number(a?.recipientsLeftOut ?? 0);
+  const out = left > 0 ? `; ${left} recipient(s) outside the internal domains left out` : '';
+  switch (a?.delivery) {
+    case 'SENT': return `Report e-mailed to ${String(a.recipientsSent ?? 0)} internal recipient(s)${out}`;
+    case 'NOT_CONFIGURED': return 'Report produced; e-mail is not configured in this deployment';
+    case 'NO_INTERNAL_RECIPIENT': return `Report produced; not e-mailed: no recipient on an internal domain${out}`;
+    case 'NOT_EMAILED': return 'Report produced; a credit-bureau file is never e-mailed';
+    case 'FAILED': return `Report produced; e-mail failed: ${String(a.deliveryError ?? '')}`;
+    case 'PENDING_PROVIDER': return 'Report produced; e-mail delivery is waiting for the e-mail provider';
+    default: return '';
+  }
+}
+
 export function JobsPage() {
   const me = useMe().data!;
   const canRun = hasPermission(me.permissions, P.jobRun);
@@ -114,7 +129,7 @@ export function JobsPage() {
               { key: 'status', header: 'Status', render: (r) => <StatusBadge status={r.status} /> },
               { key: 'processed', header: 'Processed', numeric: true, render: (r) => r.processed ?? 0 },
               { key: 'failed', header: 'Failed', numeric: true, render: (r) => r.failed ?? 0 },
-              { key: 'note', header: 'Result', render: (r) => r.error ?? (r.artifact?.delivery === 'PENDING_PROVIDER' ? 'Report produced; e-mail delivery is waiting for the e-mail provider' : '') },
+              { key: 'note', header: 'Result', render: (r) => r.error ?? deliveryNote(r.artifact as Record<string, unknown> | null | undefined) },
             ]}
             rows={runs.data ?? []}
             rowKey={(r) => r.id ?? ''}

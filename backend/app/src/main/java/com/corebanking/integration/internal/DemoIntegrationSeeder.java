@@ -60,14 +60,20 @@ class DemoIntegrationSeeder implements DemoTenantSeeder {
         for (ProviderKind kind : ProviderKind.values()) added += provider(kind);
         added += property("nach.sponsor-bank-code", "TEST0000001");
         added += property("nach.utility-code", "NACH00000000000001");
+        // scheduled report files are e-mailed to staff of this domain only (InternalRecipients); Mailpit catches them
+        added += property("mail.internal-domains", "demo-nbfc.invalid");
         for (String[] t : SMS_TEMPLATES) added += smsTemplate(t[0], t[1], t[2]);
         if (added > 0) log.warn("demo tenant: {} simulator integration settings added (local development only)", added);
     }
 
-    /** The simulator as the kind's provider, unless the kind was ever configured (a developer's own set-up stays). */
+    /**
+     * The simulator as the kind's provider, unless the kind was ever configured (a developer's own set-up stays). For
+     * e-mail, the SMTP relay when the deployment enables it (the local stack's Mailpit shows the messages).
+     */
     private int provider(ProviderKind kind) {
         if (!jdbc.queryForList("SELECT 1 FROM integration.provider_config WHERE kind = ?", kind.name()).isEmpty()) return 0;
-        ProviderCatalog.Spec spec = ProviderCatalog.spec(kind, Simulator.CODE);
+        String code = kind == ProviderKind.EMAIL && providers.deploymentAllows(ProviderCatalog.SMTP) ? ProviderCatalog.SMTP : Simulator.CODE;
+        ProviderCatalog.Spec spec = ProviderCatalog.spec(kind, code);
         Map<String, String> sealed = new TreeMap<>();
         // generated here, kept only as ciphertext: POST /integrations/simulator/callbacks signs with it server-side
         if (spec.secrets().contains(Simulator.SECRET)) sealed.put(Simulator.SECRET, randomSecret());
@@ -78,7 +84,7 @@ class DemoIntegrationSeeder implements DemoTenantSeeder {
         return jdbc.update("""
                 INSERT INTO integration.provider_config (id, kind, provider, settings, secrets_cipher, secret_hints, version, updated_by)
                 VALUES (?, ?, ?, ?::jsonb, ?, ?::jsonb, 1, ?)
-                """, UUID.randomUUID(), kind.name(), Simulator.CODE, json.write(settings),
+                """, UUID.randomUUID(), kind.name(), code, json.write(settings),
                 sealed.isEmpty() ? null : secrets.seal(json.write(sealed), ProviderConfigService.ROW_AAD), json.write(hints), ACTOR);
     }
 

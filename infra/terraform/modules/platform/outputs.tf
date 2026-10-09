@@ -76,3 +76,8 @@ output "tenant_key_replica_arns" {
   description = "DR tenant key replica ARNs (feed back into prod tenants[*].secret_replica_kms_key_arn)."
   value       = { for code, k in aws_kms_replica_key.tenant : code => k.arn }
 }
+
+output "mail_dkim_tokens" {
+  description = "SES Easy DKIM tokens to publish in DNS (empty when mail_domain is not set)."
+  value       = var.mail_domain == null ? [] : module.mail[0].dkim_tokens
+}

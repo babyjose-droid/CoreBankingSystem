@@ -5149,7 +5149,7 @@ export interface components {
             processed?: number;
             failed?: number;
             error?: string | null;
-            /** @description What the run produced. A scheduled report carries `reportRunId` and `delivery` (PENDING_PROVIDER until e-mail is built). */
+            /** @description What the run produced. A scheduled report carries `reportRunId` and `delivery`: SENT (to `recipientsSent` internal recipients), NO_RECIPIENT, NOT_CONFIGURED (no mail relay), NO_INTERNAL_RECIPIENT (none on the tenant property mail.internal-domains), NOT_EMAILED (a credit-bureau file) or FAILED (`deliveryError`); `recipientsLeftOut` counts recipients outside the internal domains. Never addresses. */
             artifact?: {
                 [key: string]: unknown;
             } | null;
