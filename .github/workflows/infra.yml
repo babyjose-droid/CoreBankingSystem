@@ -216,6 +216,13 @@ jobs:
           sa = next(u for u in r["users"] if u["username"] == "service-account-corebanking-admin")
           assert set(sa["clientRoles"]) == {"realm-management"} and not sa.get("realmRoles")
           assert "corebanking-admin" not in scope and "corebanking-admin" not in realm_scope
+          # Keycloak stores client, role and client-scope descriptions in varchar(255): a longer one fails the import.
+          import glob, importlib.util
+          spec = importlib.util.spec_from_file_location("ntr", "infra/keycloak/new-tenant-realm.py")
+          ntr = importlib.util.module_from_spec(spec); spec.loader.exec_module(ntr)
+          for f in sorted(glob.glob("deploy/local/keycloak/*.json")):
+              too_long = ntr.long_descriptions(json.load(open(f)))
+              assert not too_long, (f, too_long)
           print("realm template OK")
           EOF
       - name: new-tenant-realm.py smoke test
@@ -243,6 +250,11 @@ jobs:
           assert "realm-management" not in text, "a realm-management role leaked into a tenant realm"
           assert "${" not in text, "an environment placeholder leaked into a tenant realm"
           print("tenant realm has no local admin client")
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("ntr", "infra/keycloak/new-tenant-realm.py")
+          ntr = importlib.util.module_from_spec(spec); spec.loader.exec_module(ntr)
+          assert not ntr.long_descriptions(r), ntr.long_descriptions(r)
+          print("tenant realm descriptions fit Keycloak's 255 characters")
           EOF
       - name: docker compose config
         working-directory: deploy/local

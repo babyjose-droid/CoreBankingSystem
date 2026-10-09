@@ -47,6 +47,25 @@ SERVICE_CLIENT = "corebanking-service"
 DEV_LOGIN_CLIENT = "console-dev"
 DEV_USER_PREFIX = "dev-"
 LOCAL_ADMIN_CLIENT = "corebanking-admin"
+# Keycloak stores client, role and client-scope descriptions in varchar(255): a longer one fails the realm import.
+MAX_DESCRIPTION = 255
+
+
+def long_descriptions(node, path: str = "realm") -> list[str]:
+    """Paths of every 'description' longer than Keycloak accepts, anywhere in a realm document."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        label = node.get("clientId") or node.get("name") or node.get("username")
+        here = f"{path}[{label}]" if label else path
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str) and len(value) > MAX_DESCRIPTION:
+                found.append(f"{here}.description ({len(value)} characters)")
+            else:
+                found.extend(long_descriptions(value, f"{here}.{key}"))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(long_descriptions(item, path))
+    return found
 SECRET_PLACEHOLDER = "change-me"
 
 
@@ -111,6 +130,9 @@ def render(template: dict, tenant: str, console_url: str, display_name: str | No
             client["secret"] = SECRET_PLACEHOLDER
     if tenant_mappers == 0:
         raise ValueError("template has no hardcoded 'tenant' claim mapper; refusing to render")
+    too_long = long_descriptions(realm)
+    if too_long:
+        raise ValueError(f"descriptions longer than {MAX_DESCRIPTION} characters fail the Keycloak import: {too_long}")
 
     users = realm.get("users", [])
     if keep_demo_users:
@@ -153,6 +175,16 @@ def self_test(template_path: Path) -> None:
         assert "${" not in text, f"{label}: environment placeholder leaked into rendered realm"
 
     assert_no_local_admin(out, "tenant realm")
+    assert not long_descriptions(template), long_descriptions(template)
+    long_template = copy.deepcopy(template)
+    long_template["clients"][0]["description"] = "x" * (MAX_DESCRIPTION + 1)
+    try:
+        render(long_template, "acme-finance", "https://acme-finance.console.example.in", None, False)
+        raise AssertionError("a description over 255 characters should be refused")
+    except ValueError as e:
+        assert "255" in str(e)
+    nested = {"roles": {"client": {"api": [{"name": "x:y", "description": "y" * 256}]}}}
+    assert long_descriptions(nested) == ["realm.roles.client.api[x:y].description (256 characters)"], long_descriptions(nested)
     assert not any(u["username"].startswith(DEV_USER_PREFIX) for u in out["users"]), "dev users must be stripped"
     assert out["passwordPolicy"] == template["passwordPolicy"]
     assert out["bruteForceProtected"] is True and out["failureFactor"] == 5
