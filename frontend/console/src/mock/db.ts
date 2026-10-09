@@ -98,7 +98,7 @@ export type ApprovalPayload =
   | { kind: 'VOUCHER_REVERSAL'; voucherId: string; reason: string }
   | { kind: 'EOD_SCHEDULE'; schedule: EodSchedule }
   | { kind: 'LOAN_PRODUCT'; product: LoanProduct }
-  | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null; amount?: number | null }
+  | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null; amount?: number | null; maturityDate?: string | null }
   | { kind: 'LOAN_SANCTION_CHANGE'; loanId: string; newAmount: number; reason: string; figures: Record<string, unknown> }
   | { kind: 'LOAN_RESET_PREFERENCE'; loanId: string; option: 'KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI' | null; reason: string }
   | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
@@ -163,6 +163,8 @@ export interface StoredLoanEvent {
     tranche?: number;
     feesDeducted?: number;
     netDisbursed?: number;
+    /** DISBURSEMENT, a later tranche of a TRANCHE_BULLET loan: when its principal falls due. */
+    maturityDate?: string;
     /** SANCTION_CHANGE: the new sanctioned amount (paise). */
     newAmount?: number;
     /** NPA_OVERRIDE */

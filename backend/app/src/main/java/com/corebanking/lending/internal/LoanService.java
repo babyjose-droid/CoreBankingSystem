@@ -118,7 +118,9 @@ public class LoanService {
 
     /**
      * Terms and rate of an application on a product. The rate comes, in this order, from the agreed instalment, the
-     * agreed maturity amount, the application, the product's benchmark + spread, or its interest table (rate slabs).
+     * agreed maturity amount, the application, the product's benchmark + spread (its own, or from its SPREAD interest
+     * table: floating rate slab), or its interest table (rate slabs). A product with an elapsed-tenure table starts at
+     * its first step.
      */
     private Priced price(ProductService.Product product, Application a, LocalDate disbursal) {
         ProductService.Product p = product.withDefaults();
@@ -143,8 +145,21 @@ public class LoanService {
         if (moratorium > p.maxMoratoriumMonths()) throw ApiException.invalid("moratorium above product limit " + p.maxMoratoriumMonths());
         if (a.instalment() != null && a.maturityAmount() != null) throw ApiException.invalid("give either instalment or maturityAmount, not both");
         BigDecimal rate = a.rate();
+        BigDecimal spread = null;
         String explanation;
-        if (a.instalment() != null) {
+        if (!p.rateSteps().isEmpty()) {
+            // elapsed-tenure table: the loan starts at the first step; the day-end moves it on (LoanAccount.applyRateChanges)
+            if (a.instalment() != null || a.maturityAmount() != null) {
+                throw ApiException.invalid("the rate of this product follows its elapsed-tenure table: give neither instalment nor maturityAmount");
+            }
+            BigDecimal first = p.rateSteps().get(0).ratePercent();
+            if (rate != null && rate.compareTo(first) != 0) {
+                throw ApiException.invalid("the rate of this product follows its elapsed-tenure table: " + plain(first) + "% from month 1");
+            }
+            rate = first;
+            explanation = "elapsed-tenure table: " + String.join(", ", p.rateSteps().stream()
+                    .map(st -> plain(st.ratePercent()) + "% from month " + st.fromMonth()).toList());
+        } else if (a.instalment() != null) {
             if (rate != null) throw ApiException.invalid("give either the rate or the instalment: the rate follows from the instalment");
             rate = BigDecimal.ZERO;                // ignored by the engine; replaced below by the rate the instalment implies
             explanation = "rate implied by the agreed instalment of " + plain(a.instalment());
@@ -169,11 +184,17 @@ public class LoanService {
             if (benchmark == null) {
                 throw ApiException.invalid("no rate is recorded for benchmark " + p.benchmarkCode() + " on or before " + disbursal);
             }
-            rate = benchmark.add(p.spread());
-            explanation = p.benchmarkCode() + " " + plain(benchmark) + "% + spread " + plain(p.spread()) + "%";
+            spread = p.spread();
+            String source = "spread";
+            if (spread == null) {
+                // floating rate slab (V25): the spread for this amount and tenor from the product's SPREAD table
+                spread = (BigDecimal) slab(p, a.amount(), tenor).get("rate");
+                source = "slab spread (" + p.interestTableCode() + ")";
+            }
+            rate = benchmark.add(spread);
+            explanation = p.benchmarkCode() + " " + plain(benchmark) + "% + " + source + " " + plain(spread) + "%";
         } else if (p.interestTableCode() != null) {
-            Map<String, Object> r = jdbc.queryForMap("SELECT rate, explanation FROM lending.resolve_rate(?, ?, ?)",
-                    p.interestTableCode(), a.amount(), tenor);
+            Map<String, Object> r = slab(p, a.amount(), tenor);
             rate = (BigDecimal) r.get("rate");
             explanation = (String) r.get("explanation");
         } else {
@@ -187,7 +208,12 @@ public class LoanService {
             throw ApiException.invalid("rate " + plain(rate) + "% must be within the product band " + p.minRate().stripTrailingZeros().toPlainString()
                     + "% to " + p.maxRate().stripTrailingZeros().toPlainString() + "%");
         }
-        return new Priced(terms, plan, rate, explanation, p.benchmarkCode() == null ? null : p.spread());
+        return new Priced(terms, plan, rate, explanation, spread);
+    }
+
+    /** The product's interest table row for this amount and tenor: a rate, or a spread for a SPREAD table. */
+    private Map<String, Object> slab(ProductService.Product p, BigDecimal amount, int tenor) {
+        return jdbc.queryForMap("SELECT rate, explanation FROM lending.resolve_rate(?, ?, ?)", p.interestTableCode(), amount, tenor);
     }
 
     private Resolved resolve(Application a, String loanNo) {
@@ -231,7 +257,7 @@ public class LoanService {
         ProductService.Product p = q.product().withDefaults();
         LocalDate disbursal = q.disbursalDate() == null ? days.current().businessDate() : q.disbursalDate();
         boolean derived = q.instalment() != null || q.maturityAmount() != null;
-        boolean priced = p.benchmarkCode() != null || p.interestTableCode() != null;
+        boolean priced = p.benchmarkCode() != null || p.interestTableCode() != null || !p.rateSteps().isEmpty();
         BigDecimal amount = q.amount() == null ? p.minAmount() : q.amount();
         List<ProductService.ScheduleRow> rows = q.scheduleRows();
         boolean sampleRows = "STRUCTURED".equals(p.repaymentMethod()) && (rows == null || rows.isEmpty());
@@ -328,6 +354,13 @@ public class LoanService {
         m.put("interestRate", plain(r.rate()));
         m.put("effectiveRate", plain(plan.accrualRatePercent()));
         m.put("rateExplanation", r.rateExplanation());
+        // an elapsed-tenure table is part of the contract: every step is disclosed (the schedule shows them too)
+        m.put("rateSteps", o.rateSteps().isEmpty() ? null : o.rateSteps().stream().map(st -> {
+            Map<String, Object> step = new LinkedHashMap<>();
+            step.put("fromMonth", st.fromMonth());
+            step.put("ratePercent", plain(st.ratePercent()));
+            return step;
+        }).toList());
         m.put("emi", plan.emi() == null ? null : plain(plan.emi()));
         m.put("bpiMode", o.bpiMode().name());
         m.put("brokenPeriodInterest", plain(plan.brokenPeriodInterest()));
@@ -447,14 +480,20 @@ public class LoanService {
         if (first && amount.compareTo(undrawn) < 0 && !Boolean.TRUE.equals(loan.get("multiple_disbursements"))) {
             throw ApiException.invalid("this product is disbursed in one payment: the amount must be " + plain(undrawn));
         }
+        LocalDate maturity;
+        try {
+            maturity = payload.get("maturityDate") == null ? null : LocalDate.parse(String.valueOf(payload.get("maturityDate")));
+        } catch (java.time.format.DateTimeParseException e) {
+            throw ApiException.invalid("maturityDate must be a date (yyyy-mm-dd)");
+        }
         payload.put("loanId", loanId.toString());
         payload.put("loanNo", loan.get("loan_no"));
         payload.put("amount", plain(amount));
-        payload.put("preview", simulateDisbursement(loanId, amount));      // also refuses now what the engine would refuse later
+        payload.put("preview", simulateDisbursement(loanId, amount, maturity));      // also refuses now what the engine would refuse later
         // maker's role amount limit (US-021); the checker's is applied when the request is approved
         limits.require("LOAN_DISBURSEMENT", AmountLimitService.MAKE, amount, (String) loan.get("loan_no"));
         if (CurrentUser.get().has("loan:stp")) {
-            return disburse(loanId, CurrentUser.username(), amount);
+            return disburse(loanId, CurrentUser.username(), amount, maturity);
         }
         return com.corebanking.platform.ApprovalView.of(approvals.propose("LOAN_DISBURSEMENT", "DISBURSE", (String) loan.get("loan_no"),
                 payload, null, amount, (String) loan.get("branch_code"), null));
@@ -478,11 +517,16 @@ public class LoanService {
         return new Booking(params, terms, Boolean.TRUE.equals(row.get("pre_emi")), Boolean.TRUE.equals(row.get("multiple_disbursements")));
     }
 
-    /** First disbursement of a SANCTIONED loan, or a further tranche of an ACTIVE one. {@code amount} null = all undrawn. */
-    Map<String, Object> disburse(UUID loanId, String user, BigDecimal amount) {
+    /**
+     * First disbursement of a SANCTIONED loan, or a further tranche of an ACTIVE one. {@code amount} null = all undrawn.
+     * {@code maturity}: a later tranche of a tranche-bullet loan (method 18) is repaid on this date; the first one at
+     * the loan's tenor.
+     */
+    Map<String, Object> disburse(UUID loanId, String user, BigDecimal amount, LocalDate maturity) {
         LocalDate bd = days.requireOpen();
         String status = jdbc.queryForObject("SELECT status FROM lending.loan_account WHERE id = ? FOR UPDATE", String.class, loanId);
-        if (!"SANCTIONED".equals(status)) return drawTranche(loanId, user, amount, bd);
+        if (!"SANCTIONED".equals(status)) return drawTranche(loanId, user, amount, maturity, bd);
+        requireNoFirstMaturity(maturity);
         Booking b = booking(loanId, bd, true);
         BigDecimal first = amount == null ? b.terms().principal() : amount;
         if (first.compareTo(b.terms().principal()) < 0 && !b.tranches()) {
@@ -504,12 +548,13 @@ public class LoanService {
         return get(loanId);
     }
 
-    private Map<String, Object> drawTranche(UUID loanId, String user, BigDecimal amount, LocalDate bd) {
+    private Map<String, Object> drawTranche(UUID loanId, String user, BigDecimal amount, LocalDate maturity, LocalDate bd) {
         LoanStore.Loaded l = active(loanId);
         LoanAccount acc = l.account();
         LoanAccount.Snapshot before = acc.snapshot();
         BigDecimal draw = amount == null ? acc.undrawn() : amount;
-        LoanAccount.Result result = engine(() -> acc.drawTranche(draw, bd));
+        requireTrancheMaturity(loanId, acc, maturity, bd);
+        LoanAccount.Result result = engine(() -> acc.drawTranche(draw, bd, maturity));
         for (TransactionLot lot : result.lots()) posting.post(lot, user);
         LoanAccount.TrancheRow row = acc.tranches().get(acc.tranches().size() - 1);
         jdbc.update("UPDATE lending.loan_account SET net_disbursed = coalesce(net_disbursed, 0) + ? WHERE id = ?", row.net(), loanId);
@@ -523,13 +568,46 @@ public class LoanService {
         return get(loanId);
     }
 
-    /** The queryable copy of the engine's latest tranche (lending.loan_tranche, V18). */
+    /** The queryable copy of the engine's latest tranche (lending.loan_tranche, V18; its maturity, V25). */
     private void recordTranche(UUID loanId, UUID txnId, LoanAccount acc, String user) {
         LoanAccount.TrancheRow t = acc.tranches().get(acc.tranches().size() - 1);
         jdbc.update("""
-                INSERT INTO lending.loan_tranche (loan_id, tranche_no, txn_id, business_date, amount, fees_deducted, interest_deducted, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, loanId, t.no(), txnId, java.sql.Date.valueOf(t.date()), t.amount(), t.feesDeducted(), t.interestDeducted(), user);
+                INSERT INTO lending.loan_tranche (loan_id, tranche_no, txn_id, business_date, amount, fees_deducted, interest_deducted, created_by,
+                                                  maturity_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, loanId, t.no(), txnId, java.sql.Date.valueOf(t.date()), t.amount(), t.feesDeducted(), t.interestDeducted(), user,
+                t.maturity() == null ? null : java.sql.Date.valueOf(t.maturity()));
+    }
+
+    private static void requireNoFirstMaturity(LocalDate maturity) {
+        if (maturity != null) {
+            throw ApiException.invalid("the first disbursement matures at the loan's tenor: maturityDate is for a later tranche of a"
+                    + " tranche-bullet loan");
+        }
+    }
+
+    /**
+     * Method 18: a later tranche needs its own maturity, within the product's tenor limits counted from today (the
+     * product as it is now: tenor limits are not part of the engine parameters frozen into the loan). Any other
+     * method takes none.
+     */
+    private void requireTrancheMaturity(UUID loanId, LoanAccount acc, LocalDate maturity, LocalDate bd) {
+        boolean trancheBullet = acc.terms() != null && acc.terms().method() == RepaymentMethod.TRANCHE_BULLET;
+        if (!trancheBullet) {
+            if (maturity != null) throw ApiException.invalid("maturityDate applies to tranches of a tranche-bullet loan only");
+            return;
+        }
+        if (maturity == null) throw ApiException.invalid("each tranche of this loan is repaid on its own date: maturityDate is required");
+        Map<String, Object> t = jdbc.queryForMap("""
+                SELECT p.min_tenor_months, p.max_tenor_months FROM lending.loan_account l
+                  JOIN lending.loan_product p ON p.code = l.product_code WHERE l.id = ?
+                """, loanId);
+        int min = (Integer) t.get("min_tenor_months");
+        int max = (Integer) t.get("max_tenor_months");
+        if (maturity.isBefore(bd.plusMonths(min)) || maturity.isAfter(bd.plusMonths(max))) {
+            throw ApiException.invalid("the tranche's maturity must be " + min + " to " + max + " months from today: " + bd.plusMonths(min)
+                    + " to " + bd.plusMonths(max));
+        }
     }
 
     /** Disbursements made so far and what is left to draw (US-050). */
@@ -542,7 +620,7 @@ public class LoanService {
         m.put("tranches", jdbc.queryForList("""
                 SELECT tranche_no AS "trancheNo", txn_id AS "txnId", business_date::text AS "businessDate", amount::text AS amount,
                        fees_deducted::text AS "feesDeducted", interest_deducted::text AS "interestDeducted",
-                       net_disbursed::text AS "netDisbursed", created_by AS "createdBy"
+                       net_disbursed::text AS "netDisbursed", maturity_date::text AS "maturityDate", created_by AS "createdBy"
                   FROM lending.loan_tranche WHERE loan_id = ? AND reversed_by IS NULL ORDER BY tranche_no
                 """, loanId));
         return m;
@@ -567,12 +645,13 @@ public class LoanService {
      * What a disbursement of {@code amount} (null = everything undrawn) would do today, by the code that posts it:
      * fees and broken-period interest deducted, the net payout and the schedule after it. Nothing changes.
      */
-    public Map<String, Object> simulateDisbursement(UUID loanId, BigDecimal amount) {
+    public Map<String, Object> simulateDisbursement(UUID loanId, BigDecimal amount, LocalDate maturity) {
         LocalDate bd = days.current().businessDate();
         String status = jdbc.queryForObject("SELECT status FROM lending.loan_account WHERE id = ?", String.class, loanId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("asOf", bd.toString());
         if ("SANCTIONED".equals(status)) {
+            requireNoFirstMaturity(maturity);
             Booking b = booking(loanId, bd, false);
             BigDecimal first = amount == null ? b.terms().principal() : amount;
             if (first.compareTo(b.terms().principal()) < 0 && !b.tranches()) {
@@ -596,7 +675,8 @@ public class LoanService {
         }
         LoanAccount acc = active(loanId).account();
         BigDecimal draw = amount == null ? acc.undrawn() : amount;
-        LoanAccount.TrancheEffect e = engine(() -> acc.simulateTranche(draw, bd));
+        requireTrancheMaturity(loanId, acc, maturity, bd);
+        LoanAccount.TrancheEffect e = engine(() -> acc.simulateTranche(draw, bd, maturity));
         m.put("trancheNo", e.trancheNo());
         m.put("amount", plain(e.amount()));
         m.put("deductedFees", chargeRows(e.deductedFees()));
@@ -1885,7 +1965,9 @@ public class LoanService {
         public String apply(ApprovalRequest r) {
             UUID loanId = UUID.fromString(String.valueOf(r.payload().get("loanId")));
             Object amount = r.payload().get("amount");       // absent on requests raised before tranches (P2-6): the whole loan
-            loans.disburse(loanId, r.maker(), amount == null ? null : new BigDecimal(String.valueOf(amount)));
+            Object maturity = r.payload().get("maturityDate");   // a later tranche of a tranche-bullet loan (V25)
+            loans.disburse(loanId, r.maker(), amount == null ? null : new BigDecimal(String.valueOf(amount)),
+                    maturity == null ? null : LocalDate.parse(String.valueOf(maturity)));
             return String.valueOf(r.payload().get("loanNo"));
         }
     }

@@ -118,14 +118,19 @@ SEED_PRODUCTS.push({
   appropriationSequence: APPROPRIATION, appropriationMode: 'BY_DEMAND', prepaymentMode: 'REDUCE_TENURE', status: 'ACTIVE', version: 1, fees: [],
 });
 
-/** Mock interest tables (absolute slab rates by amount). */
+/** Mock interest tables (absolute slab rates by amount; HLS: spreads over the product's benchmark, a floating rate slab). */
 const RATE_TABLES: Record<string, Array<{ upTo: number; rate: number }>> = {
   PL1: [
     { upTo: 100_000_00, rate: 18 },
     { upTo: 300_000_00, rate: 16 },
     { upTo: Number.MAX_SAFE_INTEGER, rate: 14 },
   ],
+  HLS: [
+    { upTo: 25_00_000_00, rate: 3.25 },
+    { upTo: Number.MAX_SAFE_INTEGER, rate: 2.75 },
+  ],
 };
+const SPREAD_TABLES = ['HLS'];
 
 // ------------------------------------------------------------------ helpers
 export const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
@@ -261,9 +266,16 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
     } else if (rateIn === null) {
       const table = product.interestTableCode ? RATE_TABLES[product.interestTableCode] : undefined;
       const benchmark = product.benchmarkCode ? benchmarkRate(db, product.benchmarkCode, a.disbursalDate || db.businessDate) : undefined;
-      if (product.benchmarkCode && benchmark !== undefined) {
-        rate = Math.round((benchmark + C.num(product.spread ?? 0)) * 100) / 100;
-        rateExplanation = `${product.benchmarkCode} ${benchmark}% + spread ${C.num(product.spread ?? 0)}%; reset every ${product.resetFrequencyMonths ?? 12} months`;
+      const steps = product.rateSteps ?? [];
+      if (steps.length) {
+        // elapsed-tenure table: the loan starts at the first step (the mock schedule keeps that rate)
+        rate = C.num(steps[0].ratePercent);
+        rateExplanation = `elapsed-tenure table: ${steps.map((x) => `${C.num(x.ratePercent)}% from month ${x.fromMonth}`).join(', ')}`;
+      } else if (product.benchmarkCode && benchmark !== undefined) {
+        const slab = product.spread === null || product.spread === undefined ? table?.find((s) => (amount ?? 0) <= s.upTo)?.rate : undefined;
+        const spread = slab ?? C.num(product.spread ?? 0);
+        rate = Math.round((benchmark + spread) * 100) / 100;
+        rateExplanation = `${product.benchmarkCode} ${benchmark}% + ${slab !== undefined ? `slab spread (${product.interestTableCode})` : 'spread'} ${spread}%; reset every ${product.resetFrequencyMonths ?? 12} months`;
       } else if (!table) {
         if (opts.draft) {
           rate = C.num(product.minRate);
@@ -415,6 +427,7 @@ function buildKfs(r: Resolved): LoanKfs {
     rateType: p.rateType ?? 'FIXED',
     interestRate: C.pct(r.statedRate),
     rateExplanation: r.rateExplanation,
+    rateSteps: p.rateSteps?.length ? p.rateSteps.map((x) => ({ fromMonth: x.fromMonth, ratePercent: C.pct(x.ratePercent) })) : null,
     emi: emi === null ? null : C.fromPaise(emi),
     instalments: rows.length,
     totalInterest: C.fromPaise(totalInterest),
@@ -589,6 +602,33 @@ function replanFuture(loan: StoredLoan, st: LoanState, balance: number, date: st
   st.rows = [...st.rows.slice(0, st.raised), ...rows];
 }
 
+/**
+ * Method 18 after a tranche: each tranche's principal on its own maturity (the first at the loan's tenor), interest
+ * on the total outstanding on the regular due dates up to the last maturity and on each maturity.
+ */
+function replanTrancheBullet(loan: StoredLoan, st: LoanState, upTo: StoredLoanEvent) {
+  const p = loan.product;
+  const freq = p.frequency ?? 'MONTHLY';
+  const from = st.lastInterestDate ?? upTo.valueDate;
+  const first = loan.kfs.schedule?.[loan.kfs.schedule.length - 1]?.dueDate ?? C.addPeriods(loan.disbursedOn ?? from, loan.tenorMonths, freq);
+  const due = new Map<string, number>();
+  loan.events
+    .filter((e) => e.type === 'DISBURSEMENT' && !e.reversedBy && e.seq <= upTo.seq)
+    .forEach((e, i) => {
+      const maturity = i === 0 ? first : e.data.maturityDate ?? first;
+      if (maturity > from) due.set(maturity, (due.get(maturity) ?? 0) + (i === 0 ? loan.firstDrawn ?? loan.amount : e.amount ?? 0));
+    });
+  // principal already repaid on matured tranches is not in `due`; what is left of the balance falls due last
+  const last = [...due.keys()].sort().pop() ?? first;
+  const anchor = st.rows[st.raised]?.dueDate ?? C.addPeriods(from, 1, freq);
+  const dates = new Set<string>(due.keys());
+  for (let i = 0, d = anchor; d <= last && i < 1000; i++, d = C.addPeriods(anchor, i, freq, C.isMonthEnd(anchor))) if (d > from) dates.add(d);
+  const sorted = [...dates].sort();
+  const balance = futurePrincipal(st) + (upTo.amount ?? 0);
+  st.rows = [...st.rows.slice(0, st.raised), ...C.buildRows({ balance, ratePct: st.rate, from, dueDates: sorted, method: 'STRUCTURED', principalPlan: sorted.map((d) => due.get(d) ?? 0), startNo: st.raised + 1 })];
+  st.emi = null;
+}
+
 function initialState(loan: StoredLoan, asOf: string): LoanState {
   const base: LoanState = {
     asOf, status: 'SANCTIONED', rows: [], raised: 0, demands: [], charges: [], advance: 0, principalPaid: 0,
@@ -674,7 +714,8 @@ function applyEvent(loan: StoredLoan, st: LoanState, e: StoredLoanEvent) {
       break;
     case 'DISBURSEMENT': // a later tranche: interest runs on it from its own date
       st.drawn += amt;
-      replanFuture(loan, st, futurePrincipal(st) + amt, e.valueDate);
+      if (loan.product.repaymentMethod === 'TRANCHE_BULLET') replanTrancheBullet(loan, st, e);
+      else replanFuture(loan, st, futurePrincipal(st) + amt, e.valueDate);
       break;
     case 'SANCTION_CHANGE': {
       const wasWaiting = !!loan.product.preEmi && st.drawn < st.sanctioned;
@@ -1004,6 +1045,19 @@ function bookLoan(db: MockDb, r: Resolved, externalRef: string | null, openDate:
   return loan;
 }
 
+/** Method 18: a later tranche needs its maturity, within the product's tenor limits from today; any other none. */
+export function checkTrancheMaturity(db: MockDb, loan: StoredLoan, maturity: string | null | undefined): string | null {
+  const later = !!loan.disbursedOn && loan.product.repaymentMethod === 'TRANCHE_BULLET';
+  if (!later) {
+    if (maturity) throw bad('maturityDate applies to tranches of a tranche-bullet loan only', [{ field: 'maturityDate', message: 'Not for this disbursement' }]);
+    return null;
+  }
+  if (!maturity || !ISO_DATE.test(maturity)) throw bad('Each tranche of this loan is repaid on its own date: maturityDate is required', [{ field: 'maturityDate', message: 'Required' }]);
+  const [min, max] = [C.addPeriods(db.businessDate, loan.product.minTenorMonths), C.addPeriods(db.businessDate, loan.product.maxTenorMonths)];
+  if (maturity < min || maturity > max) throw bad(`The tranche's maturity must be ${min} to ${max}`, [{ field: 'maturityDate', message: 'Outside the tenor limits' }]);
+  return maturity;
+}
+
 /** 409 / 422 when this disbursement (first, or a further tranche of `amount`) cannot be made now. Returns the amount. */
 export function checkDisbursement(loan: StoredLoan, amountIn: number | null | undefined): number {
   const st = loan.state;
@@ -1022,7 +1076,7 @@ export function checkDisbursement(loan: StoredLoan, amountIn: number | null | un
   return amount;
 }
 
-export function disburse(db: MockDb, loan: StoredLoan, by: string, at: string, mode: string, amountIn?: number | null): StoredLoanEvent {
+export function disburse(db: MockDb, loan: StoredLoan, by: string, at: string, mode: string, amountIn?: number | null, maturityDate?: string | null): StoredLoanEvent {
   const first = !loan.disbursedOn;
   const amount = amountIn ?? loan.state.sanctioned - loan.state.drawn;
   let fees = 0;
@@ -1039,7 +1093,7 @@ export function disburse(db: MockDb, loan: StoredLoan, by: string, at: string, m
     valueDate: db.businessDate,
     amount,
     summary: `${tranche > 1 ? `Tranche ${tranche}: d` : 'D'}isbursed ${inr(amount)} via ${mode}; net ${inr(amount - fees)}${fees ? ' after deducted fees' : ''}`,
-    data: { tranche, mode, feesDeducted: fees, netDisbursed: amount - fees },
+    data: { tranche, mode, feesDeducted: fees, netDisbursed: amount - fees, ...(maturityDate ? { maturityDate } : {}) },
   });
   refreshLoan(db, loan);
   return ev;
@@ -1070,7 +1124,7 @@ export function applyLendingApproval(db: MockDb, p: ApprovalPayload, approval: {
       const loan = db.loans.find((l) => l.id === p.loanId);
       if (!loan) throw notFound('Loan');
       const amount = checkDisbursement(loan, p.amount ?? null);
-      disburse(db, loan, checker, at, p.mode, amount);
+      disburse(db, loan, checker, at, p.mode, amount, checkTrancheMaturity(db, loan, p.maturityDate));
       appendAudit(db, at, checker, 'LOAN_DISBURSED', 'LOAN', loan.id, { loanNo: loan.loanNo, amount: C.fromPaise(amount) });
       return true;
     }
@@ -1228,7 +1282,7 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
   if (!/^[A-Z0-9]{2,12}$/.test(p.code ?? '')) errors.push({ field: 'code', message: 'Code must be 2-12 upper-case letters/digits' });
   if (!p.name?.trim()) errors.push({ field: 'name', message: 'Name is required' });
   const method = p.repaymentMethod;
-  if (!['EQUATED', 'STEP_EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST', 'STRUCTURED'].includes(method)) errors.push({ field: 'repaymentMethod', message: 'Invalid repayment method' });
+  if (!['EQUATED', 'STEP_EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST', 'STRUCTURED', 'TRANCHE_BULLET'].includes(method)) errors.push({ field: 'repaymentMethod', message: 'Invalid repayment method' });
   if (p.frequency && !(p.frequency in C.PERIODS_PER_YEAR)) errors.push({ field: 'frequency', message: 'Invalid frequency' });
   const basis = p.interestBasis ?? 'DAILY_REDUCING';
   if (!['DAILY_REDUCING', 'PERIODIC_REDUCING', 'FLAT'].includes(basis)) errors.push({ field: 'interestBasis', message: 'Invalid interest basis' });
@@ -1240,14 +1294,26 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
   }
   if (p.principalEvery !== undefined && (!Number.isInteger(p.principalEvery) || p.principalEvery < 1)) errors.push({ field: 'principalEvery', message: 'Principal interval must be 1 or more' });
   else if ((p.principalEvery ?? 1) > 1 && method !== 'FIXED_PRINCIPAL') errors.push({ field: 'principalEvery', message: 'A principal interval applies to fixed-principal products only' });
-  const trancheMethod = ['EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST'].includes(method) && basis === 'DAILY_REDUCING';
+  const trancheMethod = ['EQUATED', 'FIXED_PRINCIPAL', 'BULLET_TOTAL_INTEREST', 'BULLET_PERIODIC_INTEREST', 'TRANCHE_BULLET'].includes(method) && basis === 'DAILY_REDUCING';
+  if (method === 'TRANCHE_BULLET' && (!p.multipleDisbursements || basis !== 'DAILY_REDUCING' || p.preEmi)) errors.push({ field: 'repaymentMethod', message: 'A tranche bullet product is disbursed in tranches, on the daily-reducing basis, without pre-EMI' });
+  const steps = p.rateSteps ?? [];
+  if (steps.length) {
+    if (steps.length < 2) errors.push({ field: 'rateSteps', message: 'An elapsed-tenure rate table has two steps or more' });
+    else if (method !== 'EQUATED' || (p.frequency ?? 'MONTHLY') !== 'MONTHLY' || basis !== 'DAILY_REDUCING' || p.multipleDisbursements || p.topUpAllowed) errors.push({ field: 'rateSteps', message: 'An elapsed-tenure rate table applies to monthly EQUATED products disbursed at once' });
+    else if ((p.rateType ?? 'FIXED') !== 'FIXED' || p.benchmarkCode || p.interestTableCode) errors.push({ field: 'rateSteps', message: 'An elapsed-tenure rate table is a fixed rate: no benchmark and no interest table' });
+    else if (steps[0].fromMonth !== 1 || steps.some((x, i) => i > 0 && x.fromMonth <= steps[i - 1].fromMonth)) errors.push({ field: 'rateSteps', message: 'Steps start at month 1, in ascending months' });
+    else if (steps.some((x) => n(x.ratePercent) < n(p.minRate) || n(x.ratePercent) > n(p.maxRate))) errors.push({ field: 'rateSteps', message: 'Every step within the rate band' });
+  }
   if (p.multipleDisbursements && !trancheMethod) errors.push({ field: 'multipleDisbursements', message: 'Tranches need an equated, fixed-principal or bullet product on the daily-reducing basis' });
   if (p.topUpAllowed && !trancheMethod) errors.push({ field: 'topUpAllowed', message: 'Top-up needs an equated, fixed-principal or bullet product on the daily-reducing basis' });
   if (p.preEmi && !(p.multipleDisbursements && method === 'EQUATED')) errors.push({ field: 'preEmi', message: 'Pre-EMI needs an equated product with multiple disbursements' });
   if (p.benchmarkCode) {
     if (!benchmarks.includes(p.benchmarkCode)) errors.push({ field: 'benchmarkCode', message: `Unknown benchmark ${p.benchmarkCode}` });
     if (p.rateType !== 'FLOATING') errors.push({ field: 'rateType', message: 'A benchmark needs rate type FLOATING' });
-    if (Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'A benchmark needs a spread' });
+    const fromTable = !!p.interestTableCode && SPREAD_TABLES.includes(p.interestTableCode);
+    if (p.interestTableCode && !fromTable) errors.push({ field: 'interestTableCode', message: 'A benchmark-linked product takes only a SPREAD table' });
+    if (fromTable && !Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'One source of spread: the product or its SPREAD table' });
+    if (!fromTable && Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'A benchmark needs a spread' });
     if (!Number.isInteger(p.resetFrequencyMonths) || (p.resetFrequencyMonths ?? 0) < 1 || (p.resetFrequencyMonths ?? 0) > 60) errors.push({ field: 'resetFrequencyMonths', message: 'Reset frequency must be 1 to 60 months' });
     if (basis !== 'DAILY_REDUCING') errors.push({ field: 'interestBasis', message: 'A benchmark-linked product accrues on the daily-reducing basis' });
   }
@@ -1263,6 +1329,7 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
   if (p.penalChargeRate !== null && p.penalChargeRate !== undefined && p.penalChargeRate !== '' && !(n(p.penalChargeRate) >= 0 && n(p.penalChargeRate) <= 100)) errors.push({ field: 'penalChargeRate', message: 'Penal rate must be between 0 and 100' });
   if (p.coolingOffDays !== undefined && (!Number.isInteger(p.coolingOffDays) || p.coolingOffDays < 0)) errors.push({ field: 'coolingOffDays', message: 'Cooling-off days must be 0 or more' });
   if (p.interestTableCode && !RATE_TABLES[p.interestTableCode]) errors.push({ field: 'interestTableCode', message: `Unknown interest table ${p.interestTableCode}` });
+  else if (p.interestTableCode && !p.benchmarkCode && SPREAD_TABLES.includes(p.interestTableCode)) errors.push({ field: 'interestTableCode', message: 'A SPREAD table needs a benchmark to add to' });
   const seen = new Set<string>();
   (p.fees ?? []).forEach((f: FeeRule, i) => {
     const at = `Fee ${i + 1}`;
@@ -1301,6 +1368,7 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
     spread: p.benchmarkCode ? s(p.spread) : null,
     resetFrequencyMonths: p.benchmarkCode ? (p.resetFrequencyMonths ?? null) : null,
     resetOption: p.resetOption ?? 'KEEP_TENURE_CHANGE_EMI',
+    rateSteps: steps.map((x) => ({ fromMonth: x.fromMonth, ratePercent: C.pct(x.ratePercent) })),
     minAmount: C.fromPaise(C.toPaise(String(p.minAmount))),
     maxAmount: C.fromPaise(C.toPaise(String(p.maxAmount))),
     minTenorMonths: p.minTenorMonths,
@@ -1548,6 +1616,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     const asked = b0.amount === undefined || b0.amount === null || b0.amount === '' ? null : money(b0.amount);
     if (asked !== null && Number.isNaN(asked)) throw bad('Amount must be a positive decimal', [{ field: 'amount', message: 'Invalid amount' }]);
     const amount = checkDisbursement(loan, asked);
+    const maturityDate = checkTrancheMaturity(db, loan, (body as { maturityDate?: string | null } | null)?.maturityDate);
     const pending = hasPending('LOAN_DISBURSEMENT', (p) => p.kind === 'LOAN_DISBURSEMENT' && p.loanId === loan.id);
     if (pending) throw conflict('Disbursement already pending', `Loan ${loan.loanNo} already has a disbursement awaiting approval`, { approvalId: pending.approval.id });
     const b = (body ?? {}) as { beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string };
@@ -1555,7 +1624,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
     const mode = b.mode?.trim() || 'IMPS';
     if (b.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(b.ifsc)) throw bad('IFSC must look like HDFC0001234', [{ field: 'ifsc', message: 'Invalid IFSC' }]);
     if (can(user, LOAN_STP)) {
-      disburse(db, loan, user.username, nowIso(), mode, amount);
+      disburse(db, loan, user.username, nowIso(), mode, amount, maturityDate);
       return ok(view(loan));
     }
     const account = b.beneficiaryAccount?.trim() || null;
@@ -1564,7 +1633,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
       user,
       'LOAN_DISBURSEMENT',
       'DISBURSE',
-      { kind: 'LOAN_DISBURSEMENT', loanId: loan.id, mode, beneficiaryName: b.beneficiaryName?.trim() || null, beneficiaryAccount: account, ifsc: b.ifsc || null, amount },
+      { kind: 'LOAN_DISBURSEMENT', loanId: loan.id, mode, beneficiaryName: b.beneficiaryName?.trim() || null, beneficiaryAccount: account, ifsc: b.ifsc || null, amount, maturityDate },
       {
         loanNo: loan.loanNo,
         customer: cust ? displayName(cust) : null,
@@ -1572,6 +1641,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
         amount: C.fromPaise(amount),
         ...(loan.disbursedOn ? { tranche: loan.events.filter((e) => e.type === 'DISBURSEMENT' && !e.reversedBy).length + 1 } : { netDisbursal: C.fromPaise(amount - (C.toPaise(loan.kfs.amount) - C.toPaise(loan.kfs.netDisbursal))) }),
         mode,
+        ...(maturityDate ? { maturityDate } : {}),
         beneficiaryName: b.beneficiaryName?.trim() || null,
         beneficiaryAccount: account ? `XXXX${account.slice(-4)}` : null,
         ifsc: b.ifsc || null,

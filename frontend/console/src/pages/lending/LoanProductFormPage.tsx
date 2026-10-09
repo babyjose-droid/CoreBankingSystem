@@ -55,6 +55,7 @@ interface Draft {
   spread: string;
   resetFrequencyMonths: string;
   resetOption: NonNullable<LoanProduct['resetOption']>;
+  rateSteps: string;
   rounding: NonNullable<LoanProduct['rounding']>;
   penalChargeRate: string;
   maxMoratoriumMonths: string;
@@ -71,6 +72,18 @@ const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
 function slabsToText(f: FeeRule): string {
   return (f.slabs ?? []).map((x) => `${s(x.from)}-${s(x.to)}:${s(x.fee)}`).join('; ');
+}
+
+/** "1:10.5; 13:12" -> elapsed-tenure steps (from month: rate); null when the text does not parse. */
+export function parseRateSteps(text: string): Array<{ fromMonth: number; ratePercent: string }> | null {
+  const parts = text.split(';').map((p) => p.trim()).filter(Boolean);
+  const out: Array<{ fromMonth: number; ratePercent: string }> = [];
+  for (const p of parts) {
+    const m = p.match(/^(\d+)\s*:\s*(\d+(?:\.\d+)?)$/);
+    if (!m) return null;
+    out.push({ fromMonth: Number(m[1]), ratePercent: m[2] });
+  }
+  return out.length ? out : null;
 }
 
 /** "0-10000:300; 10000.01-99999999:500" -> slabs; null when the text does not parse. */
@@ -113,6 +126,7 @@ function toDraft(p: LoanProduct | null): Draft {
     spread: s(p?.spread),
     resetFrequencyMonths: s(p?.resetFrequencyMonths),
     resetOption: p?.resetOption ?? 'KEEP_TENURE_CHANGE_EMI',
+    rateSteps: (p?.rateSteps ?? []).map((x) => `${x.fromMonth}:${s(x.ratePercent)}`).join('; '),
     rounding: p?.rounding ?? 'RUPEE_HALF_UP',
     penalChargeRate: s(p?.penalChargeRate),
     maxMoratoriumMonths: s(p?.maxMoratoriumMonths ?? 0),
@@ -141,6 +155,17 @@ function toDraft(p: LoanProduct | null): Draft {
 }
 
 const intOk = (v: string) => /^\d+$/.test(v.trim());
+
+function rateStepsError(d: Draft): string | null {
+  const steps = parseRateSteps(d.rateSteps);
+  if (!steps) return 'Use month:rate; … e.g. 1:10.5; 13:12';
+  if (d.repaymentMethod !== 'EQUATED' || d.frequency !== 'MONTHLY' || d.rateType !== 'FIXED') return 'Monthly EMI products with a fixed rate only';
+  if (steps.length < 2) return 'Two steps or more';
+  if (steps[0].fromMonth !== 1) return 'The first step starts at month 1';
+  if (steps.some((x, i) => i > 0 && x.fromMonth <= steps[i - 1].fromMonth)) return 'Months in ascending order';
+  if (steps.some((x) => Number(x.ratePercent) < Number(d.minRate) || Number(x.ratePercent) > Number(d.maxRate))) return 'Every step within the rate band';
+  return null;
+}
 const numOk = (v: string) => /^\d+(\.\d+)?$/.test(v.trim());
 
 function validate(d: Draft) {
@@ -161,7 +186,14 @@ function validate(d: Draft) {
     stepEvery: d.repaymentMethod === 'STEP_EQUATED' && (!intOk(d.stepEvery) || Number(d.stepEvery) < 1) ? 'Instalments between steps' : null,
     principalEvery: d.repaymentMethod === 'FIXED_PRINCIPAL' && (!intOk(d.principalEvery) || Number(d.principalEvery) < 1) ? '1 or more' : null,
     interestBasis: d.interestBasis === 'FLAT' && d.repaymentMethod !== 'EQUATED' ? 'Flat rate is for EMI (equated) products only' : null,
-    spread: d.rateType === 'FLOATING' && d.benchmarkCode && !/^-?\d+(\.\d+)?$/.test(d.spread.trim()) ? 'Enter the spread' : null,
+    spread:
+      d.rateType === 'FLOATING' && d.benchmarkCode
+        ? d.interestTableCode.trim()
+          ? d.spread.trim() ? 'Leave empty: the spread comes from the interest table' : null
+          : !/^-?\d+(\.\d+)?$/.test(d.spread.trim()) ? 'Enter the spread, or give a SPREAD interest table' : null
+        : null,
+    rateSteps: d.rateSteps.trim() ? rateStepsError(d) : null,
+    repaymentMethod: d.repaymentMethod === 'TRANCHE_BULLET' && (!d.multipleDisbursements || d.interestBasis !== 'DAILY_REDUCING') ? 'Tick multiple disbursements; interest on the daily-reducing basis' : null,
     resetFrequencyMonths: d.rateType === 'FLOATING' && d.benchmarkCode && (!intOk(d.resetFrequencyMonths) || Number(d.resetFrequencyMonths) < 1 || Number(d.resetFrequencyMonths) > 60) ? '1 to 60 months' : null,
   };
   const fees = d.fees.map((f) => ({
@@ -204,9 +236,10 @@ function toProduct(d: Draft): LoanProduct {
     preEmi: d.multipleDisbursements && d.preEmi,
     topUpAllowed: d.topUpAllowed,
     benchmarkCode: d.rateType === 'FLOATING' ? opt(d.benchmarkCode) : null,
-    spread: d.rateType === 'FLOATING' && d.benchmarkCode ? opt(d.spread) : null,
+    spread: d.rateType === 'FLOATING' && d.benchmarkCode && !d.interestTableCode.trim() ? opt(d.spread) : null,
     resetFrequencyMonths: d.rateType === 'FLOATING' && d.benchmarkCode && d.resetFrequencyMonths ? Number(d.resetFrequencyMonths) : null,
     resetOption: d.resetOption,
+    rateSteps: d.rateSteps.trim() ? parseRateSteps(d.rateSteps) ?? [] : [],
     rounding: d.rounding,
     penalChargeRate: opt(d.penalChargeRate),
     maxMoratoriumMonths: Number(d.maxMoratoriumMonths),
@@ -312,7 +345,7 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
           <div className="form-grid">
             <Input label="Code" required disabled={!!initial} className="mono" value={d.code} onChange={(e) => set({ code: e.target.value.toUpperCase() })} error={err('code')} />
             <Input label="Name" required value={d.name} onChange={(e) => set({ name: e.target.value })} error={err('name')} />
-            <Select label="Repayment method" value={d.repaymentMethod} onChange={(e) => set({ repaymentMethod: e.target.value as Draft['repaymentMethod'] })} options={opts(Object.keys(REPAYMENT_METHOD_LABEL) as Draft['repaymentMethod'][], (m) => REPAYMENT_METHOD_LABEL[m])} />
+            <Select label="Repayment method" value={d.repaymentMethod} onChange={(e) => set({ repaymentMethod: e.target.value as Draft['repaymentMethod'] })} options={opts(Object.keys(REPAYMENT_METHOD_LABEL) as Draft['repaymentMethod'][], (m) => REPAYMENT_METHOD_LABEL[m])} error={err('repaymentMethod')} />
             <Select label="Frequency" value={d.frequency} onChange={(e) => set({ frequency: e.target.value as Draft['frequency'] })} options={opts(Object.keys(FREQUENCY_LABEL) as Draft['frequency'][], (f) => FREQUENCY_LABEL[f])} hint="The tenor counts periods of this frequency" />
             {d.repaymentMethod === 'STEP_EQUATED' && (
               <>
@@ -342,7 +375,13 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
           <div className="form-grid">
             <Input label="Minimum rate % p.a." required numeric value={d.minRate} onChange={(e) => set({ minRate: e.target.value })} error={err('minRate')} />
             <Input label="Maximum rate % p.a." required numeric value={d.maxRate} onChange={(e) => set({ maxRate: e.target.value })} error={err('maxRate')} />
-            <Input label="Interest table code" hint="Leave empty to enter the rate on each loan" className="mono" value={d.interestTableCode} onChange={(e) => set({ interestTableCode: e.target.value.toUpperCase() })} />
+            <Input
+              label="Interest table code"
+              hint={d.rateType === 'FLOATING' && d.benchmarkCode ? 'A SPREAD table: its rows are spreads over the benchmark (floating rate slab)' : 'Leave empty to enter the rate on each loan'}
+              className="mono"
+              value={d.interestTableCode}
+              onChange={(e) => set({ interestTableCode: e.target.value.toUpperCase() })}
+            />
             <Select label="Rate type" value={d.rateType} onChange={(e) => set({ rateType: e.target.value as Draft['rateType'] })} options={opts(['FIXED', 'FLOATING'] as const)} />
             <Select label="Day count" value={d.dayCount} onChange={(e) => set({ dayCount: e.target.value as Draft['dayCount'] })} options={opts(['ACTUAL_365', 'ACTUAL_360', 'ACTUAL_ACTUAL', 'THIRTY_360', 'THIRTY_E_360', 'ACTUAL_366', 'ACTUAL_364', 'ACTUAL_336', 'ACTUAL_372'] as const)} />
             <Select label="Interest basis" value={d.interestBasis} onChange={(e) => set({ interestBasis: e.target.value as Draft['interestBasis'] })} options={opts(Object.keys(INTEREST_BASIS_LABEL) as Draft['interestBasis'][], (b) => INTEREST_BASIS_LABEL[b])} error={err('interestBasis')} hint={d.interestBasis === 'FLAT' ? 'The KFS shows the equivalent reducing rate and the APR' : undefined} />
@@ -352,7 +391,7 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
                 <Select label="Benchmark" value={d.benchmarkCode} placeholder="None" onChange={(e) => set({ benchmarkCode: e.target.value })} options={opts(['REPO', 'MCLR1Y', 'TBILL91'] as const)} hint="Rate = benchmark + spread when the loan gives no rate" />
                 {d.benchmarkCode && (
                   <>
-                    <Input label="Spread % over the benchmark" required numeric value={d.spread} onChange={(e) => set({ spread: e.target.value })} error={err('spread')} />
+                    <Input label="Spread % over the benchmark" required={!d.interestTableCode.trim()} numeric value={d.spread} onChange={(e) => set({ spread: e.target.value })} error={err('spread')} hint="Empty when a SPREAD interest table gives it by amount and tenor" />
                     <Input label="Rate reset every (months)" required numeric value={d.resetFrequencyMonths} onChange={(e) => set({ resetFrequencyMonths: e.target.value })} error={err('resetFrequencyMonths')} hint="From disbursal; the day-end resets the rate to the benchmark on that date + the spread" />
                     <Select
                       label="At a reset (default)"
@@ -367,6 +406,16 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
                   </>
                 )}
               </>
+            )}
+            {d.rateType === 'FIXED' && d.repaymentMethod === 'EQUATED' && (
+              <Input
+                label="Elapsed-tenure rate table"
+                className="mono"
+                value={d.rateSteps}
+                onChange={(e) => set({ rateSteps: e.target.value })}
+                error={err('rateSteps')}
+                hint="Optional. From month: rate, e.g. 1:10.5; 13:12. Shown in the KFS; the EMI changes at each step, tenure kept"
+              />
             )}
             <Select label="Rounding" value={d.rounding} onChange={(e) => set({ rounding: e.target.value as Draft['rounding'] })} options={opts(['RUPEE_HALF_UP', 'RUPEE_DOWN', 'RUPEE_UP', 'PAISE_HALF_UP', 'PAISE_HALF_EVEN'] as const)} />
             <Input label="Penal charge rate % p.a." numeric value={d.penalChargeRate} onChange={(e) => set({ penalChargeRate: e.target.value })} error={err('penalChargeRate')} />

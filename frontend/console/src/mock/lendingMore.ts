@@ -10,7 +10,7 @@ import { addDays, ISO_DATE } from '../lib/dates';
 import { isMoney } from '../lib/money';
 import { toRow } from './amendCalc';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb, type StoredLoan } from './db';
-import { addEvent, arrearsOf, checkDisbursement, clone, disburse, futurePrincipal, previewProduct, principalOutstanding, quoteFrom, refreshLoan, replay, unpaidCharges } from './lending';
+import { addEvent, arrearsOf, checkDisbursement, checkTrancheMaturity, clone, disburse, futurePrincipal, previewProduct, principalOutstanding, quoteFrom, refreshLoan, replay, unpaidCharges } from './lending';
 import * as C from './lendingCalc';
 import { bad, conflict, notFound } from './problems';
 
@@ -246,7 +246,7 @@ export function registerLendingMoreRoutes(db: MockDb, r: LendingMoreRouter) {
       preEmi: !!loan.product.preEmi,
       tranches: loan.events.filter((e) => e.type === 'DISBURSEMENT' && !e.reversedBy).sort((a, b) => a.seq - b.seq).map((e, i) => ({
         trancheNo: i + 1, txnId: e.id, businessDate: e.businessDate, amount: C.fromPaise(e.amount ?? 0), feesDeducted: C.fromPaise(e.data.feesDeducted ?? 0), interestDeducted: '0.00',
-        netDisbursed: C.fromPaise(e.data.netDisbursed ?? e.amount ?? 0), createdBy: e.createdBy,
+        netDisbursed: C.fromPaise(e.data.netDisbursed ?? e.amount ?? 0), maturityDate: e.data.maturityDate ?? null, createdBy: e.createdBy,
       })),
     };
     return ok(body);
@@ -257,8 +257,9 @@ export function registerLendingMoreRoutes(db: MockDb, r: LendingMoreRouter) {
     const loan = findLoan(params.id);
     const raw = (body as { amount?: string | number | null } | null)?.amount;
     const amount = checkDisbursement(loan, raw === undefined || raw === null || raw === '' ? null : paise(raw, 'amount'));
+    const maturity = checkTrancheMaturity(db, loan, (body as { maturityDate?: string | null } | null)?.maturityDate);
     const copy = clone(loan);
-    const ev = disburse(shim(db.businessDate), copy, 'simulation', '', 'IMPS', amount);
+    const ev = disburse(shim(db.businessDate), copy, 'simulation', '', 'IMPS', amount, maturity);
     const st = copy.state;
     const first = !loan.disbursedOn;
     const fees = first ? (loan.kfs.fees ?? []) : [];

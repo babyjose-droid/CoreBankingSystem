@@ -1211,7 +1211,7 @@ export interface paths {
         put?: never;
         /**
          * Staff users get a 202 approval; LOS clients with loan:stp are disbursed immediately (200)
-         * @description `amount` is what to disburse now; omitted, it is everything not yet drawn. A part of the sanctioned amount can be drawn only on a product with `multipleDisbursements`; further tranches use this same endpoint while the loan is ACTIVE with an undrawn amount. Interest accrues only on what is drawn. DISBURSEMENT fees are charged once, on the first tranche, on the sanctioned amount; EVERY_DISBURSEMENT fees on each tranche's amount; broken-period interest in mode DEDUCT_AT_DISBURSAL is taken from the first tranche. The schedule is rebuilt on each tranche: with `preEmi` the instalments are interest-only until the loan is fully drawn (or the undrawn amount is cancelled) and the EMIs then run for the full tenor; otherwise the instalments are recomputed on the amount drawn over the instalments left. No tranche is paid while the account has unpaid dues or is NPA (409). A tranche cannot be reversed.
+         * @description `amount` is what to disburse now; omitted, it is everything not yet drawn. A part of the sanctioned amount can be drawn only on a product with `multipleDisbursements`; further tranches use this same endpoint while the loan is ACTIVE with an undrawn amount. Interest accrues only on what is drawn. DISBURSEMENT fees are charged once, on the first tranche, on the sanctioned amount; EVERY_DISBURSEMENT fees on each tranche's amount; broken-period interest in mode DEDUCT_AT_DISBURSAL is taken from the first tranche. The schedule is rebuilt on each tranche: with `preEmi` the instalments are interest-only until the loan is fully drawn (or the undrawn amount is cancelled) and the EMIs then run for the full tenor; otherwise the instalments are recomputed on the amount drawn over the instalments left. No tranche is paid while the account has unpaid dues or is NPA (409). A tranche cannot be reversed. On a TRANCHE_BULLET loan each later tranche needs its own `maturityDate`, within the product's tenor limits counted from today; the first tranche matures at the loan's tenor.
          */
         post: operations["disburseLoan"];
         delete?: never;
@@ -3951,10 +3951,10 @@ export interface components {
             deductFromDisbursal?: boolean;
         };
         /**
-         * @description EQUATED: equal instalments. STEP_EQUATED: instalments that step up or down by stepPercent every stepEvery instalments. FIXED_PRINCIPAL: equal principal plus interest on the balance. BULLET_TOTAL_INTEREST: principal and all interest at maturity. BULLET_PERIODIC_INTEREST: interest every period, principal at maturity. STRUCTURED: principal as assigned to each date on the loan (scheduleRows), with the interest accrued.
+         * @description EQUATED: equal instalments. STEP_EQUATED: instalments that step up or down by stepPercent every stepEvery instalments. FIXED_PRINCIPAL: equal principal plus interest on the balance. BULLET_TOTAL_INTEREST: principal and all interest at maturity. BULLET_PERIODIC_INTEREST: interest every period, principal at maturity. STRUCTURED: principal as assigned to each date on the loan (scheduleRows), with the interest accrued. TRANCHE_BULLET: disbursed in tranches, each repaid as a bullet on its own maturity date (the first at the loan's tenor, later ones as given at disbursement); interest every period on the total outstanding.
          * @enum {string}
          */
-        RepaymentMethod: "EQUATED" | "STEP_EQUATED" | "FIXED_PRINCIPAL" | "BULLET_TOTAL_INTEREST" | "BULLET_PERIODIC_INTEREST" | "STRUCTURED";
+        RepaymentMethod: "EQUATED" | "STEP_EQUATED" | "FIXED_PRINCIPAL" | "BULLET_TOTAL_INTEREST" | "BULLET_PERIODIC_INTEREST" | "STRUCTURED" | "TRANCHE_BULLET";
         /**
          * @default MONTHLY
          * @enum {string}
@@ -4014,6 +4014,11 @@ export interface components {
                 feesDeducted?: components["schemas"]["Money"];
                 interestDeducted?: components["schemas"]["Money"];
                 netDisbursed?: components["schemas"]["Money"];
+                /**
+                 * Format: date
+                 * @description TRANCHE_BULLET: when the tranche is repaid
+                 */
+                maturityDate?: string | null;
                 createdBy?: string;
             }[];
         };
@@ -4183,7 +4188,13 @@ export interface components {
             topUpAllowed: boolean;
             /** @description Floating products: rate = benchmark + spread when the application gives no rate. Needs spread, resetFrequencyMonths and rateType FLOATING. */
             benchmarkCode?: string | null;
+            /** @description Over the benchmark. Leave empty to take it from a SPREAD interest table (floating rate slab) by amount and tenor. */
             spread?: number | string | null;
+            /** @description Elapsed-tenure rate table: the rate from month fromMonth of the loan, the first step from month 1. Monthly EQUATED products on DAILY_REDUCING, rateType FIXED, disbursed at once; every step within the rate band. The KFS and schedule show every step; the day-end applies each one (EMI changes, tenure kept). */
+            rateSteps?: {
+                fromMonth: number;
+                ratePercent: number | string;
+            }[];
             /** @description Floating products: the day-end resets the rate to benchmark + spread every so many months from disbursal */
             resetFrequencyMonths?: number | null;
             /**
@@ -4199,6 +4210,7 @@ export interface components {
             maxTenorMonths: number;
             minRate: number | string;
             maxRate: number | string;
+            /** @description Rate slabs by amount and tenor. With a benchmark it must be a SPREAD table, whose rows are spreads over the benchmark (floating rate slab). */
             interestTableCode?: string | null;
             /** @enum {string} */
             rateType?: "FIXED" | "FLOATING";
@@ -4284,6 +4296,11 @@ export interface components {
             /** @description Annual rate on the reducing balance that the account accrues at; differs from interestRate for a flat rate or a given instalment */
             effectiveRate?: string;
             rateExplanation?: string;
+            /** @description Elapsed-tenure rate table of the product, disclosed in full */
+            rateSteps?: {
+                fromMonth?: number;
+                ratePercent?: string;
+            }[] | null;
             /** @description Regular instalment of an equated loan (the first step of a step loan) */
             emi?: string | null;
             bpiMode?: string;
@@ -7206,6 +7223,11 @@ export interface operations {
                 "application/json": {
                     /** @description Amount of this disbursement; default: all that is undrawn */
                     amount?: number | string;
+                    /**
+                     * Format: date
+                     * @description TRANCHE_BULLET, a later tranche only (required there): the date its principal falls due as a bullet
+                     */
+                    maturityDate?: string | null;
                     beneficiaryName?: string;
                     beneficiaryAccount?: string;
                     ifsc?: string;
@@ -7269,6 +7291,11 @@ export interface operations {
                 "application/json": {
                     /** @description Default: all that is undrawn */
                     amount?: number | string | null;
+                    /**
+                     * Format: date
+                     * @description TRANCHE_BULLET, a later tranche only (required there)
+                     */
+                    maturityDate?: string | null;
                 };
             };
         };

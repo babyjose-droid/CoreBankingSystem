@@ -501,9 +501,9 @@ Stories: US-038 (templates), US-039 / US-054 (repayment methods, rate bases, sch
 | 15 | Dropline Overdraft With Differing Interval | Not built | Revolving limit that reduces on a schedule. With 3. |
 | 16 | Tranche Bullet Periodic Interest | Built | `BULLET_PERIODIC_INTEREST` with `multipleDisbursements` |
 | 17 | Tranche Equated Loan | Built | `EQUATED` with `multipleDisbursements`, with or without `preEmi` |
-| 18 | Tranche Bullet Tranche Repayment | Not built | Each tranche repaid as its own bullet. Open question 4. |
+| 18 | Tranche Bullet Tranche Repayment | Built (V25), as read | `TRANCHE_BULLET` (needs `multipleDisbursements`): each tranche repaid as its own bullet on its own maturity date, interest monthly on the total outstanding. Open question 4. |
 
-11 built (three of them on our reading of the name), 7 not built.
+12 built (four of them on our reading of the name), 6 not built (3, 9, 10, 11, 15: overdraft/dropline and "Periodic Full Principal" stay open by product owner decision, 10-Oct-2026).
 
 ### Rate bases of the reference system (10)
 | # | Reference rate basis | Status | How |
@@ -516,18 +516,18 @@ Stories: US-038 (templates), US-039 / US-054 (repayment methods, rate bases, sch
 | 6 | Customer Limit | Not built | Meaning unclear. Open question 5. |
 | 7 | Configured Rate Floating | Built | Booking rate = benchmark + spread; reset automatically at day-end on each reset date (V24, docs/runbooks/rate-reset.md) |
 | 8 | Fixed Interest Rate Slab | Built | Product interest table (`lending.resolve_rate`, Phase 1) |
-| 9 | Floating Interest Rate Slab | Not built | Slab table on top of a benchmark. With the floating reset work. |
-| 10 | Elapsed-Tenure Interest Rate Slab | Not built | Rate that changes with the age of the loan. Open question 6. |
+| 9 | Floating Interest Rate Slab | Built (V25) | Interest table of mode `SPREAD` on a benchmark-linked product: its rows (by amount and tenor) are spreads. Booking rate = benchmark + slab spread; the slab spread is frozen into the loan and every reset uses it (`LoanService.price`). |
+| 10 | Elapsed-Tenure Interest Rate Slab | Built (V25), as read | Product `rateSteps` (from month N: rate). Disclosed in the KFS (`rateSteps`, and every step in the schedule and APR); the day-end applies each step like a reset (EMI changes, tenure kept; history kind RATE_STEP). Treated as a FIXED rate for the RBI reset circular. Open question 6. |
 
-6 built, 1 partly, 3 not built.
+9 built, 1 not built (6, Customer Limit: left open by product owner decision, 10-Oct-2026).
 
 ### Open questions
 1. **"No Interest" methods (6, 10, 13):** read as principal-only instalments at a 0% rate. If the reference means interest collected upfront or by another account, this is wrong.
 2. **"Periodic Full Principal" (9, 10, 11):** the full principal falling due every period is not a term loan as we understand it (a rolling bullet? a renewable loan?). Needs a look at a live reference account.
 3. **"Tranche Principal And Periodic Interest" (14):** read as equal principal plus interest with tranches. It may instead mean each tranche's principal repaid separately.
-4. **"Tranche Bullet Tranche Repayment" (18):** needs a maturity per tranche; today the loan has one schedule.
+4. **"Tranche Bullet Tranche Repayment" (18) - answered 10-Oct-2026, built in V25.** Read as: each tranche carries its own maturity date, given at disbursement (`maturityDate` on `POST /loans/{id}/disbursement`) within the product's tenor limits counted from that day; the first tranche matures at the loan's tenor. The tranche's principal falls due as a bullet on that date; interest falls due monthly (the product frequency) on the total outstanding, and on each maturity. Part-prepayment is refused (repay a tranche at its maturity, or pre-close). If the reference system instead collects each tranche's interest with its bullet, the engine has that variant (`interestAtMaturity`) but no product setting exposes it.
 5. **"Customer Limit" rate basis:** rate taken from the customer's limit record? There is no such record yet.
-6. **"Elapsed-Tenure" slab:** does the rate step by loan age automatically, and is that a fixed or a floating rate for the RBI reset circular?
+6. **"Elapsed-Tenure" slab - answered 10-Oct-2026, built in V25.** The rate steps automatically by the age of the loan: the step "from month N" applies from the due date of instalment N-1, at the day-end that raises that demand; the EMI changes and the tenure is kept. Our reading for the RBI circular of 18-Aug-2023 (reset of floating rates on EMI loans): the steps are fixed in the contract at booking and follow no benchmark, so the loan is a FIXED-rate loan (`rateType` FIXED is enforced) - no reset option, no switch to fixed; the KFS discloses every step and the APR includes them. Monthly EQUATED products on the daily-reducing basis disbursed at once (no tranches, no top-up), each step within the product band.
 7. **Mark needs two checkers too:** the brief asks two checkers for the un-mark; the mark is also set to two. Confirm or lower it in `platform.approval_rule`.
 8. **Un-mark timing:** the release posts nothing and the upgrade happens at the next day-end. Confirm that a same-day upgrade is not required.
 9. **Top-up and evergreening:** a top-up is refused for any account that is not STANDARD (so also SMA). Confirm.
@@ -548,11 +548,12 @@ Stories: US-038 (templates), US-039 / US-054 (repayment methods, rate bases, sch
 - **New permission:** `loan:classify` (NPA mark and un-mark). Sanction changes use `loan:amend`, tranches `loan:disburse`, simulations and tranche list `loan:view`, templates and product preview `product:view`.
 
 ### Not yet built in P2-6
-- Reference methods 3, 9, 10, 11, 15, 18 and rate bases 6, 9, 10 (tables above).
+- Reference methods 3, 9, 10, 11, 15 and rate basis 6 (tables above). Method 18 and rate bases 9 and 10 were built in V25.
+- Interest tables (and their SPREAD mode) are maintained in the database only: there is no interest-table API or console screen yet.
 - Benchmark rates: recorded through `GET/POST /api/v1/benchmarks` and `POST /api/v1/benchmarks/{code}/rates` (maker-checker, append-only history; console: Masters → Benchmark rates).
 - **Floating-rate reset (V24, RBI 18-Aug-2023 "Reset of floating interest rate on EMI based personal loans"):** on a loan's reset date the day-end that closes that calendar day sets the rate to the benchmark rate in force on that date + the loan's spread, through the amendment code, with the loan's option (borrower's choice, else the product's `resetOption`, default KEEP_TENURE_CHANGE_EMI). Keeping the EMI falls back to a higher EMI when the longer tenure would pass the product maximum, amortise negatively or extend a borrower in arrears. The next reset date always moves on (also when the rate is unchanged). Applied outside the product band and flagged (D-14). Recorded as loan transaction and amendment history kind RATE_RESET (no approval: it follows the contract); the RATE_RESET message (SMS template seeded for the demo tenant) tells the borrower the new rate, EMI and instalments left. A frozen account's reset is held until it is unfrozen; closed and written-off loans are not reset. `GET /api/v1/rate-resets/upcoming?days=n` lists the loans due with the projected rate and estimated EMI; `GET /api/v1/rate-resets` the resets applied; `POST /api/v1/loans/{id}/rate-reset-preference` records the borrower's EMI/tenure choice through maker-checker. A combination (CHANGE_BOTH) is a RATE_CHANGE amendment; a switch to a fixed rate exists in the engine as amendment SWITCH_TO_FIXED but the board-policy terms of the switch (charges, which fixed rate) are not built: out of scope for now.
 - Amendments, restructures and `REDUCE_TENURE` prepayment apply to monthly equated loans on the daily-reducing basis only. Other methods take part-prepayment with `REDUCE_EMI`; structured and differing-interval loans take none.
-- Tranches and top-up: equated, fixed-principal and bullet products on the daily-reducing basis only; not step or structured loans.
+- Tranches and top-up: equated, fixed-principal, bullet and tranche-bullet products on the daily-reducing basis only; not step or structured loans, nor loans with an elapsed-tenure rate table.
 - Sanction change of a loan that is not yet disbursed.
 - Simulation download (CSV / PDF); the endpoints return JSON.
 - Credit-note PDF and the GST summary report reading `lending.gst_output_document`.

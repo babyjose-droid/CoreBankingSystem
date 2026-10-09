@@ -166,8 +166,13 @@ public final class LoanAccount {
     }
 
     /** One disbursement of the sanctioned amount (US-050). {@code interestDeducted}: broken-period interest taken upfront. */
+    /** @param maturity TRANCHE_BULLET: the date the tranche is repaid as a bullet (null on other methods, and on state before V25) */
     public record TrancheRow(int no, LocalDate date, BigDecimal amount, BigDecimal feesDeducted, BigDecimal interestDeducted,
-                             BigDecimal net) {}
+                             BigDecimal net, LocalDate maturity) {
+        public TrancheRow(int no, LocalDate date, BigDecimal amount, BigDecimal feesDeducted, BigDecimal interestDeducted, BigDecimal net) {
+            this(no, date, amount, feesDeducted, interestDeducted, net, null);
+        }
+    }
 
     /**
      * Complete state, serialisable as JSON; stored before every transaction so it can be reversed.
@@ -372,7 +377,8 @@ public final class LoanAccount {
         }
         BigDecimal fees = deducted.stream().map(FeeRule.Charge::total).reduce(ZERO, BigDecimal::add);
         BigDecimal net = firstTranche.subtract(fees).subtract(advance);
-        a.tranches.add(new TrancheRow(1, terms.disbursalDate(), firstTranche, fees, advance, net));
+        a.tranches.add(new TrancheRow(1, terms.disbursalDate(), firstTranche, fees, advance, net,
+                terms.method() == RepaymentMethod.TRANCHE_BULLET ? ScheduleBuilder.dueDate(terms, terms.tenorMonths()) : null));
         return new Book(a, schedule, net, deducted, new Result(lots, "Disbursed " + plain(firstTranche) + ", net " + plain(net)), advance, charged);
     }
 
@@ -1394,14 +1400,16 @@ public final class LoanAccount {
     }
 
     /**
-     * TRANCHE_BULLET rows from {@code from}: each tranche's principal on its own maturity (tranche date plus the
-     * tenor; the first tranche's is the loan's first maturity), interest on the balance by days, on the regular due
+     * TRANCHE_BULLET rows from {@code from}: each tranche's principal on its own maturity (given when the tranche was
+     * disbursed; the first tranche's is the loan's tenor), interest on the balance by days, on the regular due
      * dates up to the last maturity and on each maturity, or only on the maturities with {@code interestAtMaturity}.
      */
     private List<Instalment> trancheBulletRows(LoanTerms t, LocalDate from) {
         java.util.TreeMap<LocalDate, BigDecimal> due = new java.util.TreeMap<>();
         for (TrancheRow tr : tranches) {
-            LocalDate maturity = tr.no() == 1 ? ScheduleBuilder.dueDate(t, t.tenorMonths()) : t.frequency().plus(tr.date(), t.tenorMonths());
+            // its own maturity, given when it was disbursed; state from before V25 kept none: tranche date + tenor
+            LocalDate maturity = tr.maturity() != null ? tr.maturity()
+                    : tr.no() == 1 ? ScheduleBuilder.dueDate(t, t.tenorMonths()) : t.frequency().plus(tr.date(), t.tenorMonths());
             if (maturity.isAfter(from)) due.merge(maturity, tr.amount(), BigDecimal::add);
         }
         if (due.isEmpty()) throw new IllegalStateException("every tranche has matured");
@@ -1590,20 +1598,33 @@ public final class LoanAccount {
      * No tranche is paid out while the account has unpaid dues or is NPA.
      */
     public Result drawTranche(BigDecimal amount, LocalDate businessDate) {
-        return doDraw(amount, businessDate).result();
+        return doDraw(amount, businessDate, null).result();
+    }
+
+    /**
+     * As {@link #drawTranche(BigDecimal, LocalDate)}; on a TRANCHE_BULLET loan each tranche is repaid as its own bullet
+     * on {@code maturity} (required there, after the next due date - after today when interest falls due at maturity - and on or before the latest maturity the product's
+     * tenor allows, checked by the service; ignored on other methods).
+     */
+    public Result drawTranche(BigDecimal amount, LocalDate businessDate, LocalDate maturity) {
+        return doDraw(amount, businessDate, maturity).result();
     }
 
     /** Figures of a tranche on today's state without changing it: the same code as {@link #drawTranche}. */
     public TrancheEffect simulateTranche(BigDecimal amount, LocalDate businessDate) {
+        return simulateTranche(amount, businessDate, null);
+    }
+
+    public TrancheEffect simulateTranche(BigDecimal amount, LocalDate businessDate, LocalDate maturity) {
         Snapshot s = snapshot();
         try {
-            return doDraw(amount, businessDate).effect();
+            return doDraw(amount, businessDate, maturity).effect();
         } finally {
             restore(s);
         }
     }
 
-    private Drawn doDraw(BigDecimal amount, LocalDate businessDate) {
+    private Drawn doDraw(BigDecimal amount, LocalDate businessDate, LocalDate maturity) {
         requireActive();
         if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("the disbursement amount must be positive");
         BigDecimal undrawn = undrawn();
@@ -1621,6 +1642,15 @@ public final class LoanAccount {
             requireTrancheable(baseTerms());
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException(e.getMessage());
+        }
+        boolean trancheBullet = baseTerms().method() == RepaymentMethod.TRANCHE_BULLET;
+        if (trancheBullet) {
+            if (maturity == null) throw new IllegalArgumentException("each tranche of this loan is repaid on its own date: give its maturity date");
+            // interest monthly: the tranche runs past at least one interest date; interest at maturity: any later day
+            LocalDate earliest = baseTerms().options().interestAtMaturity() ? start : future.get(0).dueDate();
+            if (!maturity.isAfter(earliest)) {
+                throw new IllegalArgumentException("the tranche's maturity must be after " + earliest);
+            }
         }
         LoanPostings post = postings(businessDate);
         List<TransactionLot> lots = new ArrayList<>();
@@ -1642,7 +1672,7 @@ public final class LoanAccount {
         BigDecimal fees = deducted.stream().map(FeeRule.Charge::total).reduce(ZERO, BigDecimal::add);
         BigDecimal net = amount.subtract(fees);
         int no = tranches.size() + 1;
-        tranches.add(new TrancheRow(no, businessDate, amount, fees, ZERO, net));
+        tranches.add(new TrancheRow(no, businessDate, amount, fees, ZERO, net, trancheBullet ? maturity : null));
         reschedule(start);
         TrancheEffect effect = new TrancheEffect(no, amount, List.copyOf(deducted), List.copyOf(charged), ZERO, net, disbursedAmount,
                 undrawn(), fullyDrawn(), currentEmi(), List.copyOf(future));

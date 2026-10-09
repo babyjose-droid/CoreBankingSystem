@@ -175,3 +175,61 @@ describe('manual NPA override', () => {
     expect(pv).toMatchObject({ remainingBefore: 19, remainingAfter: 13, maturityAfter: '2027-07-15' });
   });
 });
+
+describe('tranche bullet, floating rate slab and elapsed-tenure steps (V25)', () => {
+  const base = (s: MockServer) => ({ ...s.db.loanProducts.find((p) => p.code === 'PL01')!, version: undefined });
+
+  async function approveProduct(s: MockServer, product: Record<string, unknown>) {
+    const r = await mockCall(s, 'maker', 'POST', '/api/v1/loan-products', product);
+    expect(r.status).toBe(202);
+    expect((await approve(s, r.body.id)).status).toBe(200);
+  }
+
+  it('repays each tranche on its own maturity date, given at disbursement', async () => {
+    const s = createMockServer();
+    await approveProduct(s, { ...base(s), code: 'TB01', name: 'CLAUDE-TEST Tranche bullet', repaymentMethod: 'TRANCHE_BULLET', multipleDisbursements: true, minTenorMonths: 3, maxTenorMonths: 24, fees: [] });
+    const refused = await mockCall(s, 'maker', 'POST', '/api/v1/loan-products', { ...base(s), code: 'TB02', repaymentMethod: 'TRANCHE_BULLET', multipleDisbursements: false });
+    expect(refused.status).toBe(422);
+
+    const booked = await mockCall(s, 'maker', 'POST', '/api/v1/loans', { productCode: 'TB01', customerId: cust(s, 'Hari').id, amount: '300000', tenorMonths: 12, rate: '14' });
+    const id = booked.body.id as string;
+    await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/kfs-acceptance`, { channel: 'OTP' });
+    expect((await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/disbursement`, { amount: '100000', maturityDate: '2027-01-31' })).status).toBe(422); // first: the tenor
+    const d1 = await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/disbursement`, { amount: '100000' });
+    await approve(s, d1.body.id);
+
+    expect((await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/disbursement`, { amount: '50000' })).status).toBe(422); // no maturity
+    const tooLong = s.db.businessDate.replace(/^(\d{4})/, (y) => String(Number(y) + 3));
+    expect((await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/disbursement`, { amount: '50000', maturityDate: tooLong })).status).toBe(422);
+    const maturity = (await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/simulations/disbursement`, { amount: '50000', maturityDate: '2099-01-01' })).status;
+    expect(maturity).toBe(422);
+
+    const sched0 = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}/schedule`)).body.future as Array<{ dueDate: string }>;
+    const at = sched0[3].dueDate; // a regular due date four periods ahead: within 3-24 months
+    const sim = (await mockCall(s, 'checker', 'POST', `/api/v1/loans/${id}/simulations/disbursement`, { amount: '50000', maturityDate: at })).body;
+    expect(sim.schedule.find((r: { dueDate: string }) => r.dueDate === at).principal).toBe('50000.00');
+    const d2 = await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/disbursement`, { amount: '50000', maturityDate: at });
+    expect(d2.status).toBe(202);
+    await approve(s, d2.body.id);
+    const tr = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}/tranches`)).body;
+    expect(tr.tranches.map((t: { maturityDate: string | null }) => t.maturityDate)).toEqual([null, at]);
+    const future = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}/schedule`)).body.future as Array<{ dueDate: string; principal: string; interest: string }>;
+    expect(future.find((r) => r.dueDate === at)!.principal).toBe('50000.00');
+    expect(future[future.length - 1].principal).toBe('100000.00');
+    expect(future.every((r) => Number(r.interest) > 0)).toBe(true);
+  });
+
+  it('takes the spread from a SPREAD table and starts a stepped product at its first step', async () => {
+    const s = createMockServer();
+    await approveProduct(s, { ...base(s), code: 'HL09', name: 'CLAUDE-TEST Floating slab', rateType: 'FLOATING', benchmarkCode: 'REPO', spread: null, interestTableCode: 'HLS', resetFrequencyMonths: 3, minRate: '5', maxRate: '15', fees: [] });
+    const kfs = (await mockCall(s, 'maker', 'POST', '/api/v1/loans/preview', { productCode: 'HL09', customerId: cust(s, 'Hari').id, amount: '100000', tenorMonths: 24 })).body;
+    expect(kfs.rateExplanation).toMatch(/slab spread \(HLS\) 3.25%/);
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/loan-products', { ...base(s), code: 'PL09', interestTableCode: 'HLS' })).status).toBe(422);
+
+    await approveProduct(s, { ...base(s), code: 'PL08', name: 'CLAUDE-TEST Stepped', topUpAllowed: false, interestTableCode: null, rateSteps: [{ fromMonth: 1, ratePercent: '14' }, { fromMonth: 13, ratePercent: '16' }], fees: [] });
+    const stepped = (await mockCall(s, 'maker', 'POST', '/api/v1/loans/preview', { productCode: 'PL08', customerId: cust(s, 'Hari').id, amount: '100000', tenorMonths: 24 })).body;
+    expect(stepped.interestRate).toBe('14.00');
+    expect(stepped.rateSteps).toEqual([{ fromMonth: 1, ratePercent: '14.00' }, { fromMonth: 13, ratePercent: '16.00' }]);
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/loan-products', { ...base(s), code: 'PL07', rateSteps: [{ fromMonth: 2, ratePercent: '14' }, { fromMonth: 13, ratePercent: '16' }] })).status).toBe(422);
+  });
+});

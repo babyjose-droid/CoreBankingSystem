@@ -58,6 +58,7 @@ export const REPAYMENT_METHOD_LABEL: Record<LoanProduct['repaymentMethod'], stri
   BULLET_PERIODIC_INTEREST: 'Bullet principal, periodic interest',
   STEP_EQUATED: 'Step-up / step-down EMI',
   STRUCTURED: 'Structured (assigned principal per instalment)',
+  TRANCHE_BULLET: 'Tranche bullet (each tranche repaid on its own date)',
 };
 
 const n = (v: unknown) => (v === null || v === undefined || v === '' ? null : String(v));

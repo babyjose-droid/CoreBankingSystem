@@ -107,7 +107,9 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
   const undrawn = loan.undrawnAmount && isMoney(loan.undrawnAmount) && !isZero(loan.undrawnAmount) ? loan.undrawnAmount : loan.amount ?? '';
   // Part of the amount can be drawn only on a product with multiple disbursements.
   const partAllowed = !!loan.multipleDisbursements;
-  const [b, setB] = useState({ mode: 'IMPS', beneficiaryName: loan.customerName ?? '', beneficiaryAccount: '', ifsc: '', amount: undrawn });
+  // method 18: a later tranche is repaid as a bullet on its own date (the first one at the loan's tenor)
+  const needsMaturity = tranche && loan.repaymentMethod === 'TRANCHE_BULLET';
+  const [b, setB] = useState({ mode: 'IMPS', beneficiaryName: loan.customerName ?? '', beneficiaryAccount: '', ifsc: '', amount: undrawn, maturityDate: '' });
   const [touched, setTouched] = useState(false);
   const m = useDisburseLoan(loan.id!);
   const sim = useSimulateDisbursement(loan.id!);
@@ -120,7 +122,9 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
     beneficiaryAccount: !cash && !/^\d{6,18}$/.test(b.beneficiaryAccount) ? '6-18 digits' : null,
     ifsc: !cash && !IFSC_PATTERN.test(b.ifsc) ? 'IFSC looks like HDFC0001234' : null,
     amount: partAllowed ? (amountError(b.amount) ?? (amount && Number(amount) > Number(undrawn) ? `At most ${formatINR(undrawn)} is undrawn` : null)) : null,
+    maturityDate: needsMaturity && !ISO_DATE.test(b.maturityDate) ? 'Required: the date this tranche is repaid' : null,
   };
+  const maturity = needsMaturity ? { maturityDate: b.maturityDate } : {};
   const valid = Object.values(errs).every((e) => !e);
   return (
     <Dialog
@@ -136,7 +140,7 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
           onSubmit={() => {
             setTouched(true);
             if (!valid) return;
-            m.mutate({ ...(partAllowed && amount ? { amount } : {}), ...(cash ? { mode: b.mode } : { mode: b.mode, beneficiaryName: b.beneficiaryName.trim(), beneficiaryAccount: b.beneficiaryAccount, ifsc: b.ifsc }) }, {
+            m.mutate({ ...(partAllowed && amount ? { amount } : {}), ...maturity, ...(cash ? { mode: b.mode } : { mode: b.mode, beneficiaryName: b.beneficiaryName.trim(), beneficiaryAccount: b.beneficiaryAccount, ifsc: b.ifsc }) }, {
               onSuccess: (r) => {
                 if (r.kind === 'pending') proposal(r.approval, tranche ? 'Tranche' : 'Disbursement');
                 else toast({ tone: 'success', message: `Loan ${r.loan.loanNo} disbursed.` });
@@ -158,6 +162,17 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
         </p>
         {tranche && <Banner tone="warn">A tranche draw cannot be reversed, and no earlier transaction can be reversed after it.</Banner>}
         <div className="form-grid">
+          {needsMaturity && (
+            <Input
+              label="Tranche maturity"
+              type="date"
+              required
+              value={b.maturityDate}
+              onChange={(e) => (setB({ ...b, maturityDate: e.target.value }), sim.reset())}
+              hint="The tranche's principal falls due on this date; interest is monthly on the total outstanding. Within the product's tenor limits."
+              error={touched ? errs.maturityDate : null}
+            />
+          )}
           {partAllowed && <Input label="Amount to disburse" required numeric value={b.amount} onChange={(e) => (setB({ ...b, amount: e.target.value }), sim.reset())} hint={`Up to ${formatINR(undrawn)}; the rest stays undrawn`} error={touched ? errs.amount : null} />}
           <Select label="Mode" value={b.mode} onChange={(e) => setB({ ...b, mode: e.target.value })} options={['IMPS', 'NEFT', 'CASH'].map((x) => ({ value: x, label: x }))} />
           {!cash && (
@@ -169,7 +184,7 @@ function DisburseDialog({ loan, onClose }: { loan: Loan; onClose: () => void }) 
           )}
         </div>
         <div>
-          <Button size="sm" loading={sim.isPending} onClick={() => sim.mutate(partAllowed && amount ? amount : null)}>
+          <Button size="sm" loading={sim.isPending} onClick={() => sim.mutate({ amount: partAllowed && amount ? amount : null, ...maturity })}>
             Simulate
           </Button>
         </div>

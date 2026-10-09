@@ -182,7 +182,7 @@ export function useDisburseLoan(id: string) {
   const api = useApiClient();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (b: { amount?: Money; beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string }): Promise<DisburseResult> => {
+    mutationFn: async (b: { amount?: Money; maturityDate?: string; beneficiaryName?: string; beneficiaryAccount?: string; ifsc?: string; mode?: string }): Promise<DisburseResult> => {
       const { data, status } = await unwrapWithStatus<Loan | Approval>(api.POST('/api/v1/loans/{id}/disbursement', { params: { path: { id } }, body: b }) as never);
       return status === 202 ? { kind: 'pending', approval: data as Approval } : { kind: 'disbursed', loan: data as Loan };
     },
@@ -353,7 +353,8 @@ export function useLoanTranches(id: string | undefined) {
 export function useSimulateDisbursement(id: string) {
   const api = useApiClient();
   return useMutation({
-    mutationFn: (amount: Money | null) => unwrap<DisbursementSimulation>(api.POST('/api/v1/loans/{id}/simulations/disbursement', { params: { path: { id } }, body: { amount } })),
+    mutationFn: (b: { amount: Money | null; maturityDate?: string }) =>
+      unwrap<DisbursementSimulation>(api.POST('/api/v1/loans/{id}/simulations/disbursement', { params: { path: { id } }, body: b })),
   });
 }
 

@@ -31,6 +31,9 @@ class LendingController {
     record KfsAcceptance(String channel, String evidenceRef) {}
     record Prepayment(BigDecimal amount, String mode) {}
     record Amount(BigDecimal amount) {}
+
+    /** maturityDate: a later tranche of a tranche-bullet loan (method 18) is repaid on it. */
+    record Disbursement(BigDecimal amount, java.time.LocalDate maturityDate) {}
     record ChargeRequest(String feeCode, BigDecimal base) {}
     record Waiver(BigDecimal amount, String reason) {}
     record Reason(String reason) {}
@@ -147,8 +150,8 @@ class LendingController {
     // ---- simulations (US-060): nothing is posted or stored -------------------------------------
     @PostMapping("/loans/{id}/simulations/disbursement")
     @PreAuthorize("hasAuthority('loan:view')")
-    Map<String, Object> simulateDisbursement(@PathVariable UUID id, @RequestBody(required = false) Amount a) {
-        return loans.simulateDisbursement(visible(id), a == null ? null : a.amount());
+    Map<String, Object> simulateDisbursement(@PathVariable UUID id, @RequestBody(required = false) Disbursement a) {
+        return loans.simulateDisbursement(visible(id), a == null ? null : a.amount(), a == null ? null : a.maturityDate());
     }
 
     @PostMapping("/loans/{id}/simulations/transaction")

@@ -1462,7 +1462,9 @@ paths:
         rebuilt on each tranche: with `preEmi` the instalments are interest-only until the loan is fully drawn (or
         the undrawn amount is cancelled) and the EMIs then run for the full tenor; otherwise the instalments are
         recomputed on the amount drawn over the instalments left. No tranche is paid while the account has unpaid
-        dues or is NPA (409). A tranche cannot be reversed.
+        dues or is NPA (409). A tranche cannot be reversed. On a TRANCHE_BULLET loan each later tranche needs its own
+        `maturityDate`, within the product's tenor limits counted from today; the first tranche matures at the loan's
+        tenor.
       parameters: [ { $ref: '#/components/parameters/Id' } ]
       requestBody:
         content:
@@ -1471,6 +1473,7 @@ paths:
               type: object
               properties:
                 amount: { type: [number, string], description: 'Amount of this disbursement; default: all that is undrawn' }
+                maturityDate: { type: [string, 'null'], format: date, description: 'TRANCHE_BULLET, a later tranche only (required there): the date its principal falls due as a bullet' }
                 beneficiaryName: { type: string }
                 beneficiaryAccount: { type: string }
                 ifsc: { type: string }
@@ -1512,6 +1515,7 @@ paths:
               type: object
               properties:
                 amount: { type: [number, string, 'null'], description: 'Default: all that is undrawn' }
+                maturityDate: { type: [string, 'null'], format: date, description: 'TRANCHE_BULLET, a later tranche only (required there)' }
       responses:
         '200':
           description: OK
@@ -4174,12 +4178,14 @@ components:
         deductFromDisbursal: { type: boolean }
     RepaymentMethod:
       type: string
-      enum: [EQUATED, STEP_EQUATED, FIXED_PRINCIPAL, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST, STRUCTURED]
+      enum: [EQUATED, STEP_EQUATED, FIXED_PRINCIPAL, BULLET_TOTAL_INTEREST, BULLET_PERIODIC_INTEREST, STRUCTURED, TRANCHE_BULLET]
       description: >-
         EQUATED: equal instalments. STEP_EQUATED: instalments that step up or down by stepPercent every stepEvery
         instalments. FIXED_PRINCIPAL: equal principal plus interest on the balance. BULLET_TOTAL_INTEREST: principal
         and all interest at maturity. BULLET_PERIODIC_INTEREST: interest every period, principal at maturity.
         STRUCTURED: principal as assigned to each date on the loan (scheduleRows), with the interest accrued.
+        TRANCHE_BULLET: disbursed in tranches, each repaid as a bullet on its own maturity date (the first at the
+        loan's tenor, later ones as given at disbursement); interest every period on the total outstanding.
     RepaymentFrequency:
       type: string
       enum: [DAILY, WEEKLY, FORTNIGHTLY, MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY]
@@ -4233,6 +4239,7 @@ components:
               feesDeducted: { $ref: '#/components/schemas/Money' }
               interestDeducted: { $ref: '#/components/schemas/Money' }
               netDisbursed: { $ref: '#/components/schemas/Money' }
+              maturityDate: { type: [string, 'null'], format: date, description: 'TRANCHE_BULLET: when the tranche is repaid' }
               createdBy: { type: string }
     ChargeBreakup:
       type: object
@@ -4366,7 +4373,19 @@ components:
         preEmi: { type: boolean, default: false, description: 'With multipleDisbursements on an EQUATED product: interest only on the amount drawn until the final tranche, then EMIs for the full tenor. Otherwise EMIs on the amount drawn, recomputed on each tranche.' }
         topUpAllowed: { type: boolean, default: false, description: 'The sanctioned amount of a live account may be raised (same methods as multipleDisbursements)' }
         benchmarkCode: { type: [string, 'null'], description: 'Floating products: rate = benchmark + spread when the application gives no rate. Needs spread, resetFrequencyMonths and rateType FLOATING.' }
-        spread: { type: [number, string, 'null'] }
+        spread: { type: [number, string, 'null'], description: 'Over the benchmark. Leave empty to take it from a SPREAD interest table (floating rate slab) by amount and tenor.' }
+        rateSteps:
+          type: array
+          items:
+            type: object
+            required: [fromMonth, ratePercent]
+            properties:
+              fromMonth: { type: integer, minimum: 1 }
+              ratePercent: { type: [number, string] }
+          description: >-
+            Elapsed-tenure rate table: the rate from month fromMonth of the loan, the first step from month 1. Monthly
+            EQUATED products on DAILY_REDUCING, rateType FIXED, disbursed at once; every step within the rate band.
+            The KFS and schedule show every step; the day-end applies each one (EMI changes, tenure kept).
         resetFrequencyMonths: { type: [integer, 'null'], minimum: 1, maximum: 60, description: 'Floating products: the day-end resets the rate to benchmark + spread every so many months from disbursal' }
         resetOption:
           type: string
@@ -4382,7 +4401,7 @@ components:
         maxTenorMonths: { type: integer, description: 'Counted in periods of the frequency (months for MONTHLY)' }
         minRate: { type: [number, string] }
         maxRate: { type: [number, string] }
-        interestTableCode: { type: [string, 'null'] }
+        interestTableCode: { type: [string, 'null'], description: 'Rate slabs by amount and tenor. With a benchmark it must be a SPREAD table, whose rows are spreads over the benchmark (floating rate slab).' }
         rateType: { type: string, enum: [FIXED, FLOATING] }
         dayCount: { type: string, enum: [ACTUAL_365, ACTUAL_360, ACTUAL_ACTUAL, THIRTY_360, THIRTY_E_360, ACTUAL_366, ACTUAL_364, ACTUAL_336, ACTUAL_372] }
         rounding: { type: string, enum: [RUPEE_HALF_UP, RUPEE_DOWN, RUPEE_UP, PAISE_HALF_UP, PAISE_HALF_EVEN] }
@@ -4454,6 +4473,14 @@ components:
         interestRate: { type: string, description: The rate as quoted (the flat rate of a flat-rate loan) }
         effectiveRate: { type: string, description: 'Annual rate on the reducing balance that the account accrues at; differs from interestRate for a flat rate or a given instalment' }
         rateExplanation: { type: string }
+        rateSteps:
+          type: [array, 'null']
+          description: Elapsed-tenure rate table of the product, disclosed in full
+          items:
+            type: object
+            properties:
+              fromMonth: { type: integer }
+              ratePercent: { type: string }
         emi: { type: [string, 'null'], description: 'Regular instalment of an equated loan (the first step of a step loan)' }
         bpiMode: { type: string }
         brokenPeriodInterest: { type: string }
