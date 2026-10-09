@@ -3,6 +3,7 @@ package com.corebanking.eod.web;
 import com.corebanking.audit.AuditLog;
 import com.corebanking.kernel.EodEngine;
 import com.corebanking.platform.ApiException;
+import com.corebanking.platform.Json;
 import com.corebanking.platform.TenantDataSources;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -31,15 +32,22 @@ class EodService {
     private final int partitions;
     private final List<com.corebanking.eod.EodStepProvider> providers;
     private final List<com.corebanking.eod.EodListener> listeners;
+    private final Json json;
 
     EodService(TenantDataSources dataSources, AuditLog audit, List<com.corebanking.eod.EodStepProvider> providers,
-               List<com.corebanking.eod.EodListener> listeners,
+               List<com.corebanking.eod.EodListener> listeners, Json json,
                @org.springframework.beans.factory.annotation.Value("${corebanking.eod.partitions:4}") int partitions) {
         this.listeners = List.copyOf(listeners);
         this.dataSources = dataSources;
         this.audit = audit;
         this.partitions = partitions;
         this.providers = List.copyOf(providers);
+        this.json = json;
+    }
+
+    /** Pending dated approvals, for the start confirmation (GET /eod/pending-approvals). */
+    Map<String, Object> pendingApprovals(String tenant) {
+        return PendingApprovals.of(new JdbcTemplate(dataSources.of(tenant))).view();
     }
 
     Map<String, Object> start(String tenant, String user) {
@@ -47,6 +55,8 @@ class EodService {
         Map<String, Object> day = jdbc.queryForMap("SELECT business_date, status FROM platform.business_day WHERE id = 1");
         if (!"OPEN".equals(day.get("status"))) throw ApiException.conflict("business day is " + day.get("status"));
         LocalDate bd = ((java.sql.Date) day.get("business_date")).toLocalDate();
+        PendingApprovals.Summary pending = PendingApprovals.of(jdbc);
+        if (pending.blocking()) throw ApiException.conflict(pending.message());
         Long runId;
         try {
             runId = jdbc.queryForObject("""
@@ -122,11 +132,12 @@ class EodService {
         JdbcTemplate jdbc = new JdbcTemplate(dataSources.of(tenant));
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT id, business_date::text AS "businessDate", status, started_at AS "startedAt",
-                       finished_at AS "finishedAt", next_business_date::text AS "nextBusinessDate"
+                       finished_at AS "finishedAt", next_business_date::text AS "nextBusinessDate", warnings::text AS warnings
                   FROM platform.eod_run WHERE id = ?
                 """, runId);
         if (rows.isEmpty()) throw ApiException.notFound("EOD run " + runId);
         Map<String, Object> m = new LinkedHashMap<>(rows.get(0));
+        m.put("warnings", m.get("warnings") == null ? List.of() : json.read((String) m.get("warnings"), Object.class));
         m.put("steps", jdbc.queryForList("""
                 SELECT step_no AS "stepNo", name, status, processed, failed, started_at AS "startedAt", finished_at AS "finishedAt"
                   FROM platform.eod_step_run WHERE run_id = ? ORDER BY step_no

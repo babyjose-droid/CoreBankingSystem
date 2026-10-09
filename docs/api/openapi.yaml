@@ -1005,6 +1005,11 @@ paths:
       tags: [EOD]
       operationId: startEod
       summary: Start end-of-day for the current business date (single instance per tenant)
+      description: >-
+        Pending dated approvals (vouchers, disbursements, waivers, reversals, amendments, restructures …) do not stop
+        the run: they stay pending, apply on the business date on which they are approved, and are listed in the run's
+        warnings. With the system property eod.block-on-pending-approvals = true the start is refused with 409 naming
+        the count instead.
       responses:
         '202':
           description: Started
@@ -1012,6 +1017,18 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EodRun' }
         '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/eod/pending-approvals:
+    get:
+      tags: [EOD]
+      operationId: getEodPendingApprovals
+      summary: Dated approvals still pending, as the end-of-day start sees them
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EodPendingApprovals' }
         default: { $ref: '#/components/responses/Problem' }
   /api/v1/eod/runs/{runId}:
     get:
@@ -3959,6 +3976,32 @@ components:
         nextBusinessDate: { type: [string, 'null'], format: date }
         steps: { type: array, items: { $ref: '#/components/schemas/EodStep' } }
         exceptions: { type: array, items: { $ref: '#/components/schemas/EodException' } }
+        warnings:
+          type: array
+          description: Recorded by the pre-check step; they never fail the run
+          items: { $ref: '#/components/schemas/EodWarning' }
+    EodWarning:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: [PENDING_APPROVALS] }
+        message: { type: string }
+        count: { type: [integer, 'null'] }
+    EodPendingApprovals:
+      type: object
+      required: [total, byType, blocking]
+      properties:
+        total: { type: integer }
+        byType:
+          type: array
+          items:
+            type: object
+            required: [entityType, count]
+            properties:
+              entityType: { type: string }
+              count: { type: integer }
+        blocking: { type: boolean, description: 'True when eod.block-on-pending-approvals is set and approvals are pending: the start is refused' }
+        message: { type: [string, 'null'], examples: ['3 approvals are pending: 2 vouchers, 1 disbursement — they stay pending and will apply on the business date on which they are approved'] }
     EodSchedule:
       type: object
       required: [mode]

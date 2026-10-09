@@ -82,6 +82,14 @@ export function EodRunDetailPage() {
               {run.status === 'COMPLETED_WITH_EXCEPTIONS' && ' — with exceptions to review below.'}
             </Banner>
           )}
+          {(run.warnings ?? []).map((w) => (
+            <Banner key={w.code} tone="warn">
+              <span data-testid={`eod-warning-${w.code}`}>
+                {w.message}
+                {w.code === 'PENDING_APPROVALS' && <> <Link to="/approvals?status=PENDING">Review approvals</Link></>}
+              </span>
+            </Banner>
+          ))}
           {run.status === 'FAILED' && <Banner tone="danger">The run failed. Fix the cause and restart; completed steps are not repeated.</Banner>}
           <ol className="timeline" aria-label="Steps">
             {steps.map((s) => (

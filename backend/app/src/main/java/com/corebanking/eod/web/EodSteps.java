@@ -33,6 +33,13 @@ final class EodSteps {
                 if (!ctx.businessDate().equals(bd)) {
                     throw new IllegalStateException("run is for " + ctx.businessDate() + " but the business date is " + bd);
                 }
+                // A warning on the run, never a failure: pending approvals do not stop the day (ADR-015).
+                PendingApprovals.Summary pending = PendingApprovals.of(jdbc);
+                jdbc.update("""
+                        UPDATE platform.eod_run SET warnings = CASE WHEN ? = 0 THEN '[]'::jsonb
+                               ELSE jsonb_build_array(jsonb_build_object('code', 'PENDING_APPROVALS', 'message', ?::text, 'count', ?::int)) END
+                         WHERE id = ?
+                        """, pending.total(), pending.message(), pending.total(), ctx.runId());
             }
         };
     }

@@ -762,6 +762,28 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   });
 
   // EOD
+  /** Dated approvals still pending, as the backend's PendingApprovals counts them. */
+  const DATED_APPROVALS: Record<string, [string, string]> = {
+    VOUCHER: ['voucher', 'vouchers'], LOAN_DISBURSEMENT: ['disbursement', 'disbursements'], LOAN_DISBURSEMENT_REVERSAL: ['disbursement reversal', 'disbursement reversals'],
+    LOAN_WAIVER: ['waiver', 'waivers'], LOAN_REVERSAL: ['loan transaction reversal', 'loan transaction reversals'], LOAN_AMENDMENT: ['loan amendment', 'loan amendments'],
+    LOAN_RESTRUCTURE: ['restructure', 'restructures'], LOAN_SANCTION_CHANGE: ['sanction change', 'sanction changes'], LOAN_NPA_OVERRIDE: ['NPA override', 'NPA overrides'],
+  };
+  const pendingDated = () => {
+    const byType = Object.keys(DATED_APPROVALS)
+      .map((entityType) => ({ entityType, count: db.approvals.filter((s) => s.approval.status === 'PENDING' && s.approval.entityType === entityType).length }))
+      .filter((x) => x.count > 0);
+    const total = byType.reduce((n, x) => n + x.count, 0);
+    const block = (db.systemProperties.find((p) => p.key === 'eod.block-on-pending-approvals')?.value ?? '').trim().toLowerCase() === 'true';
+    const parts = byType.map((x) => `${x.count} ${DATED_APPROVALS[x.entityType][x.count === 1 ? 0 : 1]}`).join(', ');
+    const message = total === 0 ? null
+      : `${total} ${total === 1 ? 'approval is' : 'approvals are'} pending: ${parts}` +
+        (block ? ' — end of day cannot start until they are approved or rejected (eod.block-on-pending-approvals)' : ' — they stay pending and will apply on the business date on which they are approved');
+    return { total, byType, blocking: block && total > 0, message };
+  };
+  on('GET', '/api/v1/eod/pending-approvals', ({ user }) => {
+    require(user, P.eodView);
+    return ok(pendingDated());
+  });
   on('GET', '/api/v1/eod/runs', ({ user }) => {
     require(user, P.eodView);
     return ok([...db.eodRuns].sort((a, b) => b.id - a.id));
@@ -772,6 +794,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     if (running) throw conflict('End-of-day already running', `Run #${running.id} for ${running.businessDate} is in progress`);
     const failed = db.eodRuns.find((r) => r.status === 'FAILED' && r.businessDate === db.businessDate);
     if (failed) throw conflict('Previous run failed', `Restart run #${failed.id} instead of starting a new one`);
+    const pending = pendingDated();
+    if (pending.blocking) throw conflict('Approvals pending', pending.message!);
     db.eodRunSeq += 1;
     const run: EodRun = {
       id: db.eodRunSeq,
@@ -782,6 +806,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       nextBusinessDate: null,
       steps: EOD_STEPS.map((name, i) => ({ stepNo: i + 1, name, status: 'PENDING', processed: 0, failed: 0, startedAt: null, finishedAt: null })),
       exceptions: [],
+      warnings: pending.total ? [{ code: 'PENDING_APPROVALS', message: pending.message!, count: pending.total }] : [],
     };
     db.eodRuns.push(run);
     db.dayStatus = 'EOD_RUNNING';

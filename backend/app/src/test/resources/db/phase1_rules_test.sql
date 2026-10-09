@@ -128,6 +128,8 @@ DO $$ BEGIN PERFORM ledger.trial_balance_gate('2026-10-13'); RAISE NOTICE 'PASS 
 INSERT INTO platform.eod_run (business_date,status) VALUES ('2026-10-13','RUNNING');
 SELECT pg_temp.expect_fail($q$ INSERT INTO platform.eod_run (business_date,status) VALUES ('2026-10-13','RUNNING') $q$, '23505', 'E1 only one EOD can run at a time');
 UPDATE platform.eod_run SET status = 'COMPLETED', finished_at = now();
+SELECT pg_temp.check((SELECT bool_and(warnings = '[]'::jsonb) FROM platform.eod_run), 'E1b a run starts with no warnings (V23)');
+SELECT pg_temp.expect_fail($q$ UPDATE platform.eod_run SET warnings = '{"code":"X"}' $q$, '23514', 'E1c warnings are a list');
 SELECT pg_temp.expect_fail($q$ INSERT INTO platform.eod_run (business_date,status) VALUES ('2026-10-13','COMPLETED') $q$, '23505', 'E2 a date is closed only once');
 SELECT pg_temp.expect_fail($q$ UPDATE platform.eod_schedule SET mode = 'SCHEDULED' $q$, '23514', 'E3 scheduled mode needs a cron');
 

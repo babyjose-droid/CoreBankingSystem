@@ -24,3 +24,11 @@ SELECT l.id, l.closed_on, 0, l.asset_class, l.principal_outstanding, 0
  WHERE l.status IN ('CLOSED','CANCELLED') AND l.closed_on IS NOT NULL
 ON CONFLICT (loan_id, business_date) DO UPDATE
    SET dpd = 0, asset_class = EXCLUDED.asset_class, principal_outstanding = EXCLUDED.principal_outstanding, overdue_amount = 0;
+
+-- ---------------------------------------------------------------------------------------------------------
+-- 2. Warnings recorded on an end-of-day run that do not stop it: the pre-check step lists the dated approvals
+--    still pending (vouchers, disbursements, waivers, reversals, amendments …), which stay pending and apply on
+--    the business date of their approval (ADR-015). A tenant may refuse the start instead with the system
+--    property eod.block-on-pending-approvals = true (not set: warn only).
+-- ---------------------------------------------------------------------------------------------------------
+ALTER TABLE platform.eod_run ADD COLUMN warnings jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(warnings) = 'array');

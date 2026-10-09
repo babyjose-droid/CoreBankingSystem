@@ -42,6 +42,22 @@ corrections are reversals, never updates).
 2. Watch progress; typical duration TBD.
 3. On completion verify: business date advanced, trial balance report generated, no exceptions queue items.
 
+### Pending approvals
+
+The pre-check step records a **warning** on the run (never a failure) listing the dated approvals still pending:
+vouchers, disbursements and their reversals, waivers, loan transaction reversals, amendments, restructures,
+sanction changes and NPA overrides. They stay pending and, once approved, apply on the business date of their
+approval, not the day they were proposed (ADR-015). The console shows the same list before a run is started
+(`GET /api/v1/eod/pending-approvals`) and on the run page. A tenant that prefers to clear them first sets the system
+property `eod.block-on-pending-approvals` to `true`: the start (manual or scheduled) is then refused with 409 naming
+the count until they are approved or rejected.
+
+### Loans: non-working days
+
+The loan day-end of business date *D* also closes every calendar day up to the next business date (Saturday's
+run closes Sunday; the run before a holiday closes the holiday), each with its own accrual, penal charge, demands and
+DPD history, posted in *D*'s books with the day as value date. See docs/lending-day-end.md.
+
 ## Restart after a failure
 
 1. Read the failed step and error in the console / logs (`[tenant]` in the log correlation prefix).

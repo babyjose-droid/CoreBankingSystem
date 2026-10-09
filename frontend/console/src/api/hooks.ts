@@ -21,6 +21,7 @@ import type {
   Me,
   StatementRow,
   TaxRate,
+  EodPendingApprovals,
   Benchmark,
   BenchmarkInput,
   BenchmarkRateInput,
@@ -350,6 +351,16 @@ export function useEodRun(runId: number | null) {
     },
     enabled: runId !== null && !Number.isNaN(runId),
     refetchInterval: (q) => (q.state.data?.status === 'RUNNING' ? EOD_POLL_MS : false),
+  });
+}
+
+/** Dated approvals still pending, shown before a run starts. */
+export function useEodPendingApprovals(enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['eod-pending-approvals'],
+    queryFn: () => unwrap<EodPendingApprovals>(api.GET('/api/v1/eod/pending-approvals')),
+    enabled,
   });
 }
 

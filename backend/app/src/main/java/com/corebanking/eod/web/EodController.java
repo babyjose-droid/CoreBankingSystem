@@ -51,6 +51,12 @@ class EodController {
         return eod.run(CurrentUser.requireTenant(), runId);
     }
 
+    @GetMapping("/pending-approvals")
+    @PreAuthorize("hasAuthority('eod:view')")
+    Map<String, Object> pendingApprovals() {
+        return eod.pendingApprovals(CurrentUser.requireTenant());
+    }
+
     @PostMapping("/runs")
     @PreAuthorize("hasAuthority('eod:run')")
     @ResponseStatus(HttpStatus.ACCEPTED)

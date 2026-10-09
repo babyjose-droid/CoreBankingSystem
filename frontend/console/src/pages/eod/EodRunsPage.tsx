@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { useBusinessDay, useEodRuns, useMe, useStartEod } from '../../api/hooks';
+import { useBusinessDay, useEodPendingApprovals, useEodRuns, useMe, useStartEod } from '../../api/hooks';
 import { P, hasPermission } from '../../auth/permissions';
 import { formatDuration } from '../../lib/dates';
 import { Banner, Button, Card, DateText, DateTimeText, Dialog, EmptyState, ErrorBanner, PageHeader, Spinner, StatusBadge, Table } from '../../ui';
@@ -12,6 +12,7 @@ export function EodRunsPage() {
   const start = useStartEod();
   const navigate = useNavigate();
   const [confirm, setConfirm] = useState(false);
+  const pending = useEodPendingApprovals(confirm);
   const running = runs.data?.find((r) => r.status === 'RUNNING');
   const canRun = hasPermission(me.permissions, P.eodRun);
   const businessDate = day.data?.businessDate ?? me.businessDate;
@@ -76,6 +77,7 @@ export function EodRunsPage() {
             <Button
               variant="primary"
               loading={start.isPending}
+              disabled={!!pending.data?.blocking}
               onClick={() =>
                 start.mutate(undefined, {
                   onSuccess: (run) => {
@@ -95,6 +97,13 @@ export function EodRunsPage() {
           then advances the business date to the next working day.
         </p>
         <p className="muted">Users can keep working; postings made during EOD are dated to the next business date.</p>
+        {pending.data && pending.data.total > 0 && (
+          <Banner tone={pending.data.blocking ? 'danger' : 'warn'}>
+            <span data-testid="eod-pending-approvals">
+              {pending.data.message} <Link to="/approvals?status=PENDING">Review approvals</Link>
+            </span>
+          </Banner>
+        )}
         <ErrorBanner error={start.error} />
       </Dialog>
     </div>

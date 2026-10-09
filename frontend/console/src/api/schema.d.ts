@@ -770,8 +770,28 @@ export interface paths {
         /** List eod runs */
         get: operations["listEodRuns"];
         put?: never;
-        /** Start end-of-day for the current business date (single instance per tenant) */
+        /**
+         * Start end-of-day for the current business date (single instance per tenant)
+         * @description Pending dated approvals (vouchers, disbursements, waivers, reversals, amendments, restructures …) do not stop the run: they stay pending, apply on the business date on which they are approved, and are listed in the run's warnings. With the system property eod.block-on-pending-approvals = true the start is refused with 409 naming the count instead.
+         */
         post: operations["startEod"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eod/pending-approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dated approvals still pending, as the end-of-day start sees them */
+        get: operations["getEodPendingApprovals"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3750,6 +3770,25 @@ export interface components {
             nextBusinessDate?: string | null;
             steps?: components["schemas"]["EodStep"][];
             exceptions?: components["schemas"]["EodException"][];
+            /** @description Recorded by the pre-check step; they never fail the run */
+            warnings?: components["schemas"]["EodWarning"][];
+        };
+        EodWarning: {
+            /** @example PENDING_APPROVALS */
+            code: string;
+            message: string;
+            count?: number | null;
+        };
+        EodPendingApprovals: {
+            total: number;
+            byType: {
+                entityType: string;
+                count: number;
+            }[];
+            /** @description True when eod.block-on-pending-approvals is set and approvals are pending: the start is refused */
+            blocking: boolean;
+            /** @example 3 approvals are pending: 2 vouchers, 1 disbursement — they stay pending and will apply on the business date on which they are approved */
+            message?: string | null;
         };
         EodSchedule: {
             /** @enum {string} */
@@ -6369,6 +6408,27 @@ export interface operations {
                 };
             };
             409: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getEodPendingApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EodPendingApprovals"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };

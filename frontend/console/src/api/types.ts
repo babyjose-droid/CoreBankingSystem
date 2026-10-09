@@ -35,6 +35,7 @@ export type StatementRow = S['StatementRow'];
 export type EodStep = S['EodStep'];
 export type EodException = S['EodException'];
 export type EodRun = S['EodRun'];
+export type EodPendingApprovals = S['EodPendingApprovals'];
 export type EodSchedule = S['EodSchedule'];
 export type AuditEvent = S['AuditEvent'];
 export type EnumValueInput = S['EnumValueInput'];
