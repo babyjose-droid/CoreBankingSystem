@@ -216,8 +216,8 @@ Built 02-Oct-2026. Stories: US-048 (KFS as PDF), US-106 (invoices and reports), 
 - **App:** 3 tests for report parameters. The Spring code could not be compiled here (no access to Maven Central); it was type-checked against stand-in classes for the Spring API with the CI lint options.
 
 ### Not yet built in P2-4
-- **S3 document store:** pending. It needs the AWS SDK dependency, to be added when a build with Maven Central access is available. Until then the store is a directory, which must be an encrypted volume: report files and the bureau file hold personal data.
-- **Scheduler and e-mail delivery of reports:** pending. `schedule` and `email_to` are recorded on the report definition and not acted on. They wait for the notification provider decision (OI-06).
+- **S3 document store:** built (`S3DocumentStore`, AWS SDK v2, SSE-KMS with the tenant's key, per-tenant prefix; selected by `corebanking.documents.store=s3`; S3Mock is the local S3). Confirmed live in the local stack on 10-Oct-2026. The directory store remains the default for dev and standalone installs and must then be an encrypted volume: report files and the bureau file hold personal data. Uploads are not virus-scanned (P25-03).
+- **Scheduler and e-mail delivery of reports:** built. The job scheduler runs scheduled reports and e-mails the file over SMTP (Amazon SES in the cloud tiers, Mailpit locally; confirmed live on 10-Oct-2026) to recipients on the tenant property `mail.internal-domains` only; a schedule that names any other domain is refused when proposed (422, naming the domain), and the send-time filter stays as a second guard.
 - **Background runs:** a run is synchronous and limited to 500,000 rows.
 - **Credit notes:** a fee waived after its invoice was issued needs a GST credit note. Only reversal (cancellation) is handled.
 - **Console screens** for documents, reports and the dashboard, and the regenerated API types for the console.
@@ -375,7 +375,7 @@ Built 02-Oct-2026. Stories: US-021, US-032, US-034, US-036 and the rest of US-04
 - **Metadata** (`customer.kyc_document`): document type (enumeration `kyc-document-type`), last four characters and keyed hash of the number, issue and expiry dates, status, file key, content type, size, SHA-256, uploader and time.
 - **Files:** stored through `DocumentStore` (`put`, `get`, `delete`, `exists`) under `tenants/<code>/kyc/<customer>/<uuid>`.
   - `FileDocumentStore` writes under `corebanking.documents.dir` with owner-only permissions and refuses keys with `..`, a leading `/` or a backslash.
-  - **The S3 implementation is not built.** It needs the AWS SDK dependency. Until then the directory must be an encrypted volume.
+  - **S3 is built** (`S3DocumentStore`; S3Mock locally, confirmed live 10-Oct-2026). With the directory store the directory must be an encrypted volume.
 - **Upload:** `POST /api/v1/customers/{id}/kyc-documents` with the file as the request body.
   - PDF, JPEG or PNG, at most 5 MB; the leading bytes must match the declared type.
   - Metadata is in the query string. The document number is in the `X-Document-Number` header so it does not reach access logs.
@@ -687,7 +687,7 @@ Built 03-Oct-2026. Stories: US-014, US-027, US-111, US-112, US-113 (scheduling a
 - `platform.job_definition` and `platform.job_run`. A scheduler polls every tenant; a job runs under a PostgreSQL advisory lock and a fire time is unique per job, so two instances never run it twice.
 - Jobs: booking of deferred receipts, dashboard metrics refresh, KYC expiry, consent expiry, removal of report files past retention, usage snapshot, and one job per report.
 - A scheduled report runs with the branch scope of the user who scheduled it and belongs to that user. Its dates come from a period relative to the business date.
-- **E-mail delivery is not built.** The file is stored and the run says `delivery: PENDING_PROVIDER` (OI-06).
+- **E-mail delivery is built** (SMTP; Mailpit locally, confirmed live 10-Oct-2026). The file is stored and e-mailed to the schedule's recipients on an internal domain (`mail.internal-domains`); the run's artifact says `delivery` (SENT, NOT_CONFIGURED, NO_INTERNAL_RECIPIENT, NOT_EMAILED, FAILED). Recipients outside those domains are refused when the schedule is proposed.
 - Schedules (six-field cron in IST), the on/off switch and parameters change through maker-checker (entity `JOB_SCHEDULE`).
 - **API:** `GET /api/v1/jobs`, `POST /api/v1/jobs/{code}/run`, `PUT /api/v1/jobs/{code}`, `GET /api/v1/jobs/runs`, `GET /api/v1/dashboard/trend`.
 
@@ -726,7 +726,7 @@ Built 03-Oct-2026. Stories: US-014, US-027, US-111, US-112, US-113 (scheduling a
 - **Keycloak:** a client `corebanking-admin` in each tenant realm with service accounts on and the realm-management roles `view-users` and `manage-users`.
 
 ### Not yet built in P2-7
-- E-mail delivery of scheduled reports and of support access requests (OI-06).
+- E-mail notice of support access requests to the tenant admins (scheduled reports are e-mailed; see above).
 - Editing the custom values of an existing customer or loan (there is no update API for them yet).
 - Support access scopes other than READ_ONLY.
 - Value-dating a deferred receipt on the date that was being closed (D-15).
