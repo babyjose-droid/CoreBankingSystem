@@ -186,7 +186,7 @@ services:
 
   console:
     profiles: ["console"]
-    image: node:22
+    image: node:26
     working_dir: /workspace/frontend/console
     command: ["sh", "-c", "npm ci && npm run dev -- --host"]
     # Share the backend's network namespace so the Vite dev proxy (/api -> http://localhost:8080,
