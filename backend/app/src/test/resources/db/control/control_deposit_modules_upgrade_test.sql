@@ -25,7 +25,7 @@ UPDATE control.tenant_module m SET enabled = false
   FROM control.tenant t
  WHERE t.id = m.tenant_id AND m.enabled AND NOT control.module_allowed(t.entity_type, t.deposit_taking, m.module_code);
 
-SELECT pg_temp.check((SELECT array_agg(module_code ORDER BY module_code) FROM control.tenant_module
+SELECT pg_temp.check((SELECT array_agg(module_code ORDER BY module_code COLLATE "C") FROM control.tenant_module
                        WHERE tenant_id = '00000000-0000-0000-0000-00000000e001' AND NOT enabled) = ARRAY['CASA','TD'],
                      'G1 CASA and TD of an NBFC are switched off');
 SELECT pg_temp.check((SELECT count(*) = 5 FROM control.tenant_module WHERE tenant_id = '00000000-0000-0000-0000-00000000e001' AND enabled),

@@ -50,7 +50,7 @@ SELECT deposits.assert_can_offer('TERM_DEPOSIT');
 SELECT pg_temp.check(true, 'D2 it can offer term deposits');
 SELECT pg_temp.expect_fail($q$ SELECT deposits.assert_can_offer('CASA') $q$, '23514', 'D3 but never savings or current accounts');
 SELECT pg_temp.expect_fail($q$ SELECT deposits.assert_can_offer('LOCKER') $q$, '22023', 'D4 an unknown family is an error');
-SELECT pg_temp.check((SELECT array_agg(code ORDER BY code) FROM ledger.gl_head WHERE code IN
+SELECT pg_temp.check((SELECT array_agg(code ORDER BY code COLLATE "C") FROM ledger.gl_head WHERE code IN
                         ('2400','2401','2402','2403','2404','2405','2406','2407','2408','2409','2205','5107','5108','4107','4108','1207'))
                      = ARRAY['2205','2400','2403','2404','2405','2406','2407','2408','5107'],
                      'D5 switching it on loads the term deposit heads and no savings, current or clearing heads');

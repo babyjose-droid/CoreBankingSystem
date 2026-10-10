@@ -40,10 +40,10 @@ SELECT pg_temp.check(control.module_allowed('NBFC', false, 'LENDING') AND contro
 INSERT INTO control.tenant_module (tenant_id, module_code)
 SELECT t.id, e.module_code FROM control.tenant t JOIN control.edition_module e ON e.edition_code = t.edition_code
  WHERE control.module_allowed(t.entity_type, t.deposit_taking, e.module_code);
-SELECT pg_temp.check((SELECT array_agg(module_code ORDER BY module_code) FROM control.tenant_module
+SELECT pg_temp.check((SELECT array_agg(module_code ORDER BY module_code COLLATE "C") FROM control.tenant_module
                        WHERE tenant_id = '00000000-0000-0000-0000-00000000d001')
                      = ARRAY['CASA','COLLECTIONS','CO_LENDING','GL','LENDING','REPORTS','TD'], 'P1 an ENTERPRISE bank gets every module');
-SELECT pg_temp.check((SELECT array_agg(module_code ORDER BY module_code) FROM control.tenant_module
+SELECT pg_temp.check((SELECT array_agg(module_code ORDER BY module_code COLLATE "C") FROM control.tenant_module
                        WHERE tenant_id = '00000000-0000-0000-0000-00000000d002')
                      = ARRAY['COLLECTIONS','CO_LENDING','GL','LENDING','REPORTS'], 'P2 an ENTERPRISE NBFC gets the edition without CASA and TD');
 SELECT pg_temp.check((SELECT count(*) = 7 FROM control.tenant_module WHERE tenant_id = '00000000-0000-0000-0000-00000000d004'),
