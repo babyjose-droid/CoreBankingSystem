@@ -351,7 +351,7 @@ Built 02-Oct-2026. Stories: US-021, US-032, US-034, US-036 and the rest of US-04
   - The database writes the borrower row when a loan is booked; existing loans were backfilled.
   - Loan creation and preview accept `parties` (customer id and role).
   - A customer holds one role per loan, so a borrower cannot also be guarantor or co-applicant. Guarantors and co-applicants must be ACTIVE customers.
-  - Parties cannot be changed or removed (release of a guarantor is not built).
+  - Parties cannot be changed or removed, but a co-applicant or guarantor can be **released**: `POST /loans/{id}/parties/{partyId}/release {reason}` through maker-checker (entity `LOAN_PARTY_RELEASE`; permission `loan:amend`). One checker, or two when the loan is in an SMA or NPA class (action `RELEASE_STRESSED`; a release weakens recovery on a loan that is going bad). It takes effect on the business date of the approval (V26): the row stays with `released_on`, `released_by` and `release_reason`; the party drops out of the customer's exposure (`as_guarantor`, `as_co_applicant`, loan counts) from then. The bureau extract is one row per loan (the borrower) and does not report co-applicants or guarantors today, so there is nothing to drop there; a future joint-reporting query must read `lending.loan_party WHERE released_on IS NULL`. The borrower cannot be released; a released party is not added again to the same loan; the customer's data retention duty (`has_retention_obligation`) still counts the loan.
 - **Exposure view** (`customer.exposure`): totals as borrower, as co-applicant and as guarantor, with loan counts.
   - A loan counts at its sanctioned amount until disbursed and at its principal outstanding afterwards. Closed, cancelled and written-off loans count as zero.
   - Borrower-level NPA is unchanged: it looks only at the borrower's own accounts and does not reach guarantors or co-applicants.
@@ -445,7 +445,7 @@ These are the product's reading and need confirmation by the lender's compliance
 - Limits: refusals are a plain 403 (no distinct problem type); no endpoint listing valid role names; `LOAN_WAIVER` vs `FEE_WAIVER` for the charge-waiver endpoint is not stated in the contract.
 - KYC: error statuses for too-large / wrong-type uploads and for uploader-verifies-own-upload are not declared; the document number header is optional for every type.
 - Consent: no "can be withdrawn" flag; `expiresAt` is a date-time though staff enter a date.
-- Relationships and loan parties cannot be ended or changed after creation.
+- Relationships cannot be ended or changed after creation; a loan party can only be released (see above).
 - Dashboard: `lastEod` has no run id; `pendingApprovals` scope is not stated.
 
 

@@ -164,6 +164,17 @@ export function applyLendingMoreApproval(db: MockDb, p: ApprovalPayload, approva
     approval.appliedRef = `${p.code}@${p.effectiveFrom}`;
     return true;
   }
+  if (p.kind === 'LOAN_PARTY_RELEASE') {
+    const loan = db.loans.find((l) => l.id === p.loanId);
+    const party = loan?.parties.find((x) => x.customerId === p.customerId);
+    if (!loan || !party) throw notFound('Party');
+    if (party.releasedOn) throw conflict('Already released', `This party was already released on ${party.releasedOn}`);
+    Object.assign(party, { releasedOn: db.businessDate, releasedBy: approval.maker ?? checker, releaseReason: p.reason });
+    appendAudit(db, at, checker, 'LOAN_PARTY_RELEASED', 'LOAN', loan.id, { role: party.role, releasedOn: db.businessDate });
+    approval.entityId = loan.id;
+    approval.appliedRef = `${loan.loanNo}/${p.customerId}`;
+    return true;
+  }
   if (p.kind !== 'LOAN_SANCTION_CHANGE' && p.kind !== 'LOAN_NPA_OVERRIDE') return false;
   const loan = db.loans.find((l) => l.id === p.loanId);
   if (!loan) throw notFound('Loan');
@@ -426,6 +437,19 @@ export function registerLendingMoreRoutes(db: MockDb, r: LendingMoreRouter) {
     );
   });
 
+  on('POST', '/api/v1/loans/{id}/parties/{partyId}/release', ({ user, params, body }) => {
+    require(user, P.loanAmend);
+    const loan = findLoan(params.id);
+    const reason = reasonOf((body as { reason?: string } | undefined)?.reason);
+    if (params.partyId === loan.customerId) throw bad('The borrower cannot be released from the loan', [{ field: 'partyId', message: 'Borrower' }]);
+    const party = loan.parties.find((x) => x.customerId === params.partyId);
+    if (!party) throw notFound('Party');
+    if (party.releasedOn) throw conflict('Already released', `This party was already released on ${party.releasedOn}`);
+    if (loan.state.closedOn || loan.state.status === 'WRITTEN_OFF' || loan.state.status === 'CANCELLED') throw conflict('Loan is not live', `Loan ${loan.loanNo} is ${loan.state.status}`);
+    if (db.approvals.some((s) => s.approval.status === 'PENDING' && s.payload.kind === 'LOAN_PARTY_RELEASE' && s.payload.loanId === loan.id && s.payload.customerId === party.customerId)) throw conflict('Change already pending', 'A release of this party is already awaiting approval');
+    const stressed = loan.state.assetClass !== 'STANDARD';
+    return propose(user, 'LOAN_PARTY_RELEASE', stressed ? 'RELEASE_STRESSED' : 'RELEASE', { kind: 'LOAN_PARTY_RELEASE', loanId: loan.id, customerId: party.customerId, reason, stressed }, { loanNo: loan.loanNo, role: party.role, reason }, { role: party.role, releasedOn: null }, loan.id);
+  });
   on('POST', '/api/v1/loans/{id}/npa-override', ({ user, params, body }) => {
     require(user, P.loanClassify);
     const loan = findLoan(params.id);

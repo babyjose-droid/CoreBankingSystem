@@ -390,6 +390,16 @@ export function useProposeNpaOverride(id: string) {
   });
 }
 
+export function useProposePartyRelease(loanId: string) {
+  const api = useApiClient();
+  const after = useAfterLoanProposal();
+  return useMutation({
+    mutationFn: ({ partyId, reason }: { partyId: string; reason: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/loans/{id}/parties/{partyId}/release', { params: { path: { id: loanId, partyId } }, body: { reason } }) as never),
+    onSuccess: after,
+  });
+}
+
 export function useProposeNpaRelease(id: string) {
   const api = useApiClient();
   const after = useAfterLoanProposal();

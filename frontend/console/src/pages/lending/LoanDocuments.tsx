@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { useProposalToast } from '../proposal';
 import { loanDocument, useFileDownload, useLoanParties, type FileRequest } from '../../api/extraHooks';
-import { useLoanSchedule } from '../../api/lendingHooks';
-import type { Loan } from '../../api/types';
-import { Badge, Button, Card, DateText, EmptyState, ErrorBanner, Input, MoneyText, Spinner, StatusBadge, Table, humanize, useToast } from '../../ui';
+import { useMe } from '../../api/hooks';
+import { useLoanSchedule, useProposePartyRelease } from '../../api/lendingHooks';
+import { P, hasPermission } from '../../auth/permissions';
+import type { Loan, LoanParty } from '../../api/types';
+import { Badge, Button, Card, DateText, Dialog, EmptyState, ErrorBanner, Input, MoneyText, Spinner, StatusBadge, Table, Textarea, humanize, useToast } from '../../ui';
 
 /**
  * Loan documents as PDF. Each file is fetched with the bearer token in a header and saved from a blob: a PDF is
@@ -103,6 +106,10 @@ const ROLE_TONE = { BORROWER: 'accent', CO_APPLICANT: 'info', GUARANTOR: 'warn' 
 
 export function LoanPartiesTab({ loan }: { loan: Loan }) {
   const q = useLoanParties(loan.id);
+  const me = useMe();
+  const [releasing, setReleasing] = useState<LoanParty | null>(null);
+  const live = ['SANCTIONED', 'ACTIVE', 'FROZEN'].includes(loan.status ?? '');
+  const canRelease = live && hasPermission(me.data?.permissions, P.loanAmend);
   if (q.isLoading) return <Spinner />;
   if (q.error) return <ErrorBanner error={q.error} />;
   return (
@@ -116,11 +123,73 @@ export function LoanPartiesTab({ loan }: { loan: Loan }) {
           { key: 'no', header: 'Customer no.', render: (p) => <span className="mono">{p.customerNo}</span> },
           { key: 'status', header: 'Status', render: (p) => <StatusBadge status={p.customerStatus} /> },
           { key: 'by', header: 'Added by', render: (p) => <span className="mono">{p.addedBy ?? '—'}</span> },
+          {
+            key: 'released',
+            header: 'Released',
+            render: (p) =>
+              p.releasedOn ? (
+                <span>
+                  <Badge>Released</Badge> <DateText value={p.releasedOn} />
+                  {p.releaseReason && <><br /><span className="muted" style={{ fontSize: 12 }}>{p.releaseReason}</span></>}
+                </span>
+              ) : (
+                <span className="muted">—</span>
+              ),
+          },
+          {
+            key: 'act',
+            header: <span className="sr-only">Actions</span>,
+            render: (p) =>
+              canRelease && p.role !== 'BORROWER' && !p.releasedOn ? (
+                <Button size="sm" aria-label={`Release ${p.customerNo} from the loan`} onClick={() => setReleasing(p)}>Release</Button>
+              ) : null,
+          },
         ]}
         rows={q.data ?? []}
         rowKey={(p) => `${p.role}-${p.customerId}`}
         empty={<EmptyState title="No parties" />}
       />
+      {releasing && <ReleasePartyDialog loan={loan} party={releasing} onClose={() => setReleasing(null)} />}
     </Card>
+  );
+}
+
+function ReleasePartyDialog({ loan, party, onClose }: { loan: Loan; party: LoanParty; onClose: () => void }) {
+  const propose = useProposePartyRelease(loan.id!);
+  const toast = useProposalToast();
+  const [reason, setReason] = useState('');
+  const [touched, setTouched] = useState(false);
+  const stressed = !!loan.assetClass && loan.assetClass !== 'STANDARD';
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Release ${party.customerName ?? party.customerNo} from ${loan.loanNo}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            loading={propose.isPending}
+            onClick={() => {
+              setTouched(true);
+              if (!reason.trim()) return;
+              propose.mutate({ partyId: party.customerId, reason: reason.trim() }, { onSuccess: (a) => (toast(a, 'Release of the party'), onClose()) });
+            }}
+          >
+            Submit for approval
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p className="muted" style={{ margin: 0 }}>
+          The {humanize(party.role).toLowerCase()} no longer stands behind the loan from the business date of the approval: their exposure and the joint reporting drop it. The record is kept.
+          {stressed ? ` This loan is classified ${humanize(loan.assetClass ?? '')}, so two different checkers must approve.` : ' One checker approves; two when the loan is in an SMA or NPA class.'}
+        </p>
+        <Textarea label="Reason" required maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} error={touched && !reason.trim() ? 'A reason is required' : null} />
+        <ErrorBanner error={propose.error} />
+      </div>
+    </Dialog>
   );
 }

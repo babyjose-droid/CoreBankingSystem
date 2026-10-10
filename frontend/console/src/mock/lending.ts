@@ -13,7 +13,7 @@ import { P } from '../auth/permissions';
 import { addDays, formatDate, ISO_DATE } from '../lib/dates';
 import { customerNumber } from '../lib/luhn';
 import { formatINR, isMoney } from '../lib/money';
-import { appendAudit, uuid, type ApprovalPayload, type ChargeState, type LoanState, type MockDb, type StoredCustomer, type StoredLoan, type StoredLoanEvent } from './db';
+import { appendAudit, uuid, type ApprovalPayload, type ChargeState, type LoanState, type MockDb, type StoredCustomer, type StoredLoan, type StoredLoanEvent, type StoredLoanParty } from './db';
 import { amendState, restructureState } from './amendCalc';
 import { assertWithinLimit } from './limits';
 import { assertCustom, deferReceipt, maskCustom } from './platformMore';
@@ -1586,11 +1586,12 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   on('GET', '/api/v1/loans/{id}/parties', ({ user, params }) => {
     require(user, P.loanView);
     const loan = findLoan(params.id);
-    const party = (customerId: string, role: LoanParty['role'], addedBy: string, addedAt: string): LoanParty => {
+    const party = (customerId: string, role: LoanParty['role'], addedBy: string, addedAt: string, released?: StoredLoanParty): LoanParty => {
       const c = db.customers.find((x) => x.id === customerId);
-      return { customerId, customerNo: c?.customerNo ?? '', customerName: c ? displayName(c) : undefined, role, customerStatus: c?.status, addedBy, addedAt };
+      return { customerId, customerNo: c?.customerNo ?? '', customerName: c ? displayName(c) : undefined, role, customerStatus: c?.status, addedBy, addedAt, releasedOn: released?.releasedOn ?? null, releasedBy: released?.releasedBy ?? null, releaseReason: released?.releaseReason ?? null };
     };
-    return ok([party(loan.customerId, 'BORROWER', loan.parties[0]?.addedBy ?? 'maker', `${loan.openDate}T10:00:00.000Z`), ...loan.parties.map((p) => party(p.customerId, p.role, p.addedBy, p.addedAt))]);
+    const rows = [party(loan.customerId, 'BORROWER', loan.parties[0]?.addedBy ?? 'maker', `${loan.openDate}T10:00:00.000Z`), ...loan.parties.map((p) => party(p.customerId, p.role, p.addedBy, p.addedAt, p))];
+    return ok([...rows.filter((x) => !x.releasedOn), ...rows.filter((x) => x.releasedOn)]);
   });
   on('GET', '/api/v1/loans/{id}/kfs', ({ user, params }) => {
     require(user, P.loanView);

@@ -1825,14 +1825,15 @@ public class LoanService {
         return rows.get(0);
     }
 
-    /** Borrower, co-applicants and guarantors of the loan (US-034). */
+    /** Borrower, co-applicants and guarantors of the loan (US-034); released parties last, with the date and reason (V26). */
     public List<Map<String, Object>> parties(UUID id) {
         return jdbc.queryForList("""
                 SELECT p.customer_id AS "customerId", c.customer_no AS "customerNo", c.display_name AS "customerName", p.role,
-                       c.status AS "customerStatus", p.added_by AS "addedBy", p.added_at AS "addedAt"
+                       c.status AS "customerStatus", p.added_by AS "addedBy", p.added_at AS "addedAt",
+                       p.released_on AS "releasedOn", p.released_by AS "releasedBy", p.release_reason AS "releaseReason"
                   FROM lending.loan_party p JOIN customer.customer c ON c.id = p.customer_id
                  WHERE p.loan_id = ?
-                 ORDER BY array_position(ARRAY['BORROWER','CO_APPLICANT','GUARANTOR'], p.role), c.customer_no
+                 ORDER BY (p.released_on IS NOT NULL), array_position(ARRAY['BORROWER','CO_APPLICANT','GUARANTOR'], p.role), c.customer_no
                 """, id);
     }
 

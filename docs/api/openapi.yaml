@@ -1636,6 +1636,33 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/loans/{id}/parties/{partyId}/release:
+    post:
+      tags: [Lending]
+      operationId: proposeLoanPartyRelease
+      summary: Release a co-applicant or guarantor from the loan (maker-checker)
+      description: >-
+        Entity LOAN_PARTY_RELEASE. `partyId` is the party's customerId. One checker (action RELEASE); two when the loan is
+        in an SMA or NPA class (action RELEASE_STRESSED). The release takes effect on the business date of the
+        approval: the party then drops out of the customer's exposure as co-applicant or guarantor and of joint
+        reporting, and the row is kept with `releasedOn`, `releasedBy` and `releaseReason`. 422 for the borrower; 409
+        when the party is already released, a release is already pending, or the loan is closed or written off.
+        Needs `loan:amend`.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: partyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans/{id}/npa-override/release:
     post:
       tags: [Lending]
@@ -3946,6 +3973,9 @@ components:
         customerStatus: { type: string }
         addedBy: { type: string }
         addedAt: { type: string, format: date-time }
+        releasedOn: { type: [string, 'null'], format: date, description: 'Business date from which the party no longer stands behind the loan' }
+        releasedBy: { type: [string, 'null'] }
+        releaseReason: { type: [string, 'null'] }
     ConsentInput:
       type: object
       required: [purpose, lawfulBasis, noticeVersion, channel]

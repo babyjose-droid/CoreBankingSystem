@@ -26,6 +26,7 @@ final class PendingApprovals {
         DATED.put("LOAN_RESTRUCTURE", new String[] {"restructure", "restructures"});
         DATED.put("LOAN_SANCTION_CHANGE", new String[] {"sanction change", "sanction changes"});
         DATED.put("LOAN_NPA_OVERRIDE", new String[] {"NPA override", "NPA overrides"});
+        DATED.put("LOAN_PARTY_RELEASE", new String[] {"guarantor or co-applicant release", "guarantor or co-applicant releases"});
     }
 
     static final String BLOCK_PROPERTY = "eod.block-on-pending-approvals";

@@ -1358,6 +1358,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loans/{id}/parties/{partyId}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release a co-applicant or guarantor from the loan (maker-checker)
+         * @description Entity LOAN_PARTY_RELEASE. `partyId` is the party's customerId. One checker (action RELEASE); two when the loan is in an SMA or NPA class (action RELEASE_STRESSED). The release takes effect on the business date of the approval: the party then drops out of the customer's exposure as co-applicant or guarantor and of joint reporting, and the row is kept with `releasedOn`, `releasedBy` and `releaseReason`. 422 for the borrower; 409 when the party is already released, a release is already pending, or the loan is closed or written off. Needs `loan:amend`.
+         */
+        post: operations["proposeLoanPartyRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans/{id}/npa-override/release": {
         parameters: {
             query?: never;
@@ -3671,6 +3691,13 @@ export interface components {
             addedBy?: string;
             /** Format: date-time */
             addedAt?: string;
+            /**
+             * Format: date
+             * @description Business date from which the party no longer stands behind the loan
+             */
+            releasedOn?: string | null;
+            releasedBy?: string | null;
+            releaseReason?: string | null;
         };
         ConsentInput: {
             /**
@@ -7532,6 +7559,28 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["NpaOverrideRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeLoanPartyRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                partyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
             };
         };
         responses: {

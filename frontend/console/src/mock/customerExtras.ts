@@ -139,7 +139,7 @@ function recomputeKyc(db: MockDb, c: StoredCustomer): StoredCustomer['kycStatus'
 
 export function exposureView(db: MockDb, c: StoredCustomer): CustomerExposure {
   const own = db.loans.filter((l) => l.customerId === c.id && exposureOf(l) > 0);
-  const as = (role: 'CO_APPLICANT' | 'GUARANTOR') => db.loans.filter((l) => exposureOf(l) > 0 && l.parties.some((p) => p.customerId === c.id && p.role === role));
+  const as = (role: 'CO_APPLICANT' | 'GUARANTOR') => db.loans.filter((l) => exposureOf(l) > 0 && l.parties.some((p) => p.customerId === c.id && p.role === role && !p.releasedOn));
   const sum = (ls: typeof own) => ls.reduce((s, l) => s + exposureOf(l), 0);
   const limit = c.exposureLimit ?? null;
   return {

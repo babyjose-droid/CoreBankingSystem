@@ -105,6 +105,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   /** The backend's approval rules as the mock knows them: restructures and vouchers of ₹10 lakh or more need two checkers. */
   function checkersRequired(entityType: string, amount: string | null, payload?: ApprovalPayload): number {
     if (payload?.kind === 'INTEGRATION') return payload.checkers;
+    if (payload?.kind === 'LOAN_PARTY_RELEASE') return payload.stressed ? 2 : 1;
     if (entityType === 'LOAN_RESTRUCTURE' || entityType === 'LOAN_NPA_OVERRIDE') return 2;
     if (entityType === 'VOUCHER' && amount && isMoney(amount) && toUnits(amount) >= toUnits(TWO_CHECKER_VOUCHER_AMOUNT)) return 2;
     return 1;
@@ -767,6 +768,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     VOUCHER: ['voucher', 'vouchers'], LOAN_DISBURSEMENT: ['disbursement', 'disbursements'], LOAN_DISBURSEMENT_REVERSAL: ['disbursement reversal', 'disbursement reversals'],
     LOAN_WAIVER: ['waiver', 'waivers'], LOAN_REVERSAL: ['loan transaction reversal', 'loan transaction reversals'], LOAN_AMENDMENT: ['loan amendment', 'loan amendments'],
     LOAN_RESTRUCTURE: ['restructure', 'restructures'], LOAN_SANCTION_CHANGE: ['sanction change', 'sanction changes'], LOAN_NPA_OVERRIDE: ['NPA override', 'NPA overrides'],
+    LOAN_PARTY_RELEASE: ['guarantor or co-applicant release', 'guarantor or co-applicant releases'],
   };
   const pendingDated = () => {
     const byType = Object.keys(DATED_APPROVALS)

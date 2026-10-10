@@ -82,6 +82,9 @@ export interface StoredReportRun {
 export interface StoredLoanParty extends LoanPartyInput {
   addedBy: string;
   addedAt: string;
+  releasedOn?: string | null;
+  releasedBy?: string | null;
+  releaseReason?: string | null;
 }
 
 export type StoredEntry = Required<Omit<LedgerEntry, 'narration'>> & { narration: string; voucherId: string | null };
@@ -103,6 +106,7 @@ export type ApprovalPayload =
   | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null; amount?: number | null; maturityDate?: string | null }
   | { kind: 'LOAN_SANCTION_CHANGE'; loanId: string; newAmount: number; reason: string; figures: Record<string, unknown> }
   | { kind: 'LOAN_RESET_PREFERENCE'; loanId: string; option: 'KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI' | null; reason: string }
+  | { kind: 'LOAN_PARTY_RELEASE'; loanId: string; customerId: string; reason: string; stressed: boolean }
   | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
   | { kind: 'LOAN_REVERSAL'; loanId: string; txnId: string; reason: string }

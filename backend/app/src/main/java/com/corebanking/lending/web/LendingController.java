@@ -42,10 +42,12 @@ class LendingController {
     private final ProductService products;
     private final LoanService loans;
     private final BranchScope scope;
+    private final com.corebanking.lending.internal.LoanPartyService partyService;
 
-    LendingController(ProductService products, LoanService loans, BranchScope scope) {
+    LendingController(ProductService products, LoanService loans, BranchScope scope, com.corebanking.lending.internal.LoanPartyService partyService) {
         this.products = products;
         this.loans = loans;
+        this.partyService = partyService;
         this.scope = scope;
     }
 
@@ -266,6 +268,14 @@ class LendingController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     Map<String, Object> proposeSanctionChange(@PathVariable UUID id, @RequestBody LoanService.SanctionChangeRequest r) {
         return loans.proposeSanctionChange(visible(id), r);
+    }
+
+    /** Release of a co-applicant or guarantor (maker-checker; two checkers when the loan is in an SMA or NPA class). */
+    @PostMapping("/loans/{id}/parties/{partyId}/release")
+    @PreAuthorize("hasAuthority('loan:amend')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> releaseParty(@PathVariable UUID id, @PathVariable UUID partyId, @RequestBody Reason r) {
+        return partyService.propose(visible(id), partyId, r == null ? null : r.reason());
     }
 
     @PostMapping("/loans/{id}/npa-override")
