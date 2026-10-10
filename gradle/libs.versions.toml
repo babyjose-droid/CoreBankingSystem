@@ -1,12 +1,12 @@
 # Pinned versions. Renovate opens PRs for upgrades; a green CI run is required to merge.
 [versions]
 java = "21"
-spring-boot = "4.1.0"
+spring-boot = "4.1.1"
 spring-dependency-management = "1.1.7"
 spring-modulith = "2.1.1"
-archunit = "1.4.1"
+archunit = "1.5.1"
 # AWS SDK for Java v2 (S3 document store). Any 2.x release works; Renovate keeps it current.
-awssdk = "2.31.0"
+awssdk = "2.55.12"
 
 [libraries]
 spring-modulith-bom = { module = "org.springframework.modulith:spring-modulith-bom", version.ref = "spring-modulith" }
