@@ -243,7 +243,7 @@ SELECT pg_temp.expect_fail($q$ UPDATE integration.nach_presentation SET amount =
 
 -- 6. Webhooks -------------------------------------------------------------------------------------------------------
 SELECT pg_temp.expect_fail($q$ INSERT INTO integration.webhook_endpoint (id, name, url, event_types, created_by)
-  VALUES (gen_random_uuid(),'CLAUDE-TEST plain','http://hooks.example.invalid/in','{loan.disbursed}','maker') $q$, '23514', 'W1 an endpoint must be https');
+  VALUES (gen_random_uuid(),'CLAUDE-TEST plain','ftp://hooks.example.invalid/in','{loan.disbursed}','maker') $q$, '23514', 'W1 an endpoint must be http(s); http only for allow-listed local hosts, by the application (V27)');
 SELECT pg_temp.expect_fail($q$ INSERT INTO integration.webhook_endpoint (id, name, url, event_types, created_by)
   VALUES (gen_random_uuid(),'CLAUDE-TEST odd','https://hooks.example.invalid/in','{customer.created}','maker') $q$, '23514', 'W2 only known event types');
 INSERT INTO integration.webhook_endpoint (id, name, url, event_types, created_by) VALUES

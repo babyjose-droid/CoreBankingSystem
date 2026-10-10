@@ -184,7 +184,7 @@ property `corebanking.integration.webhook.local-allow-hosts`) that this one host
 any port, without the public-address check. We chose an allow-list of host names rather than a self-signed certificate:
 a trusted certificate would need a truststore change inside the image, and would still be refused by the guard (a
 single-label name on a private address); the allow-list is one exact name, empty by default and set only in this compose
-file, so a shared environment cannot reach internal hosts by accident. The signature headers are sent as usual.
+file, so a shared environment cannot reach internal hosts by accident. The database accepts `http` or `https` (V27) because it cannot know the allow-list; the application is the gate, at proposal and again before every delivery, so an `http` URL for a host that is not on the list is never called. The signature headers are sent as usual.
 
 1. As an admin, register an endpoint (Integrations, Webhooks): URL `http://webhook-echo:8080/hook`, the event types you
    want. A checker approves it (maker-checker). Copy the signing secret shown once.

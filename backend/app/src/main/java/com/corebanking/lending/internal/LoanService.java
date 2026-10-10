@@ -421,7 +421,9 @@ public class LoanService {
                 r.recipientState(), r.params().securedPortion(), CurrentUser.get().has("loan:stp") ? "API" : "CONSOLE",
                 a.externalRef(), CurrentUser.username(),
                 pd.frequency(), r.terms().principal(), pd.multipleDisbursements(), pd.preEmi(), pd.topUpAllowed(), pd.benchmarkCode(),
-                pd.spread(), pd.resetFrequencyMonths(), pd.benchmarkCode() == null ? null
+                // the spread frozen into the loan: the product's own, or the slab spread resolved at booking (V25)
+                r.params().floating() == null ? pd.spread() : r.params().floating().spread(),
+                pd.resetFrequencyMonths(), pd.benchmarkCode() == null ? null
                         : java.sql.Date.valueOf(r.terms().disbursalDate().plusMonths(pd.resetFrequencyMonths())));
         jdbc.update("INSERT INTO lending.loan_kfs (loan_id, kfs) VALUES (?, ?::jsonb)", id, json.write(k));
         jdbc.update("UPDATE lending.loan_account SET booked_terms = ?::jsonb WHERE id = ?", json.write(r.terms()), id);
@@ -1830,7 +1832,7 @@ public class LoanService {
         return jdbc.queryForList("""
                 SELECT p.customer_id AS "customerId", c.customer_no AS "customerNo", c.display_name AS "customerName", p.role,
                        c.status AS "customerStatus", p.added_by AS "addedBy", p.added_at AS "addedAt",
-                       p.released_on AS "releasedOn", p.released_by AS "releasedBy", p.release_reason AS "releaseReason"
+                       p.released_on::text AS "releasedOn", p.released_by AS "releasedBy", p.release_reason AS "releaseReason"
                   FROM lending.loan_party p JOIN customer.customer c ON c.id = p.customer_id
                  WHERE p.loan_id = ?
                  ORDER BY (p.released_on IS NOT NULL), array_position(ARRAY['BORROWER','CO_APPLICANT','GUARANTOR'], p.role), c.customer_no

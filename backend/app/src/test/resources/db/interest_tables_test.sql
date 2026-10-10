@@ -50,4 +50,19 @@ DO $$ BEGIN
     RAISE NOTICE 'PASS T5 SPREAD table on a non-benchmark product: check violation naming the interest table';
   END;
 END $$;
+
+-- A loan on a floating-rate slab product stores the spread resolved from the table (V18 loan_floating_link).
+INSERT INTO customer.customer (id,customer_no,customer_type,display_name,home_branch,status)
+  VALUES ('00000000-0000-0000-0000-0000000000c1','90010000000013','INDIVIDUAL','CLAUDE-TEST Borrower','HO','ACTIVE');
+INSERT INTO lending.benchmark_rate (benchmark_code, effective_from, rate, recorded_by) VALUES ('REPO', '2026-01-01', 6.00, 'CLAUDE-TEST');
+SELECT pg_temp.check((SELECT rate FROM lending.resolve_rate('IT1', 40000, 60)) = 4, 'T6 the slab spread for the loan');
+INSERT INTO lending.loan_account (id,loan_no,customer_id,product_code,branch_code,sanctioned_amount,rate,tenor_months,open_date,status,created_by,
+                                  benchmark_code,spread,reset_frequency_months)
+  VALUES ('00000000-0000-0000-0000-00000000aa01','10010000000017','00000000-0000-0000-0000-0000000000c1','HL03','HO',40000,10,60,'2026-10-01','SANCTIONED','maker',
+          'REPO',4,3);
+SELECT pg_temp.check((SELECT spread FROM lending.loan_account WHERE loan_no = '10010000000017') = 4, 'T7 a slab loan carries the resolved spread');
+SELECT pg_temp.expect_fail($q$ INSERT INTO lending.loan_account (id,loan_no,customer_id,product_code,branch_code,sanctioned_amount,rate,tenor_months,open_date,status,created_by,
+                                  benchmark_code,spread,reset_frequency_months)
+  VALUES ('00000000-0000-0000-0000-00000000aa02','10010000000025','00000000-0000-0000-0000-0000000000c1','HL03','HO',40000,10,60,'2026-10-01','SANCTIONED','maker',
+          'REPO',NULL,3) $q$, '23514', 'T8 a benchmark loan without a spread is refused (what a slab loan did before it stored the resolved spread)');
 SELECT 'TESTS PASSED' AS result;
