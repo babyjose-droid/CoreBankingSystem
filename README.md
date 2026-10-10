@@ -12,6 +12,7 @@ Original, clean-room implementation: no vendor code, schema or artefacts are use
 | `backend/kernel` | Pure platform rules: maker-checker policy, EOD engine, PII encryption and masking, calendar, tax rates, dedupe. |
 | `backend/lending-core` | Pure lending engine: schedules, appropriation, DPD/NPA, accrual, penal charges, fees + GST, provisioning, loan account lifecycle and postings. |
 | `backend/integration-core` | Pure integration rules: webhook signature, SSRF guard, retry schedule, message templates, status lifecycles, provider ports with the SIMULATOR and the unverified partner adapters, NACH file layouts, Keycloak admin requests. |
+| `backend/deposits-core` | Pure deposit engine (Phase 4): rule sets for banks and deposit-taking NBFCs, rate cards, term-deposit and savings interest, premature withdrawal, TDS on interest, recurring deposits. Golden-tested. |
 | `backend/app` | Spring Boot 4 modular monolith: tenancy routing, posting engine, Flyway migrations. |
 | `backend/app/src/main/resources/db/migration` | `control/` (control plane) and `tenant/` (per-tenant DB) migrations. |
 | `backend/app/src/test/resources/db` | SQL rule tests (ledger invariants and Phase 1 rules). |

@@ -74,10 +74,13 @@ public class TenantProvisioner {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, id, r.code(), r.legalName(), r.entityType(), r.deploymentTier(), r.edition(), kit, r.code(),
                 r.kmsKeyArn(), r.dbSecretArn());
+        // The edition's modules that this kind of institution may have: no CASA for an NBFC, no term deposits for an
+        // NBFC whose registration to accept public deposits is not recorded (control V4).
         control.update("""
                 INSERT INTO control.tenant_module (tenant_id, module_code)
-                SELECT ?, module_code FROM control.edition_module WHERE edition_code = ?
-                """, id, r.edition());
+                SELECT ?, module_code FROM control.edition_module
+                 WHERE edition_code = ? AND control.module_allowed(?, false, module_code)
+                """, id, r.edition(), r.entityType());
         try {
             if (createDatabases) {
                 step(id, "create-database", () -> createDatabase(r.code()));
@@ -122,6 +125,7 @@ public class TenantProvisioner {
         }
         t.queryForObject("SELECT ledger.load_starter_kit(?)", Integer.class, kit);
         t.execute("SELECT ledger.load_lending_heads()");
+        t.execute("SELECT ledger.load_deposit_heads()");          // adds heads only for a bank (tenant V28)
         t.update("""
                 INSERT INTO platform.tax_rate (code, tax_type, rate_percent, effective_from) VALUES
                   ('GST18', 'GST', 18, '2017-07-01'), ('TDS194A', 'TDS', 10, '2020-04-01')

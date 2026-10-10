@@ -25,6 +25,7 @@ dependencies {
     implementation(project(":backend:kernel"))
     implementation(project(":backend:lending-core"))
     implementation(project(":backend:integration-core"))
+    implementation(project(":backend:deposits-core"))
 
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-validation")

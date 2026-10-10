@@ -20,7 +20,7 @@ jobs:
         with:
           gradle-version: '8.14.3'
       - name: Golden calculation, ledger and kernel tests (block merge on any failure)
-        run: gradle :backend:calc:test :backend:ledger-core:test :backend:kernel:test :backend:lending-core:test :backend:integration-core:test --no-daemon
+        run: gradle :backend:calc:test :backend:ledger-core:test :backend:kernel:test :backend:lending-core:test :backend:integration-core:test :backend:deposits-core:test --no-daemon
       - name: App build, modularity check, DB invariant tests (Testcontainers)
         run: gradle :backend:app:build --no-daemon
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
