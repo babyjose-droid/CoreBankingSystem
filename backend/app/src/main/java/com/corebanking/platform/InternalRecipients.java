@@ -40,4 +40,24 @@ public final class InternalRecipients {
         }
         return new Split(List.copyOf(in), out);
     }
+
+    /** The domain of an address, lower case ("" when there is no '@'). */
+    public static String domainOf(String address) {
+        String r = address == null ? "" : address.trim();
+        int at = r.lastIndexOf('@');
+        return at < 0 ? "" : r.substring(at + 1).toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * The addresses whose domain is not internal, as their distinct domains (never the full address: it can be
+     * personal data), in first-seen order. Used to refuse a schedule that would e-mail files outside the lender.
+     */
+    public static List<String> externalDomains(List<String> recipients, Set<String> domains) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String r : recipients) {
+            String d = domainOf(r);
+            if (!domains.contains(d)) out.add(d);
+        }
+        return List.copyOf(out);
+    }
 }

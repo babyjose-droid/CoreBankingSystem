@@ -58,6 +58,7 @@ const PROPERTIES: Array<[key: string, value: string, description: string]> = [
   ['gst.supplier-state', '32', 'GST state code of the registered office (place of supply fallback)'],
   ['lending.disbursement-gl', '1110', 'Bank GL head credited on disbursement'],
   ['lending.penal-income-gl', '4202', 'Income GL head for penal charges'],
+  ['mail.internal-domains', 'demo-nbfc.example', 'Domains whose staff may receive e-mailed reports (comma separated)'],
   ['lending.cooling-off-default-days', '3', 'Cooling-off days for products that do not set their own'],
 ];
 

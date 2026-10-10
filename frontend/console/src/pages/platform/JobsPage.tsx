@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMe } from '../../api/hooks';
+import { useSystemProperties } from '../../api/masterHooks';
 import { useJobRuns, useJobs, useProposeJobSchedule, useRunJob } from '../../api/platformHooks';
 import type { Job, JobRun } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
@@ -156,7 +157,10 @@ function ScheduleDialog({ job, onClose }: { job: Job; onClose: () => void }) {
   const [schedule, setSchedule] = useState(job.schedule ?? '');
   const [enabled, setEnabled] = useState(!!job.enabled);
   const [period, setPeriod] = useState(String(params.period ?? 'BUSINESS_DATE'));
-  const [emailTo, setEmailTo] = useState(String(params.emailTo ?? ''));
+  const [emailTo, setEmailTo] = useState(Array.isArray(params.emailTo) ? params.emailTo.join(', ') : String(params.emailTo ?? ''));
+  const me = useMe();
+  const props = useSystemProperties(hasPermission(me.data?.permissions, P.masterView));
+  const allowed = props.data?.find((x) => x.key === 'mail.internal-domains')?.value?.trim();
   const [touched, setTouched] = useState(false);
   const isReport = job.kind === 'REPORT';
   const cron = schedule.trim();
@@ -177,7 +181,7 @@ function ScheduleDialog({ job, onClose }: { job: Job; onClose: () => void }) {
               setTouched(true);
               if (error) return;
               propose.mutate(
-                { code: job.code!, input: { schedule: cron || null, enabled, ...(isReport ? { parameters: { ...params, period, emailTo: emailTo.trim() } } : {}) } },
+                { code: job.code!, input: { schedule: cron || null, enabled, ...(isReport ? { parameters: { ...params, period, emailTo: emailTo.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean) } } : {}) } },
                 { onSuccess: (a) => (toast(a, 'Job schedule change'), onClose()) },
               );
             }}
@@ -200,7 +204,7 @@ function ScheduleDialog({ job, onClose }: { job: Job; onClose: () => void }) {
         {isReport && (
           <div className="form-grid">
             <Select label="Report period" value={period} onChange={(e) => setPeriod(e.target.value)} options={PERIODS.map((p) => ({ value: p, label: humanize(p) }))} />
-            <Input label="E-mail to" type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} hint="Delivery waits for the e-mail provider" />
+            <Input label="E-mail to" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} hint={allowed ? `Comma separated. Only addresses on: ${allowed}` : 'Comma separated. Only addresses on the lender\'s own domains (tenant property mail.internal-domains)'} />
           </div>
         )}
         <ErrorBanner error={propose.error} />

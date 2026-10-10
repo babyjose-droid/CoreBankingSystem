@@ -54,9 +54,9 @@ export function useProposeBranchSet() {
 }
 
 // ---------- system properties ----------
-export function useSystemProperties() {
+export function useSystemProperties(enabled = true) {
   const api = useApiClient();
-  return useQuery({ queryKey: ['system-properties'], queryFn: () => unwrap<SystemProperty[]>(api.GET('/api/v1/system-properties')) });
+  return useQuery({ enabled, queryKey: ['system-properties'], queryFn: () => unwrap<SystemProperty[]>(api.GET('/api/v1/system-properties')) });
 }
 
 export function useProposeSystemProperty() {

@@ -174,6 +174,21 @@ describe('jobs', () => {
   });
 });
 
+describe('report schedule recipients', () => {
+  it('shows the allowed domains and surfaces the refusal of an outside address', async () => {
+    const user = userEvent.setup();
+    renderApp({ user: 'admin', route: '/jobs' });
+    await user.click(await screen.findByRole('button', { name: 'Change schedule of Report: DPD ageing' }));
+    const d = await screen.findByRole('dialog', { name: 'Schedule of Report: DPD ageing' });
+    expect(await within(d).findByText(/Only addresses on: demo-nbfc.example/)).toBeInTheDocument();
+    const to = within(d).getByLabelText(/E-mail to/);
+    await user.clear(to);
+    await user.type(to, 'a@outside.example');
+    await user.click(within(d).getByRole('button', { name: 'Submit for approval' }));
+    expect(await within(d).findByText(/not allowed: outside.example/)).toBeInTheDocument();
+  });
+});
+
 describe('support access', () => {
   it('approves, rejects (note required) and revokes', async () => {
     const user = userEvent.setup();

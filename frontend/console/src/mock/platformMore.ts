@@ -373,6 +373,12 @@ export function registerPlatformMoreRoutes(db: MockDb, r: PlatformMoreRouter) {
     if (enabled && !schedule) throw bad('An enabled job needs a schedule', [{ field: 'schedule', message: 'Required while enabled' }]);
     if (j.kind === 'REPORT' && !user.permissions.includes(P.reportRun)) throw new HttpProblem(403, 'Forbidden', 'A report job can be scheduled only by someone who may run the report', {}, PROBLEM_BASE + 'forbidden');
     const parameters = b.parameters ?? j.parameters ?? {};
+    if (j.kind === 'REPORT' && parameters.emailTo !== undefined) {
+      const list = (Array.isArray(parameters.emailTo) ? parameters.emailTo : String(parameters.emailTo).split(/[,;\s]+/)).map((x) => String(x).trim()).filter(Boolean);
+      const allowed = (db.systemProperties.find((p) => p.key === 'mail.internal-domains')?.value ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+      const outside = [...new Set(list.map((x) => x.slice(x.lastIndexOf('@') + 1).toLowerCase()).filter((d) => !allowed.includes(d)))];
+      if (outside.length) throw bad(`emailTo: reports are e-mailed only to the lender's own domains; not allowed: ${outside.join(', ')}. Allowed domains (tenant property mail.internal-domains): ${allowed.join(', ') || 'none configured'}`, [{ field: 'emailTo', message: 'Not an internal domain' }]);
+    }
     if (schedule === (j.schedule ?? null) && enabled === !!j.enabled && JSON.stringify(parameters) === JSON.stringify(j.parameters ?? {})) throw bad('Nothing to change');
     if (pendingOf('JOB_SCHEDULE', (p) => p.kind === 'JOB_SCHEDULE' && p.code === j.code)) throw conflict('Change already pending', `Job ${j.code} already has a change awaiting approval`);
     return propose(user, 'JOB', 'UPDATE', { kind: 'JOB_SCHEDULE', code: j.code!, schedule, enabled, parameters }, { code: j.code, schedule, enabled, parameters }, { code: j.code, schedule: j.schedule, enabled: j.enabled, parameters: j.parameters }, j.code);

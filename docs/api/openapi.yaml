@@ -5177,7 +5177,8 @@ components:
           additionalProperties: true
           description: >-
             Report jobs take `period` (BUSINESS_DATE, PREVIOUS_DAY, MONTH_TO_DATE, PREVIOUS_MONTH), `parameters` (the
-            report's own, without dates) and `emailTo`. Other jobs take none.
+            report's own, without dates) and `emailTo` (a list of addresses). Every address must be on a domain of the tenant
+            property `mail.internal-domains`, else 422 naming the domain (never the address). Other jobs take none.
     DashboardTrendPoint:
       type: object
       properties:

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -70,6 +71,16 @@ class ReportJobs {
                     }
                 }
                 if (emails.size() > 20) throw ApiException.invalid("emailTo: at most 20 recipients");
+                if (!emails.isEmpty()) {
+                    // Refused when proposed, not only skipped at send time (which stays as a second guard).
+                    Set<String> internal = InternalRecipients.domains(jdbc);
+                    List<String> external = InternalRecipients.externalDomains(emails, internal);
+                    if (!external.isEmpty()) {
+                        throw ApiException.invalid("emailTo: reports are e-mailed only to the lender's own domains; not allowed: "
+                                + String.join(", ", external) + ". Allowed domains (tenant property mail.internal-domains): "
+                                + (internal.isEmpty() ? "none configured" : String.join(", ", new java.util.TreeSet<>(internal))));
+                    }
+                }
                 Map<String, Object> out = new LinkedHashMap<>();
                 out.put("reportCode", report);
                 out.put("period", period);
