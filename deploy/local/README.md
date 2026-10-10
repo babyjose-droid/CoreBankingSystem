@@ -9,7 +9,7 @@
 | PostgreSQL 16 | `localhost:5432` | databases `control`, `tenant_demo_nbfc`; superuser `postgres` / `postgres-local-only` |
 | Keycloak 26 (dev mode) | http://localhost:8081 | admin console: `admin` / `admin-local-only`; realm `demo-nbfc` |
 | Backend | http://localhost:8080 | health: `/actuator/health` |
-| MinIO (S3 for documents) | http://localhost:9001 (console), API `localhost:9000` | bucket `corebanking-documents`; root user and password in `.env` |
+| S3Mock (S3 for documents) | API http://localhost:9090 | bucket `corebanking-documents`; no credentials checked |
 | Mailpit (mail catcher) | http://localhost:8025 | every e-mail the backend sends |
 | Staff console (optional) | http://localhost:5173 | profile `console`; real backend + Keycloak (`VITE_MOCK=0`), API via the Vite `/api` proxy |
 
@@ -127,13 +127,15 @@ curl -s -d grant_type=client_credentials -d client_id=corebanking-service -d cli
   http://localhost:8081/realms/demo-nbfc/protocol/openid-connect/token | jq -r .access_token
 ```
 
-## Documents (MinIO) and e-mail (Mailpit)
+## Documents (local S3) and e-mail (Mailpit)
 
-The backend stores KYC documents, report files and NACH files in **MinIO**, an S3-compatible store, through the same
-code that uses Amazon S3 in the cloud (`COREBANKING_DOCUMENTS_STORE=s3`, path-style, endpoint `http://minio:9000`).
-Every object is written with SSE-KMS under MinIO's built-in key `corebanking-local`; `minio-init` creates the private
-bucket once. `init-env.sh` generates the MinIO root user, password and KMS key into `.env`. If your MinIO image refuses
-SSE-KMS, set `COREBANKING_DOCUMENTS_S3_SSE: none` on the backend (local only). To keep the old directory store, set
+The backend stores KYC documents, report files and NACH files in **S3Mock** (Adobe), an S3-compatible store, through
+the same code that uses Amazon S3 in the cloud (`COREBANKING_DOCUMENTS_STORE=s3`, path-style, endpoint
+`http://s3:9090`). MinIO was used first, but its images are no longer published on Docker Hub or Quay. S3Mock creates
+the private bucket at start-up and accepts SSE-KMS only under the key ARN
+`arn:aws:kms:us-east-1:000000000000:key/corebanking-local` (it validates the key but does not encrypt), so the
+backend's SSE-KMS requests are exercised as in AWS. Objects persist in the `s3data` volume. To list them:
+`curl -s http://localhost:9090/corebanking-documents`. To keep the old directory store, set
 `COREBANKING_DOCUMENTS_STORE: directory`.
 
 E-mail goes to **Mailpit** (http://localhost:8025): scheduled report files (only to addresses on the tenant property

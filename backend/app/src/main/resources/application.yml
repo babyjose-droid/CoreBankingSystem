@@ -39,15 +39,15 @@ corebanking:
       maximum-pool-size: 5
   documents:
     # KYC documents, report files, NACH files. directory (default): a directory, for dev and standalone installs (use an
-    # encrypted volume). s3: Amazon S3 with SSE-KMS (MinIO in the local stack), see S3DocumentStore.
+    # encrypted volume). s3: Amazon S3 with SSE-KMS (S3Mock in the local stack), see S3DocumentStore.
     store: ${COREBANKING_DOCUMENTS_STORE:directory}
     dir: ${COREBANKING_DOCUMENTS_DIR:${java.io.tmpdir}/corebanking-documents}
     s3:
       bucket: ${COREBANKING_DOCUMENTS_S3_BUCKET:}
       key-prefix: ${COREBANKING_DOCUMENTS_S3_KEY_PREFIX:}
       region: ${COREBANKING_DOCUMENTS_S3_REGION:ap-south-1}
-      endpoint: ${COREBANKING_DOCUMENTS_S3_ENDPOINT:}          # empty for AWS; http://minio:9000 locally
-      path-style: ${COREBANKING_DOCUMENTS_S3_PATH_STYLE:false}  # true for MinIO
+      endpoint: ${COREBANKING_DOCUMENTS_S3_ENDPOINT:}          # empty for AWS; http://s3:9090 locally
+      path-style: ${COREBANKING_DOCUMENTS_S3_PATH_STYLE:false}  # true for the local S3
       sse: ${COREBANKING_DOCUMENTS_S3_SSE:aws:kms}               # aws:kms | AES256 | none (none only for a local MinIO without KMS)
       kms-key-id: ${COREBANKING_DOCUMENTS_S3_KMS_KEY_ID:}       # empty: the bucket's default KMS key
   mail:
