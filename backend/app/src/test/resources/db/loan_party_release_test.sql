@@ -66,4 +66,10 @@ SELECT pg_temp.expect_fail($q$ INSERT INTO lending.loan_party (loan_id,customer_
 SELECT pg_temp.check((SELECT checkers_required FROM platform.approval_rule WHERE entity_type = 'LOAN_PARTY_RELEASE' AND action = 'RELEASE') = 1
                  AND (SELECT checkers_required FROM platform.approval_rule WHERE entity_type = 'LOAN_PARTY_RELEASE' AND action = 'RELEASE_STRESSED') = 2,
                      'R12 one checker normally, two on a stressed loan');
+SELECT pg_temp.expect_fail($q$ UPDATE lending.loan_party SET released_on = '2026-10-20', released_by = 'maker', release_reason = repeat('x', 501)
+  WHERE role = 'CO_APPLICANT' $q$, '23514', 'R13 a release reason is at most 500 characters');
+SELECT pg_temp.expect_fail($q$ INSERT INTO platform.approval_decision (request_id, checker, decision, note)
+  VALUES ('00000000-0000-0000-0000-00000000cc01', 'checker', 'REJECT', repeat('x', 1001)) $q$, '23514', 'R14 a decision note is at most 1000 characters');
+SELECT pg_temp.expect_fail($q$ UPDATE customer.customer SET display_name = repeat('x', 301) WHERE customer_no = '90010000000013' $q$, '23514',
+  'R15 a display name is at most 300 characters');
 SELECT 'TESTS PASSED' AS result;

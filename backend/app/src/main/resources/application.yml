@@ -55,6 +55,16 @@ corebanking:
     # an SMTP relay: Amazon SES over SMTP in the cloud tiers, Mailpit locally. Relay settings: spring.mail.*.
     enabled: ${COREBANKING_MAIL_ENABLED:false}
     from: ${COREBANKING_MAIL_FROM:no-reply@example.invalid}
+  rate-limit:
+    # Per-user and per-address token buckets in front of the API (SEC-05). In memory per instance: with several
+    # instances the effective limit is multiplied, and an exact limit needs a shared store. Behind a proxy set
+    # server.forward-headers-strategy so the client address is the real one.
+    enabled: ${COREBANKING_RATE_LIMIT_ENABLED:true}
+    per-user-per-minute: ${COREBANKING_RATE_LIMIT_PER_USER:300}
+    per-ip-per-minute: ${COREBANKING_RATE_LIMIT_PER_IP:600}      # an office behind one address shares this
+    strict-per-minute: ${COREBANKING_RATE_LIMIT_STRICT:30}       # lookups that can enumerate data, per user and per address
+    strict-paths: /api/v1/customers/dedupe-check,/api/v1/pincodes
+    exempt-paths: /actuator,/api/v1/eod,/hooks/v1,/developer     # day-end and batch endpoints, health, provider callbacks
   eod:
     partitions: 4
     scheduler-enabled: true

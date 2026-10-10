@@ -5,6 +5,7 @@ import com.corebanking.platform.Json;
 import com.corebanking.platform.TenantDataSources;
 import com.corebanking.platform.tenancy.ApiCallMeter;
 import com.corebanking.platform.tenancy.TenantDirectory;
+import com.corebanking.kernel.RateLimitPaths;
 import com.corebanking.platform.tenancy.TenantFilter;
 import java.util.Collection;
 import java.util.List;
@@ -61,7 +62,13 @@ class SecurityConfig {
                             @Value("${corebanking.oidc.issuer-prefix}") String issuerPrefix,
                             @Value("${corebanking.oidc.jwks-base:}") String jwksBase,
                             @Value("${corebanking.oidc.audience:api}") String audience,
-                            @Value("${corebanking.oidc.platform-realm:platform}") String platformRealm) throws Exception {
+                            @Value("${corebanking.oidc.platform-realm:platform}") String platformRealm,
+                            @Value("${corebanking.rate-limit.enabled:true}") boolean rateLimitEnabled,
+                            @Value("${corebanking.rate-limit.per-user-per-minute:300}") int perUserPerMinute,
+                            @Value("${corebanking.rate-limit.per-ip-per-minute:600}") int perIpPerMinute,
+                            @Value("${corebanking.rate-limit.strict-per-minute:30}") int strictPerMinute,
+                            @Value("${corebanking.rate-limit.exempt-paths:/actuator,/api/v1/eod,/hooks/v1,/developer}") List<String> exemptPaths,
+                            @Value("${corebanking.rate-limit.strict-paths:/api/v1/customers/dedupe-check,/api/v1/pincodes}") List<String> strictPaths) throws Exception {
         String prefix = issuerPrefix.endsWith("/") ? issuerPrefix : issuerPrefix + "/";
         String keysBase = jwksBase == null || jwksBase.isBlank() ? prefix : (jwksBase.endsWith("/") ? jwksBase : jwksBase + "/");
         Map<String, AuthenticationManager> managers = new ConcurrentHashMap<>();
@@ -103,6 +110,10 @@ class SecurityConfig {
             .oauth2ResourceServer(o -> o.authenticationManagerResolver(new JwtIssuerAuthenticationManagerResolver(byIssuer)))
             .addFilterAfter(new TenantFilter(prefix, platformRealm, directory, dataSources, audit, json, meter),
                     BearerTokenAuthenticationFilter.class);
+        if (rateLimitEnabled) {
+            http.addFilterAfter(new RateLimitFilter(new RateLimitPaths(exemptPaths, strictPaths), perUserPerMinute, perIpPerMinute, strictPerMinute),
+                    TenantFilter.class);
+        }
         return http.build();
     }
 

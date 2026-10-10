@@ -74,3 +74,14 @@ INSERT INTO platform.approval_rule (entity_type, action, min_amount, checkers_re
   ('LOAN_PARTY_RELEASE', 'RELEASE', NULL, 1),
   ('LOAN_PARTY_RELEASE', 'RELEASE_STRESSED', NULL, 2)
 ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Text length limits (SEC-05). The API checks free-text fields by name (kernel TextLimits); these are the cheap database
+-- backstops. NOT VALID: they bind new and changed rows without scanning (or failing on) rows written before.
+-- ---------------------------------------------------------------------------------------------------------------------
+ALTER TABLE lending.loan_party
+  ADD CONSTRAINT loan_party_release_reason_length CHECK (release_reason IS NULL OR length(release_reason) <= 500);
+ALTER TABLE platform.approval_decision
+  ADD CONSTRAINT approval_decision_note_length CHECK (note IS NULL OR length(note) <= 1000) NOT VALID;
+ALTER TABLE customer.customer
+  ADD CONSTRAINT customer_display_name_length CHECK (length(display_name) <= 300) NOT VALID;
