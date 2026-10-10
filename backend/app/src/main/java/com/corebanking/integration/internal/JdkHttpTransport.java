@@ -12,7 +12,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,6 +34,18 @@ class JdkHttpTransport implements HttpTransport {
 
     private static final int MAX_BODY = 1_000_000;
 
+    /** LOCAL TEST STACKS ONLY: webhook receivers that may be plain http and need not be public (see EndpointGuard). Empty by default. */
+    private final Set<String> localWebhookHosts;
+
+    JdkHttpTransport(@Value("${corebanking.integration.webhook.local-allow-hosts:}") String localAllowHosts) {
+        this.localWebhookHosts = Arrays.stream(localAllowHosts.split(",")).map(x -> x.trim().toLowerCase(Locale.ROOT))
+                .filter(x -> !x.isEmpty() && x.matches("[a-z0-9][a-z0-9.-]*")).collect(Collectors.toUnmodifiableSet());
+    }
+
+    Set<String> localWebhookHosts() {
+        return localWebhookHosts;
+    }
+
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
@@ -39,15 +56,24 @@ class JdkHttpTransport implements HttpTransport {
 
     /** The same transport with the SSRF guard applied to every request. */
     HttpTransport guarded() {
-        return request -> send(request, true);
+        return request -> send(request, true, Set.of());
+    }
+
+    /** The guarded transport for webhook deliveries: also reaches the hosts of the local allow-list, if any. */
+    HttpTransport guardedForWebhooks() {
+        return request -> send(request, true, localWebhookHosts);
     }
 
     private Response send(Request request, boolean guard) {
+        return send(request, guard, Set.of());
+    }
+
+    private Response send(Request request, boolean guard, Set<String> localHosts) {
         URI uri;
         if (guard) {
             try {
-                uri = EndpointGuard.checkUrl(request.url(), EndpointGuard.DEFAULT_PORTS);
-                EndpointGuard.resolvePublic(uri.getHost(), InetAddress::getAllByName);
+                uri = EndpointGuard.checkUrl(request.url(), EndpointGuard.DEFAULT_PORTS, localHosts);
+                EndpointGuard.resolvePublic(uri.getHost(), InetAddress::getAllByName, localHosts);
             } catch (EndpointGuard.BlockedException e) {
                 throw new ProviderException("blocked: " + e.getMessage(), false);
             }

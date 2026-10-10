@@ -7,18 +7,20 @@ import type { WebhookEndpoint, WebhookEventType } from '../../api/integrationTyp
 import { P, hasPermission } from '../../auth/permissions';
 import { Badge, Banner, Button, Card, Checkbox, DateTimeText, Dialog, EmptyState, ErrorBanner, Input, PageHeader, Select, Spinner, StatusBadge, Table, Tabs, humanize, useToast } from '../../ui';
 import { useProposalToast } from '../proposal';
+import { config } from '../../config';
 import { OneTimeSecretDialog } from './common';
 
 const DELIVERY_STATUSES = ['PENDING', 'RETRY', 'DELIVERED', 'DEAD'];
 
 /** https, a public DNS name (no IP address or localhost), port 443 or 8443. The server checks again, including DNS. */
-export function webhookUrlError(url: string): string | null {
+export function webhookUrlError(url: string, localHosts: readonly string[] = config.webhookLocalHosts): string | null {
   let u: URL;
   try {
     u = new URL(url);
   } catch {
     return 'Enter a full URL, e.g. https://example.com/hooks';
   }
+  if (localHosts.includes(u.hostname.toLowerCase()) && (u.protocol === 'http:' || u.protocol === 'https:')) return u.username || u.password ? 'Must not contain a user name or password' : null;
   if (u.protocol !== 'https:') return 'Must be https';
   if (u.hostname === 'localhost' || /^[0-9.]+$/.test(u.hostname) || u.hostname.includes(':') || !u.hostname.includes('.')) return 'Must be a public DNS name, not an IP address or localhost';
   if (u.port && !['443', '8443'].includes(u.port)) return 'Port must be 443 or 8443';
@@ -156,7 +158,7 @@ function EndpointDialog({ initial, types, onClose }: { initial: WebhookEndpoint 
       <div className="stack">
         {!initial && <Banner tone="info">After a checker approves, you (the proposer) collect the signing secret here, once. Nobody else can collect it.</Banner>}
         <Input label="Name" required maxLength={80} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} error={err('name')} />
-        <Input label="URL" required type="url" className="mono" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} hint="https, a public DNS name, port 443 or 8443" error={err('url')} />
+        <Input label="URL" required type="url" className="mono" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} hint={config.webhookLocalHosts.length ? `https, a public DNS name, port 443 or 8443 (local stack: http://${config.webhookLocalHosts.join(", ")} also works)` : "https, a public DNS name, port 443 or 8443"} error={err('url')} />
         <fieldset className="fieldset" aria-invalid={!!err('eventTypes') || undefined}>
           <legend>Events to send</legend>
           {types.map((t) => (

@@ -56,6 +56,17 @@ public final class EndpointGuard {
 
     /** Syntax check at registration. Returns the normalised URI. */
     public static URI checkUrl(String url, Set<Integer> allowedPorts) {
+        return checkUrl(url, allowedPorts, Set.of());
+    }
+
+    /**
+     * As {@link #checkUrl(String, Set)}, plus {@code localHosts}: an explicit allow-list of host names (exact, lower case)
+     * that may be called over plain {@code http} or {@code https} on any port, and that are not required to be public
+     * DNS names or public addresses. LOCAL TEST STACKS ONLY (a webhook receiver in the compose network): the list comes
+     * from {@code corebanking.integration.webhook.local-allow-hosts}, which is empty unless a deployment sets it, and
+     * never contains a wildcard. Credentials and fragments in the URL are refused as ever.
+     */
+    public static URI checkUrl(String url, Set<Integer> allowedPorts, Set<String> localHosts) {
         if (url == null || url.isBlank()) throw new BlockedException("the URL is required");
         if (url.length() > 2000) throw new BlockedException("the URL is longer than 2000 characters");
         for (int i = 0; i < url.length(); i++) {
@@ -68,7 +79,10 @@ public final class EndpointGuard {
         } catch (URISyntaxException e) {
             throw new BlockedException("the URL is not valid");
         }
-        if (!"https".equalsIgnoreCase(u.getScheme())) throw new BlockedException("the URL must use https");
+        boolean local = isLocal(u.getHost(), localHosts);
+        if (local ? !("https".equalsIgnoreCase(u.getScheme()) || "http".equalsIgnoreCase(u.getScheme())) : !"https".equalsIgnoreCase(u.getScheme())) {
+            throw new BlockedException("the URL must use https");
+        }
         if (u.getRawUserInfo() != null || u.getRawAuthority() == null || u.getRawAuthority().contains("@")) {
             throw new BlockedException("the URL must not contain credentials");
         }
@@ -77,6 +91,10 @@ public final class EndpointGuard {
         if (host == null) throw new BlockedException("the URL needs a host name");
         host = host.toLowerCase(Locale.ROOT);
         if (host.endsWith(".")) host = host.substring(0, host.length() - 1);
+        if (local) {
+            if (u.getPort() != -1 && (u.getPort() < 1 || u.getPort() > 65535)) throw new BlockedException("the port is not valid");
+            return u;
+        }
         if (!HOST.matcher(host).matches()) {
             throw new BlockedException("the host must be a public DNS name (IP addresses and single-label names are not allowed)");
         }
@@ -95,6 +113,12 @@ public final class EndpointGuard {
      * @return the addresses, for the log
      */
     public static List<InetAddress> resolvePublic(String host, Resolver resolver) {
+        return resolvePublic(host, resolver, Set.of());
+    }
+
+    /** As {@link #resolvePublic(String, Resolver)}; a host on the local allow-list (see {@link #checkUrl(String, Set, Set)}) is not checked. */
+    public static List<InetAddress> resolvePublic(String host, Resolver resolver, Set<String> localHosts) {
+        if (isLocal(host, localHosts)) return List.of();
         InetAddress[] addresses;
         try {
             addresses = resolver.resolve(host);
@@ -106,6 +130,12 @@ public final class EndpointGuard {
             if (!isPublic(a)) throw new BlockedException("the host resolves to an address that is not public");
         }
         return List.of(addresses);
+    }
+
+    private static boolean isLocal(String host, Set<String> localHosts) {
+        if (host == null || localHosts == null || localHosts.isEmpty()) return false;
+        String h = host.toLowerCase(Locale.ROOT);
+        return localHosts.contains(h.endsWith(".") ? h.substring(0, h.length() - 1) : h);
     }
 
     /** True for a globally routable unicast address. */

@@ -265,6 +265,10 @@ describe('webhooks', () => {
     expect(webhookUrlError('https://localhost/hooks')).toMatch(/public DNS name/);
     expect(webhookUrlError('https://los.partner.example:9000/x')).toBe('Port must be 443 or 8443');
     expect(webhookUrlError('los.partner.example')).toMatch(/full URL/);
+    // local test stack: only the listed host, over http, any port
+    expect(webhookUrlError('http://webhook-echo:8080/hook', ['webhook-echo'])).toBeNull();
+    expect(webhookUrlError('http://webhook-echo:8080/hook')).toBe('Must be https');
+    expect(webhookUrlError('http://other:8080/hook', ['webhook-echo'])).toBe('Must be https');
   });
 
   it('proposes an endpoint; after approval the proposer collects the signing secret exactly once', async () => {

@@ -97,4 +97,17 @@ class EndpointGuardTest {
         EndpointGuard.Resolver empty = host -> new InetAddress[0];
         assertThrows(EndpointGuard.BlockedException.class, () -> EndpointGuard.resolvePublic("gone.example.com", empty));
     }
+
+    @Test
+    void a_local_allow_list_admits_only_the_named_hosts_over_http() {
+        java.util.Set<String> local = java.util.Set.of("webhook-echo");
+        assertEquals("http://webhook-echo:8080/hook", EndpointGuard.checkUrl("http://webhook-echo:8080/hook", EndpointGuard.DEFAULT_PORTS, local).toString());
+        EndpointGuard.checkUrl("https://Webhook-Echo/hook", EndpointGuard.DEFAULT_PORTS, local);
+        assertThrows(EndpointGuard.BlockedException.class, () -> EndpointGuard.checkUrl("http://webhook-echo2:8080/hook", EndpointGuard.DEFAULT_PORTS, local));
+        assertThrows(EndpointGuard.BlockedException.class, () -> EndpointGuard.checkUrl("http://evil.example.com/hook", EndpointGuard.DEFAULT_PORTS, local), "http only for the listed host");
+        assertThrows(EndpointGuard.BlockedException.class, () -> EndpointGuard.checkUrl("http://user:pw@webhook-echo/hook", EndpointGuard.DEFAULT_PORTS, local));
+        assertThrows(EndpointGuard.BlockedException.class, () -> EndpointGuard.checkUrl("http://webhook-echo/hook", EndpointGuard.DEFAULT_PORTS), "the default list is empty");
+        assertTrue(EndpointGuard.resolvePublic("webhook-echo", h -> { throw new UnknownHostException(h); }, local).isEmpty(), "a listed host is not checked for a public address");
+        assertThrows(EndpointGuard.BlockedException.class, () -> EndpointGuard.resolvePublic("other", h -> new InetAddress[] {InetAddress.getByName("10.0.0.5")}, local));
+    }
 }

@@ -11,6 +11,14 @@ export const config = {
    * compiles this to false, so the sign-in form and its code path cannot run there whatever the flag says.
    */
   devLogin: env.DEV && env.VITE_DEV_LOGIN === '1' && !mock,
+  /**
+   * LOCAL DEVELOPMENT ONLY: host names a webhook URL may use over plain http (the compose stack's webhook-echo), set with
+   * VITE_WEBHOOK_LOCAL_HOSTS; it must match the backend's corebanking.integration.webhook.local-allow-hosts. Empty in
+   * production builds whatever the variable says.
+   */
+  webhookLocalHosts: env.DEV
+    ? ((env.VITE_WEBHOOK_LOCAL_HOSTS as string | undefined) ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
+    : ([] as string[]),
   apiBaseUrl: (env.VITE_API_BASE_URL as string | undefined) ?? '',
   oidcAuthority: (env.VITE_OIDC_AUTHORITY as string | undefined) ?? 'http://localhost:8081/realms/demo-nbfc',
   oidcClientId: (env.VITE_OIDC_CLIENT_ID as string | undefined) ?? 'console',

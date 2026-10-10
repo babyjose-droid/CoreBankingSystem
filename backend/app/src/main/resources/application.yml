@@ -91,6 +91,11 @@ corebanking:
     # moving money (dev, test and demo only) and EASEBUZZ / GENERIC_HTTP are unverified against the provider.
     providers-enabled: ${COREBANKING_INTEGRATION_PROVIDERS:}
     worker-enabled: ${COREBANKING_INTEGRATION_WORKER:true}
+    webhook:
+      # LOCAL TEST STACKS ONLY. Webhook URLs must be https on a public DNS name. Host names listed here (comma separated,
+      # exact, no wildcard) are the exception: plain http, any port, no public-address check. Empty by default; only
+      # deploy/local/docker-compose.yml sets it (the webhook-echo receiver). Never set it in a shared environment.
+      local-allow-hosts: ${COREBANKING_WEBHOOK_LOCAL_ALLOW_HOSTS:}
     worker-interval-ms: 5000
     # Keycloak Admin REST for API clients (US-120). Off until an admin service account exists; see docs/runbooks/integrations.md.
     keycloak-admin:

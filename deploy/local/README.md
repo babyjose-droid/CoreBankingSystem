@@ -143,6 +143,25 @@ E-mail goes to **Mailpit** (http://localhost:8025): scheduled report files (only
 `mail.internal-domains`, seeded as `demo-nbfc.invalid`), end-of-day failure alerts, and customer messages of the
 `SMTP` e-mail provider (the demo tenant's EMAIL provider when the deployment enables `SMTP`). Nothing leaves your machine.
 
+## Receiving webhooks (webhook-echo)
+
+Outbound webhook URLs must be `https` on a public DNS name (SSRF guard, `EndpointGuard`), so nothing in the compose
+network could normally receive them. The stack therefore has a **webhook-echo** container (`mendhak/http-https-echo`) that
+logs every request it gets and answers 200, and the backend is told (`COREBANKING_WEBHOOK_LOCAL_ALLOW_HOSTS=webhook-echo`,
+property `corebanking.integration.webhook.local-allow-hosts`) that this one host name may be called over plain `http`, on
+any port, without the public-address check. We chose an allow-list of host names rather than a self-signed certificate:
+a trusted certificate would need a truststore change inside the image, and would still be refused by the guard (a
+single-label name on a private address); the allow-list is one exact name, empty by default and set only in this compose
+file, so a shared environment cannot reach internal hosts by accident. The signature headers are sent as usual.
+
+1. As an admin, register an endpoint (Integrations, Webhooks): URL `http://webhook-echo:8080/hook`, the event types you
+   want. A checker approves it (maker-checker). Copy the signing secret shown once.
+2. Do something that raises an event (disburse a loan, a payout status change ...); the outbox relay delivers within a
+   few seconds.
+3. See what arrived: `docker compose logs -f webhook-echo` (headers, including `x-corebanking-signature`, and the JSON
+   body), and the delivery's status under Integrations, Webhooks, Deliveries. The echo also listens on
+   http://127.0.0.1:8088 for manual tests (`curl -s -XPOST localhost:8088/hook -d '{}'`).
+
 ## Making a payout fail or come back (simulator)
 
 The SIMULATOR payout provider decides from the request alone, so the same request always gives the same answer:

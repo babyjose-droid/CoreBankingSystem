@@ -82,7 +82,7 @@ class WebhookService implements OutboxConsumer {
         if (in == null || in.name() == null || in.name().isBlank() || in.name().length() > 80) throw ApiException.invalid("name is required (at most 80 characters)");
         String url;
         try {
-            url = EndpointGuard.checkUrl(in.url(), EndpointGuard.DEFAULT_PORTS).toString();
+            url = EndpointGuard.checkUrl(in.url(), EndpointGuard.DEFAULT_PORTS, http.localWebhookHosts()).toString();
         } catch (EndpointGuard.BlockedException e) {
             throw ApiException.invalid("url: " + e.getMessage());
         }
@@ -263,7 +263,7 @@ class WebhookService implements OutboxConsumer {
                 headers.put(WebhookSignature.EVENT_TYPE_HEADER, (String) ev.get("type"));
                 headers.put(WebhookSignature.DELIVERY_HEADER, c.id().toString());
                 try {
-                    HttpTransport.Response r = http.guarded().send(new HttpTransport.Request("POST", (String) e.get("url"), headers, body));
+                    HttpTransport.Response r = http.guardedForWebhooks().send(new HttpTransport.Request("POST", (String) e.get("url"), headers, body));
                     status = r.status();
                     if (!r.ok()) error = "the endpoint answered " + r.status();
                 } catch (ProviderException x) {
