@@ -125,7 +125,7 @@ services:
       COREBANKING_DOCUMENTS_S3_PATH_STYLE: "true"
       COREBANKING_DOCUMENTS_S3_REGION: us-east-1
       COREBANKING_DOCUMENTS_S3_SSE: aws:kms
-      COREBANKING_DOCUMENTS_S3_KMS_KEY_ID: arn:aws:kms:us-east-1:000000000000:key/corebanking-local
+      COREBANKING_DOCUMENTS_S3_KMS_KEY_ID: corebanking-local   # S3Mock matches the key id after "key/" in its listed ARN
       AWS_ACCESS_KEY_ID: local-only
       AWS_SECRET_ACCESS_KEY: local-only
       # E-mail to Mailpit (no TLS, no login: local only). The cloud tiers use Amazon SES over SMTP with STARTTLS.

@@ -132,7 +132,7 @@ curl -s -d grant_type=client_credentials -d client_id=corebanking-service -d cli
 The backend stores KYC documents, report files and NACH files in **S3Mock** (Adobe), an S3-compatible store, through
 the same code that uses Amazon S3 in the cloud (`COREBANKING_DOCUMENTS_STORE=s3`, path-style, endpoint
 `http://s3:9090`). MinIO was used first, but its images are no longer published on Docker Hub or Quay. S3Mock creates
-the private bucket at start-up and accepts SSE-KMS only under the key ARN
+the private bucket at start-up and accepts SSE-KMS only with the key id `corebanking-local` of the key ARN
 `arn:aws:kms:us-east-1:000000000000:key/corebanking-local` (it validates the key but does not encrypt), so the
 backend's SSE-KMS requests are exercised as in AWS. Objects persist in the `s3data` volume. To list them:
 `curl -s http://localhost:9090/corebanking-documents`. To keep the old directory store, set
