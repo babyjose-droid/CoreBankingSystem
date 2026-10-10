@@ -225,6 +225,29 @@ jobs:
               assert not too_long, (f, too_long)
           print("realm template OK")
           EOF
+      - name: Local platform realm sanity
+        run: |
+          python - <<'EOF'
+          import json
+          r = json.load(open("deploy/local/keycloak/platform-realm.json"))
+          assert r["realm"] == "platform" and r["bruteForceProtected"]
+          clients = {c["clientId"]: c for c in r["clients"]}
+          assert set(clients) == {"platform-dev", "api"}, set(clients)
+          # LOCAL ONLY: the one client with a password grant, public, no redirect, and no tenant claim (a platform token
+          # carries none: the realm in the issuer decides, and a tenant claim would let it pass for a tenant user).
+          dev = clients["platform-dev"]
+          assert dev["publicClient"] and dev["directAccessGrantsEnabled"] and not dev["standardFlowEnabled"] and not dev.get("redirectUris")
+          assert not dev["serviceAccountsEnabled"] and not dev["fullScopeAllowed"]
+          assert [m["name"] for m in dev["protocolMappers"]] == ["permissions", "audience-api", "roles"]
+          perms = {x["name"] for x in r["roles"]["client"]["api"]}
+          assert perms == {"platform:support", "platform:operator"}, perms
+          # only the support engineer exists locally, as a dev-* user with the documented password, never the operator
+          assert [u["username"] for u in r["users"]] == ["dev-support"]
+          assert r["users"][0]["realmRoles"] == ["PLATFORM_SUPPORT"]
+          # and it is not a template for tenant realms
+          assert "platform-dev" not in open("infra/keycloak/new-tenant-realm.py").read()
+          print("platform realm OK")
+          EOF
       - name: new-tenant-realm.py smoke test
         run: |
           python infra/keycloak/new-tenant-realm.py --self-test

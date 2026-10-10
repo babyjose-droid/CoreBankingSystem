@@ -118,6 +118,38 @@ docker compose --profile console up -d --build
 The password expires after 90 days like any other (realm policy); the sign-in then reports "Account is not fully
 set up" — reset the stack as above.
 
+## Platform realm and support access (US-007)
+
+Support access needs a **platform-realm** user, which the tenant realm cannot provide (a tenant token can never reach
+`/platform/**`). The stack therefore also imports `keycloak/platform-realm.json`: realm `platform`, with a client
+`platform-dev` (LOCAL ONLY password grant, no `tenant` claim) and one user:
+
+| User | Realm role (permission) | Password |
+|------|-------------------------|----------|
+| `dev-support` | PLATFORM_SUPPORT (`platform:support`) | `LocalDev#2026` |
+
+There is no local platform operator user (tenants are provisioned by the bootstrap). To try the flow (ADR-016):
+
+```bash
+# 1. the engineer's token (realm platform)
+ST=$(curl -s -d client_id=platform-dev -d grant_type=password -d username=dev-support -d 'password=LocalDev#2026' \
+  http://localhost:8081/realms/platform/protocol/openid-connect/token | jq -r .access_token)
+# 2. ask for read-only access to demo-nbfc (the reason needs at least 10 characters)
+curl -s -XPOST localhost:8080/platform/v1/support-access -H "Authorization: Bearer $ST" -H 'Content-Type: application/json' \
+  -d '{"tenant":"demo-nbfc","reason":"CLAUDE-TEST look at a failed day-end","ticket":"CLAUDE-TEST-1","durationMinutes":30}' | jq .
+# 3. in the console, as dev-admin (TENANT_ADMIN): Support access -> approve the request
+# 4. read under the grant (GET endpoints on the support list only; values are masked, each call is audited)
+curl -s localhost:8080/api/v1/branches -H "Authorization: Bearer $ST" -H 'X-Support-Tenant: demo-nbfc' -H "X-Support-Grant: <grant id>" | jq .
+```
+
+The realm is imported on first start of Keycloak, so an existing stack gets it with
+`docker compose rm -sf keycloak && docker compose up -d keycloak`: a new Keycloak container imports both realms again
+(Keycloak keeps no volume here, so password changes and TOTP enrolments made in the demo users are reset; the database is
+untouched), or by a full reset with `down -v`. CI checks the file (`Local platform realm sanity`): one password-grant client,
+no tenant claim, only `dev-support`. `new-tenant-realm.py` reads only the `demo-nbfc` template, so this realm and its
+user can never be rendered into a tenant realm. In a real environment the platform realm is created by platform ops, not
+from this file.
+
 ## Tokens
 
 Tokens carry `tenant: "demo-nbfc"`, `permissions: [...]` (client roles of `api`) and `aud: api`.
