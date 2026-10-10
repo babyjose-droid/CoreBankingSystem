@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useMe } from '../../api/hooks';
-import { useBeneficiary, usePayout, usePayoutAction, usePayouts, useSetBeneficiary } from '../../api/integrationHooks';
+import { useBeneficiary, usePayout, usePayoutAction, usePayouts, useSetBeneficiary, useSimulatePayoutOutcome } from '../../api/integrationHooks';
 import type { Payout } from '../../api/integrationTypes';
 import { P, hasPermission } from '../../auth/permissions';
 import { Badge, Banner, Button, Card, Checkbox, DateTimeText, Dialog, EmptyState, ErrorBanner, Input, Masked, MoneyText, PageHeader, Select, Spinner, StatusBadge, Table, humanize, useToast } from '../../ui';
@@ -32,6 +32,8 @@ export function PayoutsPage() {
   const me = useMe().data!;
   const canAdmin = hasPermission(me.permissions, P.payoutAdmin);
   const canBeneficiary = hasPermission(me.permissions, P.payoutBeneficiary);
+  const canSimulate = hasPermission(me.permissions, P.integrationSimulate);
+  const simulate = useSimulatePayoutOutcome();
   const [status, setStatus] = useState('');
   const [needsAction, setNeedsAction] = useState(false);
   const q = usePayouts({ status, needsAction });
@@ -75,6 +77,16 @@ export function PayoutsPage() {
                     {canAdmin && retryLabel(p) && (
                       <Button size="sm" aria-label={`${retryLabel(p)} payout ${p.reference}`} loading={act.isPending && act.variables?.id === p.id} onClick={() => act.mutate({ id: p.id!, action: 'retry' }, { onSuccess: (r) => toast({ tone: 'success', message: `Payout ${r.reference} is ${humanize(r.status ?? '').toLowerCase()}.` }) })}>
                         {retryLabel(p)}
+                      </Button>
+                    )}
+                    {canSimulate && ['INITIATED', 'SENT', 'SUCCESS'].includes(p.status ?? '') && (
+                      <Button
+                        size="sm"
+                        aria-label={`${p.status === 'SUCCESS' ? 'Simulate return of' : 'Simulate failure of'} payout ${p.reference}`}
+                        loading={simulate.isPending && simulate.variables?.id === p.id}
+                        onClick={() => simulate.mutate({ id: p.id!, status: p.status === 'SUCCESS' ? 'RETURNED' : 'FAILED' }, { onSuccess: () => toast({ tone: 'info', message: `Payout ${p.reference} reported ${p.status === 'SUCCESS' ? 'returned' : 'failed'} (simulated).` }) })}
+                      >
+                        {p.status === 'SUCCESS' ? 'Simulate return' : 'Simulate failure'}
                       </Button>
                     )}
                     {canAdmin && p.status === 'SENT' && (

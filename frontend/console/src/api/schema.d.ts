@@ -1956,6 +1956,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/simulator/payouts/{id}/outcome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test and demo only - report a payout as FAILED, or RETURNED after it was credited
+         * @description Permission: integration:simulate; only while SIMULATOR is the active payout provider with a webhookSecret. Plays a signed callback for the payout and processes it at once, so the normal failure path follows: a loan disbursed through the API is reversed, a staff-approved loan gets a reversal proposed for a checker (tenant property payout.failure-action: PROPOSE or PARK). 409 when the payout's status does not allow it (FAILED from INITIATED or SENT; RETURNED from SENT or SUCCESS).
+         */
+        post: operations["simulatePayoutOutcome"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/hooks/v1/{tenant}/{kind}/{provider}": {
         parameters: {
             query?: never;
@@ -4970,6 +4990,12 @@ export interface components {
             secrets?: {
                 [key: string]: string;
             };
+        };
+        SimulatedPayoutOutcome: {
+            /** @enum {string} */
+            status: "FAILED" | "RETURNED";
+            /** @description Defaults to "account closed (simulated)" for FAILED */
+            reason?: string;
         };
         SimulatedCallback: {
             /** @enum {string} */
@@ -8337,6 +8363,33 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SimulatedCallback"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulatePayoutOutcome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SimulatedPayoutOutcome"];
             };
         };
         responses: {

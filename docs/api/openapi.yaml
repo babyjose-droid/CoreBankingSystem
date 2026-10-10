@@ -2274,6 +2274,32 @@ paths:
               schema: { $ref: '#/components/schemas/IntegrationRecord' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /api/v1/integrations/simulator/payouts/{id}/outcome:
+    post:
+      tags: [Integrations]
+      operationId: simulatePayoutOutcome
+      summary: Test and demo only - report a payout as FAILED, or RETURNED after it was credited
+      description: >-
+        Permission: integration:simulate; only while SIMULATOR is the active payout provider with a webhookSecret.
+        Plays a signed callback for the payout and processes it at once, so the normal failure path follows: a loan
+        disbursed through the API is reversed, a staff-approved loan gets a reversal proposed for a checker (tenant
+        property payout.failure-action: PROPOSE or PARK). 409 when the payout's status does not allow it (FAILED from
+        INITIATED or SENT; RETURNED from SENT or SUCCESS).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SimulatedPayoutOutcome' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /hooks/v1/{tenant}/{kind}/{provider}:
     post:
       tags: [Integrations]
@@ -5011,6 +5037,12 @@ components:
           type: object
           description: Write-only. Never returned by any API.
           additionalProperties: { type: string }
+    SimulatedPayoutOutcome:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [FAILED, RETURNED] }
+        reason: { type: string, maxLength: 200, description: 'Defaults to "account closed (simulated)" for FAILED' }
     SimulatedCallback:
       type: object
       required: [kind, reference, status]

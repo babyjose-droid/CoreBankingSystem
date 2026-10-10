@@ -52,7 +52,8 @@ and EMAIL (with a random `webhookSecret`, stored encrypted, so `POST /api/v1/int
 works), the tenant properties `nach.sponsor-bank-code` and `nach.utility-code`, and English SMS templates for
 `LOAN_DISBURSED` and `PAYMENT_RECEIVED`. It also records one rate for the `REPO` benchmark (6.00% from
 01-Jan-2026 — demo data, not the Reserve Bank's rate) while that benchmark has none, so the floating-rate product
-template can book a loan. Nothing that is already configured is changed; these rows are written
+template can book a loan, and one SPREAD interest table (`DEMO_SPREAD`) to attach to such a product (Masters, Interest
+tables) while the tenant has none. Nothing that is already configured is changed; these rows are written
 without maker-checker, which is why this exists only behind the local bootstrap flag.
 
 ```bash
@@ -141,6 +142,27 @@ backend's SSE-KMS requests are exercised as in AWS. Objects persist in the `s3da
 E-mail goes to **Mailpit** (http://localhost:8025): scheduled report files (only to addresses on the tenant property
 `mail.internal-domains`, seeded as `demo-nbfc.invalid`), end-of-day failure alerts, and customer messages of the
 `SMTP` e-mail provider (the demo tenant's EMAIL provider when the deployment enables `SMTP`). Nothing leaves your machine.
+
+## Making a payout fail or come back (simulator)
+
+The SIMULATOR payout provider decides from the request alone, so the same request always gives the same answer:
+
+| Trigger | Outcome |
+|---------|---------|
+| beneficiary account ends in `9999`, or amount ends in `.01` | FAILED (`SIM_FAILED`) |
+| account ends in `9998`, or amount ends in `.02` | SENT, then SUCCESS on the next status poll |
+| account ends in `9997`, or amount ends in `.03` | SUCCESS, then RETURNED on the next status poll |
+| amount ends in `.04` | no answer (retried) |
+| amount ends in `.05` | SENT, stays SENT |
+| account ends in `0000` | the beneficiary check says INVALID (the payout does not go out) |
+
+To decide after the fact, on a payout that is already SENT (or SUCCESS, to have it returned): Integrations, Payouts,
+**Simulate failure** (or **Simulate return**), or `POST /api/v1/integrations/simulator/payouts/{id}/outcome`
+with `{"status": "FAILED" | "RETURNED", "reason": "..."}` (permission `integration:simulate`; the default reason is
+"account closed (simulated)"). It plays a signed simulator callback and processes it at once. Then the normal failure path
+runs: for a staff-approved loan a reversal of the disbursement is **proposed for a checker** within a minute (Approvals,
+`LOAN_REVERSAL`; tenant property `payout.failure-action` = `PARK` only parks it); a loan disbursed through the API is
+reversed at once. The business day must be OPEN for the reversal to be proposed.
 
 ## Keycloak admin client (sessions, API clients)
 

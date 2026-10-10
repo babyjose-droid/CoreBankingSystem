@@ -559,6 +559,23 @@ export function registerIntegrationRoutes(db: MockDb, r: IntegrationRouter) {
     return ok({ eventId, receipt: 'ACCEPTED' });
   });
 
+  on('POST', '/api/v1/integrations/simulator/payouts/{id}/outcome', ({ user, params, body }) => {
+    require(user, P.integrationSimulate);
+    const b = (body ?? {}) as { status?: string; reason?: string };
+    const wanted = (b.status ?? '').toUpperCase();
+    if (wanted !== 'FAILED' && wanted !== 'RETURNED') throw bad('status must be FAILED or RETURNED', [{ field: 'status', message: 'FAILED or RETURNED' }]);
+    if (activeProvider(db, 'PAYOUT')?.provider !== 'SIMULATOR') throw conflict('Simulator not active', 'SIMULATOR is not the active payout provider of this tenant');
+    const at = nowIso();
+    syncPayouts(db, at);
+    const p = I().payouts.find((x) => x.id === params.id);
+    if (!p) throw notFound('Payout');
+    const ok2 = wanted === 'FAILED' ? ['INITIATED', 'SENT'].includes(p.status ?? '') : ['SENT', 'SUCCESS'].includes(p.status ?? '');
+    if (!ok2) throw conflict('Not possible now', `a payout that is ${p.status} cannot be reported ${wanted} (FAILED: from INITIATED or SENT; RETURNED: from SENT or SUCCESS)`);
+    payoutNews(db, propose, p, wanted, at, wanted === 'FAILED' ? 'SIM_FAILED' : 'SIM_RETURNED', b.reason?.trim() || (wanted === 'FAILED' ? 'account closed (simulated)' : 'returned by the beneficiary bank (simulated)'));
+    appendAudit(db, at, user.username, 'SIMULATED_CALLBACK', 'INTEGRATION', p.reference ?? null, { kind: 'payout', status: wanted });
+    return ok({ eventId: `sim-${uuid()}`, receipt: 'ACCEPTED', payoutStatus: wanted });
+  });
+
   // ---- payouts
   on('PUT', '/api/v1/loans/{id}/payout-beneficiary', ({ user, params, body }) => {
     require(user, P.payoutBeneficiary);

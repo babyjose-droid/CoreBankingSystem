@@ -103,6 +103,21 @@ describe('payouts', () => {
   });
 });
 
+describe('simulated payout outcome', () => {
+  it('fails a sent payout from the payouts page; the reversal is proposed for a checker', async () => {
+    const user = userEvent.setup();
+    const { server } = renderApp({ user: 'admin', route: '/integrations/payouts' });
+    const sent = server.db.integration.payouts.find((p) => p.status === 'SENT')!;
+    await user.click(await screen.findByRole('button', { name: `Simulate failure of payout ${sent.reference}` }));
+    expect(await screen.findByText(`Payout ${sent.reference} reported failed (simulated).`)).toBeInTheDocument();
+    expect(sent.status).toBe('FAILED');
+    expect(sent.failureReason).toBe('account closed (simulated)');
+    expect((await mockCall(server, 'admin', 'POST', `/api/v1/integrations/simulator/payouts/${sent.id}/outcome`, { status: 'FAILED' })).status).toBe(409);
+    expect((await mockCall(server, 'admin', 'POST', `/api/v1/integrations/simulator/payouts/${sent.id}/outcome`, { status: 'PAID' })).status).toBe(422);
+    expect((await mockCall(server, 'ops', 'POST', `/api/v1/integrations/simulator/payouts/${sent.id}/outcome`, { status: 'FAILED' })).status).toBe(403);
+  });
+});
+
 describe('collections', () => {
   it('creates a payment link for a loan and lists it', async () => {
     const user = userEvent.setup();

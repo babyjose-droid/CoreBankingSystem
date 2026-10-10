@@ -40,6 +40,15 @@ export function useProposeProviderDeactivation() {
   const after = useAfterProposal();
   return useMutation({ mutationFn: (kind: string) => unwrap<Approval>(api.POST('/api/v1/integrations/providers/{kind}/deactivate', { params: { path: { kind } } }) as never), onSuccess: after });
 }
+export function useSimulatePayoutOutcome() {
+  const api = useApiClient();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, reason }: { id: string; status: 'FAILED' | 'RETURNED'; reason?: string }) =>
+      unwrap<SimulatedCallbackResult>(api.POST('/api/v1/integrations/simulator/payouts/{id}/outcome', { params: { path: { id } }, body: { status, ...(reason ? { reason } : {}) } }) as never),
+    onSuccess: () => void qc.invalidateQueries(),
+  });
+}
 export function useSimulateCallback() {
   const api = useApiClient();
   const qc = useQueryClient();

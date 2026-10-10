@@ -56,4 +56,12 @@ class InboundWebhookController {
     Map<String, Object> simulate(@RequestBody InboundWebhookService.Simulated in) {
         return inbound.simulate(in);
     }
+
+    /** Test and demo only: make a payout fail or come back, to exercise the failure path (reversal proposed for a checker). */
+    @PostMapping("/api/v1/integrations/simulator/payouts/{id}/outcome")
+    @PreAuthorize("hasAuthority('integration:simulate')")
+    Map<String, Object> simulatePayoutOutcome(@org.springframework.web.bind.annotation.PathVariable java.util.UUID id,
+                                              @RequestBody InboundWebhookService.PayoutOutcome in) {
+        return inbound.simulatePayoutOutcome(id, in);
+    }
 }

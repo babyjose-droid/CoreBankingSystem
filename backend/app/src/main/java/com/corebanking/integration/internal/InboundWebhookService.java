@@ -220,6 +220,39 @@ class InboundWebhookService {
         return Map.of("eventId", eventId, "receipt", r.name());
     }
 
+    /** FAILED from INITIATED or SENT; RETURNED from SENT or SUCCESS. */
+    static boolean outcomeAllowed(String wanted, String payoutStatus) {
+        return "FAILED".equals(wanted) ? payoutStatus.equals("INITIATED") || payoutStatus.equals("SENT")
+                : "RETURNED".equals(wanted) && (payoutStatus.equals("SENT") || payoutStatus.equals("SUCCESS"));
+    }
+
+    /** openapi.yaml#/components/schemas/SimulatedPayoutOutcome. */
+    record PayoutOutcome(String status, String reason) {}
+
+    /**
+     * Operator shortcut for local testing: reports a payout as FAILED, or RETURNED after it was credited, by playing
+     * a signed SIMULATOR callback for it through the real verification path, then processing the callback now. The
+     * normal failure path follows (a staff-approved loan gets a reversal proposed for a checker, per
+     * {@code payout.failure-action}; the payout-failures task picks it up within a minute).
+     */
+    Map<String, Object> simulatePayoutOutcome(UUID payoutId, PayoutOutcome in) {
+        String wanted = in == null || in.status() == null ? "" : in.status().trim().toUpperCase(Locale.ROOT);
+        if (!wanted.equals("FAILED") && !wanted.equals("RETURNED")) throw ApiException.invalid("status must be FAILED or RETURNED");
+        String reason = in.reason() == null || in.reason().isBlank() ? null : in.reason().trim();
+        if (reason != null && reason.length() > 200) throw ApiException.invalid("reason is at most 200 characters");
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT reference, status FROM integration.payout_instruction WHERE id = ?", payoutId);
+        if (rows.isEmpty()) throw ApiException.notFound("payout");
+        String status = String.valueOf(rows.get(0).get("status"));
+        if (!outcomeAllowed(wanted, status)) throw ApiException.conflict("a payout that is " + status + " cannot be reported " + wanted
+                + " (FAILED: from INITIATED or SENT; RETURNED: from SENT or SUCCESS)");
+        Map<String, Object> answer = new java.util.LinkedHashMap<>(simulate(new Simulated("payout", String.valueOf(rows.get(0).get("reference")), wanted, null,
+                wanted.equals("FAILED") ? "SIM_FAILED" : "SIM_RETURNED",
+                reason != null ? reason : wanted.equals("FAILED") ? "account closed (simulated)" : "returned by the beneficiary bank (simulated)", null)));
+        process();
+        answer.put("payoutStatus", jdbc.queryForObject("SELECT status FROM integration.payout_instruction WHERE id = ?", String.class, payoutId));
+        return answer;
+    }
+
     @Component
     static class ProcessTask implements IntegrationTask {
         private final InboundWebhookService inbound;
