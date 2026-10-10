@@ -21,6 +21,7 @@ const ROUTES: Array<[string, RegExp]> = [
   ['/masters/holidays', /^Holidays$/],
   ['/masters/tax-rates', /^Tax rates$/],
   ['/masters/benchmarks', /^Benchmark rates$/],
+  ['/masters/interest-tables', /^Interest tables$/],
   ['/loans', /^Loans$/],
   ['/loans/new', /^New loan$/],
   ['/loan-products', /^Loan products$/],

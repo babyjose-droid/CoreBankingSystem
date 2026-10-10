@@ -3,7 +3,7 @@
  * (run on a copy; nothing is stored), sanction change and the manual NPA override. Tranche draws, sanction changes and
  * overrides are replayed like other loan transactions but can never be reversed.
  */
-import type { AssetClass, DisbursementSimulation, LoanAmendment, LoanProductTemplate, LoanTranches, SanctionChangePreview, TransactionSimulation } from '../api/types';
+import type { AssetClass, InterestTable, InterestTableInput, DisbursementSimulation, LoanAmendment, LoanProductTemplate, LoanTranches, SanctionChangePreview, TransactionSimulation } from '../api/types';
 import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { addDays, ISO_DATE } from '../lib/dates';
@@ -141,6 +141,20 @@ export function applyLendingMoreApproval(db: MockDb, p: ApprovalPayload, approva
     approval.appliedRef = p.benchmark.code;
     return true;
   }
+  if (p.kind === 'INTEREST_TABLE') {
+    const i = db.interestTables.findIndex((t) => t.code === p.table.code);
+    if (i >= 0) {
+      const used = productsUsing(db, p.table.code);
+      if (used.length && (db.interestTables[i].mode === 'SPREAD') !== (p.table.mode === 'SPREAD')) throw bad(`table ${p.table.code} is used by product(s) ${used.join(', ')}: it cannot change to or from SPREAD`);
+      db.interestTables[i] = p.table;
+    } else {
+      db.interestTables.push(p.table);
+      db.interestTables.sort((a, b) => a.code.localeCompare(b.code));
+    }
+    approval.entityId = p.table.code;
+    approval.appliedRef = p.table.code;
+    return true;
+  }
   if (p.kind === 'BENCHMARK_RATE') {
     const b = db.benchmarks.find((x) => x.code === p.code);
     if (!b) throw notFound('Benchmark');
@@ -179,6 +193,42 @@ export function applyLendingMoreApproval(db: MockDb, p: ApprovalPayload, approva
   return true;
 }
 
+const productsUsing = (db: MockDb, code: string) => db.loanProducts.filter((x) => x.interestTableCode === code).map((x) => x.code).sort();
+
+/** The same rules as InterestTableService.normalise on the backend. */
+export function normaliseInterestTable(b: Partial<InterestTableInput>, businessDate: string): InterestTable {
+  const fail = (m: string, field = 'rows'): never => { throw bad(m, [{ field, message: m }]); };
+  if (!/^[A-Z0-9_]{2,20}$/.test(b.code ?? '')) fail('code is 2 to 20 capital letters, digits or underscores', 'code');
+  if (!b.name?.trim() || b.name.length > 100) fail('name is required (at most 100 characters)', 'name');
+  const mode = String(b.mode ?? '').toUpperCase() === 'FIXED' ? 'ABSOLUTE' : String(b.mode ?? '').toUpperCase();
+  if (!['ABSOLUTE', 'ADDITIVE', 'SPREAD'].includes(mode)) fail('mode is FIXED (ABSOLUTE), ADDITIVE or SPREAD', 'mode');
+  const base = Number(b.baseRate ?? 0);
+  if (mode !== 'ADDITIVE' && base !== 0) fail(`baseRate is used by ADDITIVE tables only; leave it out (0) for ${mode}`, 'baseRate');
+  const rows = b.rows ?? [];
+  if (!rows.length) fail('at least one row (amount band, tenor band and rate) is required');
+  if (rows.length > 200) fail('at most 200 rows');
+  const cap = mode === 'SPREAD' ? 30 : 60;
+  const out = rows.map((r, i) => {
+    const at = `row ${i + 1}`;
+    const min = Number(r.minAmount), max = Number(r.maxAmount), rate = Number(r.rate);
+    if (![r.minAmount, r.maxAmount, r.rate].every((v) => v !== undefined && v !== null && v !== '') || r.minTenorMonths == null || r.maxTenorMonths == null) return fail(`${at}: minAmount, maxAmount, minTenorMonths, maxTenorMonths and rate are required`);
+    if (!(min >= 0) || !(max >= min) || max > 1e12) fail(`${at}: amounts are from 0 and maxAmount is not below minAmount`);
+    if (!Number.isInteger(r.minTenorMonths) || r.minTenorMonths < 1 || r.maxTenorMonths < r.minTenorMonths || r.maxTenorMonths > 600) fail(`${at}: tenor is 1 to 600 months and maxTenorMonths is not below minTenorMonths`);
+    if (!(rate >= 0) || rate > cap || !/^\d+(\.\d{1,4})?$/.test(String(r.rate))) fail(`${at}: rate is a percentage from 0 to ${cap} with at most four decimals`);
+    return { minAmount: min.toFixed(2), maxAmount: max.toFixed(2), minTenorMonths: r.minTenorMonths, maxTenorMonths: r.maxTenorMonths, rate: rate.toFixed(4) };
+  });
+  out.sort((a, b) => Number(a.minAmount) - Number(b.minAmount) || a.minTenorMonths - b.minTenorMonths);
+  for (let i = 0; i < out.length; i++) {
+    for (let j = i + 1; j < out.length; j++) {
+      const a = out[i], c = out[j];
+      if (Number(a.minAmount) <= Number(c.maxAmount) && Number(c.minAmount) <= Number(a.maxAmount) && a.minTenorMonths <= c.maxTenorMonths && c.minTenorMonths <= a.maxTenorMonths) {
+        fail(`bands overlap: ${a.minAmount}-${a.maxAmount} / ${a.minTenorMonths}-${a.maxTenorMonths} months and ${c.minAmount}-${c.maxAmount} / ${c.minTenorMonths}-${c.maxTenorMonths} months (bands include both ends)`);
+      }
+    }
+  }
+  return { code: b.code!, name: b.name!.trim(), mode: mode as InterestTable['mode'], baseRate: base.toString(), effectiveFrom: b.effectiveFrom || businessDate, rows: out, usedByProducts: [] };
+}
+
 // ------------------------------------------------------------------ routes
 export function registerLendingMoreRoutes(db: MockDb, r: LendingMoreRouter) {
   const { on, require, propose } = r;
@@ -195,6 +245,18 @@ export function registerLendingMoreRoutes(db: MockDb, r: LendingMoreRouter) {
       const current = b.rates.find((x) => x.effectiveFrom <= db.businessDate);
       return { ...b, currentRate: current?.rate ?? null, currentFrom: current?.effectiveFrom ?? null };
     }));
+  });
+  on('GET', '/api/v1/interest-tables', ({ user }) => {
+    require(user, P.productView);
+    return ok(db.interestTables.map((t) => ({ ...clone(t), usedByProducts: productsUsing(db, t.code) })));
+  });
+  on('POST', '/api/v1/interest-tables', ({ user, body }) => {
+    require(user, P.productPropose);
+    const table = normaliseInterestTable((body ?? {}) as Partial<InterestTableInput>, db.businessDate);
+    const existing = db.interestTables.find((t) => t.code === table.code);
+    const used = productsUsing(db, table.code);
+    if (existing && used.length && (existing.mode === 'SPREAD') !== (table.mode === 'SPREAD')) throw bad(`table ${table.code} is used by product(s) ${used.join(', ')}: a table cannot change to or from SPREAD while a product uses it`);
+    return propose(user, 'INTEREST_TABLE', existing ? 'UPDATE' : 'CREATE', { kind: 'INTEREST_TABLE', table }, { ...table }, existing ? { ...existing } : null, table.code);
   });
   on('POST', '/api/v1/benchmarks', ({ user, body }) => {
     require(user, P.benchmarkPropose);

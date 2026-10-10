@@ -36,6 +36,7 @@ const ENTITY_TYPES = [
   'TAX_RATE',
   'BENCHMARK',
   'BENCHMARK_RATE',
+  'INTEREST_TABLE',
   'HOLIDAY',
   'EOD_SCHEDULE',
   'LOAN_PRODUCT',
@@ -108,6 +109,7 @@ function summaryOf(a: Approval): string {
     const hs = (p.holidays as Array<{ day: string; reason: string }> | undefined) ?? [];
     return hs.map((h) => `${h.day} ${h.reason}`).join(', ');
   }
+  if (a.entityType === 'INTEREST_TABLE') return [p.code, p.name].filter(Boolean).join(' — ');
   if (a.entityType === 'BENCHMARK') return [p.code, p.name].filter(Boolean).join(' — ');
   if (a.entityType === 'BENCHMARK_RATE') return `${String(p.code ?? '')} ${String(p.rate ?? '')}% from ${String(p.effectiveFrom ?? '')}`;
   if (a.entityType === 'LOAN_RESET_PREFERENCE') return `${String(p.loanNo ?? '')}: ${p.option ? String(p.option) : 'product default'}`;

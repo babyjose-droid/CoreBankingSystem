@@ -115,6 +115,10 @@ class ProblemHandler {
     @ExceptionHandler(DataAccessException.class)
     ProblemDetail data(DataAccessException e) {
         String state = sqlState(e);
+        if ("23514".equals(state) && userMessage(e).contains("interest table")) {
+            // V25 trigger: a SPREAD table goes only with a benchmark-linked product
+            return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, userMessage(e));
+        }
         if (state != null && (state.startsWith("23") || state.equals("42501") || state.equals("P0002"))) {
             return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, userMessage(e));
         }

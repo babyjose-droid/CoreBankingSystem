@@ -25,6 +25,8 @@ import type {
   Benchmark,
   BenchmarkInput,
   BenchmarkRateInput,
+  InterestTable,
+  InterestTableInput,
   TrialBalanceRow,
   VerifyResult,
   Voucher,
@@ -169,6 +171,21 @@ export function useProposeTaxRate() {
   const after = useAfterProposal();
   return useMutation({
     mutationFn: (t: TaxRate) => unwrap<Approval>(api.POST('/api/v1/tax-rates', { body: t }) as never),
+    onSuccess: after,
+  });
+}
+
+// ---------- interest tables ----------
+export function useInterestTables(enabled = true) {
+  const api = useApiClient();
+  return useQuery({ enabled, queryKey: ['interest-tables'], queryFn: () => unwrap<InterestTable[]>(api.GET('/api/v1/interest-tables')) });
+}
+
+export function useProposeInterestTable() {
+  const api = useApiClient();
+  const after = useAfterProposal();
+  return useMutation({
+    mutationFn: (t: InterestTableInput) => unwrap<Approval>(api.POST('/api/v1/interest-tables', { body: t }) as never),
     onSuccess: after,
   });
 }

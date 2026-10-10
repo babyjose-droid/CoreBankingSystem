@@ -49,6 +49,7 @@ export const NAV: NavGroup[] = [
       { to: '/masters/holidays', label: 'Holidays', perm: P.holidayView },
       { to: '/masters/tax-rates', label: 'Tax rates', perm: P.taxRateView },
       { to: '/masters/benchmarks', label: 'Benchmark rates', perm: P.benchmarkView },
+      { to: '/masters/interest-tables', label: 'Interest tables', perm: P.productView },
       { to: '/masters/staff', label: 'Staff', perm: P.staffView },
       { to: '/masters/branch-sets', label: 'Branch sets', perm: P.branchView },
       { to: '/masters/territory', label: 'Territory', perm: P.masterView },

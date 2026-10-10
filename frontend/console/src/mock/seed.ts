@@ -224,6 +224,15 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     holidays: HOLIDAYS.map((h) => ({ ...h })),
     taxRates: TAX_RATES.map((t) => ({ ...t })),
     benchmarks: BENCHMARKS.map((b) => ({ ...b, rates: b.rates.map((r) => ({ ...r })) })),
+    interestTables: [
+      { code: 'HLS', name: 'Home loan spreads over the benchmark', mode: 'SPREAD', baseRate: '0', effectiveFrom: '2026-01-01', usedByProducts: [], rows: [
+        { minAmount: '0.00', maxAmount: '2500000.00', minTenorMonths: 1, maxTenorMonths: 600, rate: '3.2500' },
+        { minAmount: '2500000.01', maxAmount: '1000000000000.00', minTenorMonths: 1, maxTenorMonths: 600, rate: '2.7500' } ] },
+      { code: 'PL1', name: 'Personal loan card (fixed)', mode: 'ABSOLUTE', baseRate: '0', effectiveFrom: '2026-01-01', usedByProducts: [], rows: [
+        { minAmount: '0.00', maxAmount: '100000.00', minTenorMonths: 1, maxTenorMonths: 600, rate: '18.0000' },
+        { minAmount: '100000.01', maxAmount: '300000.00', minTenorMonths: 1, maxTenorMonths: 600, rate: '16.0000' },
+        { minAmount: '300000.01', maxAmount: '1000000000000.00', minTenorMonths: 1, maxTenorMonths: 600, rate: '14.0000' } ] },
+    ],
     glHeads: COA.map(([code, name, category, parentCode, posting]) => ({ code, name, category, parentCode, posting, status: 'ACTIVE' as const })),
     customers: [],
     customerSeq: 0,

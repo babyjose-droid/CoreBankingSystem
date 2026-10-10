@@ -119,18 +119,14 @@ SEED_PRODUCTS.push({
 });
 
 /** Mock interest tables (absolute slab rates by amount; HLS: spreads over the product's benchmark, a floating rate slab). */
-const RATE_TABLES: Record<string, Array<{ upTo: number; rate: number }>> = {
-  PL1: [
-    { upTo: 100_000_00, rate: 18 },
-    { upTo: 300_000_00, rate: 16 },
-    { upTo: Number.MAX_SAFE_INTEGER, rate: 14 },
-  ],
-  HLS: [
-    { upTo: 25_00_000_00, rate: 3.25 },
-    { upTo: Number.MAX_SAFE_INTEGER, rate: 2.75 },
-  ],
-};
-const SPREAD_TABLES = ['HLS'];
+/** Interest tables as `upTo` (paise) steps by amount, from the mock database (tenor bands are not modelled in the mock quote). */
+function rateTable(db: MockDb, code: string): Array<{ upTo: number; rate: number }> | undefined {
+  const t = db.interestTables.find((x) => x.code === code);
+  if (!t) return undefined;
+  const byAmount = new Map<string, number>();
+  for (const r of t.rows) if (!byAmount.has(r.maxAmount)) byAmount.set(r.maxAmount, Number(r.rate));
+  return [...byAmount.entries()].sort((a, b) => Number(a[0]) - Number(b[0])).map(([max, rate]) => ({ upTo: Number(max) >= 1e12 ? Number.MAX_SAFE_INTEGER : Math.round(Number(max) * 100), rate }));
+}
 
 // ------------------------------------------------------------------ helpers
 export const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
@@ -264,7 +260,7 @@ function resolve(db: MockDb, a: LoanApplication, opts: { allowPastDisbursal?: bo
         derived = true;
       }
     } else if (rateIn === null) {
-      const table = product.interestTableCode ? RATE_TABLES[product.interestTableCode] : undefined;
+      const table = product.interestTableCode ? rateTable(db, product.interestTableCode) : undefined;
       const benchmark = product.benchmarkCode ? benchmarkRate(db, product.benchmarkCode, a.disbursalDate || db.businessDate) : undefined;
       const steps = product.rateSteps ?? [];
       if (steps.length) {
@@ -469,7 +465,7 @@ export function previewLoan(db: MockDb, a: LoanApplication): LoanKfs {
 
 /** Sample loan on a draft product (nothing is stored): smallest amount, shortest tenor, lowest rate by default. */
 export function previewProduct(db: MockDb, body: Record<string, unknown>): LoanKfs & { sampleSchedule?: boolean } {
-  const draft = validateProduct({ code: 'DRAFT', ...(body?.product as object), status: 'DRAFT' } as LoanProduct, db.benchmarks.map((b) => b.code));
+  const draft = validateProduct({ code: 'DRAFT', ...(body?.product as object), status: 'DRAFT' } as LoanProduct, db.benchmarks.map((b) => b.code), db.interestTables);
   const has = (k: string) => body[k] !== undefined && body[k] !== null && body[k] !== '';
   const r = resolve(db, {
     productCode: 'DRAFT', customerId: '',
@@ -1275,7 +1271,7 @@ export function rateResetsDue(db: MockDb, loans: StoredLoan[], days: number) {
 }
 
 // ------------------------------------------------------------------ product validation
-export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProduct {
+export function validateProduct(p: LoanProduct, benchmarks: string[], tables: Array<{ code: string; mode: string }>): LoanProduct {
   const errors: FieldProblem[] = [];
   if (!p || typeof p !== 'object') throw bad('Body required');
   const n = (v: unknown) => (v === null || v === undefined || v === '' ? NaN : Number(v));
@@ -1310,7 +1306,7 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
   if (p.benchmarkCode) {
     if (!benchmarks.includes(p.benchmarkCode)) errors.push({ field: 'benchmarkCode', message: `Unknown benchmark ${p.benchmarkCode}` });
     if (p.rateType !== 'FLOATING') errors.push({ field: 'rateType', message: 'A benchmark needs rate type FLOATING' });
-    const fromTable = !!p.interestTableCode && SPREAD_TABLES.includes(p.interestTableCode);
+    const fromTable = !!p.interestTableCode && tables.some((t) => t.code === p.interestTableCode && t.mode === 'SPREAD');
     if (p.interestTableCode && !fromTable) errors.push({ field: 'interestTableCode', message: 'A benchmark-linked product takes only a SPREAD table' });
     if (fromTable && !Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'One source of spread: the product or its SPREAD table' });
     if (!fromTable && Number.isNaN(n(p.spread))) errors.push({ field: 'spread', message: 'A benchmark needs a spread' });
@@ -1328,8 +1324,10 @@ export function validateProduct(p: LoanProduct, benchmarks: string[]): LoanProdu
   if (!(maxR >= minR && maxR <= 100)) errors.push({ field: 'maxRate', message: 'Maximum rate must be between the minimum and 100' });
   if (p.penalChargeRate !== null && p.penalChargeRate !== undefined && p.penalChargeRate !== '' && !(n(p.penalChargeRate) >= 0 && n(p.penalChargeRate) <= 100)) errors.push({ field: 'penalChargeRate', message: 'Penal rate must be between 0 and 100' });
   if (p.coolingOffDays !== undefined && (!Number.isInteger(p.coolingOffDays) || p.coolingOffDays < 0)) errors.push({ field: 'coolingOffDays', message: 'Cooling-off days must be 0 or more' });
-  if (p.interestTableCode && !RATE_TABLES[p.interestTableCode]) errors.push({ field: 'interestTableCode', message: `Unknown interest table ${p.interestTableCode}` });
-  else if (p.interestTableCode && !p.benchmarkCode && SPREAD_TABLES.includes(p.interestTableCode)) errors.push({ field: 'interestTableCode', message: 'A SPREAD table needs a benchmark to add to' });
+  const table = p.interestTableCode ? tables.find((t) => t.code === p.interestTableCode) : undefined;
+  if (p.interestTableCode && !table) errors.push({ field: 'interestTableCode', message: `Unknown interest table ${p.interestTableCode}` });
+  else if (table && !p.benchmarkCode && table.mode === 'SPREAD') errors.push({ field: 'interestTableCode', message: 'A SPREAD table needs a benchmark to add to' });
+  else if (table && p.benchmarkCode && table.mode !== 'SPREAD') errors.push({ field: 'interestTableCode', message: 'A benchmark-linked product takes only a SPREAD table' });
   const seen = new Set<string>();
   (p.fees ?? []).forEach((f: FeeRule, i) => {
     const at = `Fee ${i + 1}`;
@@ -1522,7 +1520,7 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   });
   on('POST', '/api/v1/loan-products', ({ user, body }) => {
     require(user, P.productPropose);
-    const product = validateProduct(body as LoanProduct, db.benchmarks.map((b) => b.code));
+    const product = validateProduct(body as LoanProduct, db.benchmarks.map((b) => b.code), db.interestTables);
     if (hasPending('LOAN_PRODUCT', (p) => p.kind === 'LOAN_PRODUCT' && p.product.code === product.code)) {
       throw conflict('Change already pending', `Product ${product.code} already has a pending change`);
     }

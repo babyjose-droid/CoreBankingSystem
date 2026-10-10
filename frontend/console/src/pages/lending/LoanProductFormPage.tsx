@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useLoanProduct, useLoanProductTemplates, usePreviewLoanProduct, useProposeLoanProduct } from '../../api/lendingHooks';
+import { useInterestTables } from '../../api/hooks';
 import { LOAN_PRODUCT_DEFAULTS } from '../../api/types';
 import type { FeeRule, LoanProduct } from '../../api/types';
 import { Banner, Button, Card, Checkbox, ErrorBanner, Input, PageHeader, Select, Spinner } from '../../ui';
@@ -277,6 +278,7 @@ export function LoanProductFormPage() {
 }
 
 function ProductForm({ initial }: { initial: LoanProduct | null }) {
+  const tables = useInterestTables();
   const [d, setD] = useState<Draft>(() => toDraft(initial));
   const [touched, setTouched] = useState(false);
   const propose = useProposeLoanProduct();
@@ -300,6 +302,12 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
   const toast = useProposalToast();
   const navigate = useNavigate();
   const v = validate(d);
+  const floating = d.rateType === 'FLOATING' && !!d.benchmarkCode;
+  const fits = (mode: string) => (mode === 'SPREAD') === floating;
+  const tableOptions = [
+    ...(tables.data ?? []).filter((t) => fits(t.mode) || t.code === d.interestTableCode).map((t) => ({ value: t.code, label: `${t.code} — ${t.name} (${t.mode === 'SPREAD' ? 'spread' : t.mode === 'ADDITIVE' ? 'base + slab' : 'fixed'})` })),
+    ...(d.interestTableCode && !(tables.data ?? []).some((t) => t.code === d.interestTableCode) ? [{ value: d.interestTableCode, label: d.interestTableCode }] : []),
+  ];
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
   const setFee = (key: number, patch: Partial<FeeDraft>) => setD((x) => ({ ...x, fees: x.fees.map((f) => (f.key === key ? { ...f, ...patch } : f)) }));
   const err = (k: string) => (touched ? v.e[k] : null);
@@ -375,12 +383,13 @@ function ProductForm({ initial }: { initial: LoanProduct | null }) {
           <div className="form-grid">
             <Input label="Minimum rate % p.a." required numeric value={d.minRate} onChange={(e) => set({ minRate: e.target.value })} error={err('minRate')} />
             <Input label="Maximum rate % p.a." required numeric value={d.maxRate} onChange={(e) => set({ maxRate: e.target.value })} error={err('maxRate')} />
-            <Input
-              label="Interest table code"
-              hint={d.rateType === 'FLOATING' && d.benchmarkCode ? 'A SPREAD table: its rows are spreads over the benchmark (floating rate slab)' : 'Leave empty to enter the rate on each loan'}
-              className="mono"
+            <Select
+              label="Interest table"
+              hint={d.rateType === 'FLOATING' && d.benchmarkCode ? 'A SPREAD table: its rows are spreads over the benchmark (floating rate slab)' : 'None: the rate is entered on each loan. A SPREAD table needs a benchmark.'}
+              placeholder="None"
               value={d.interestTableCode}
-              onChange={(e) => set({ interestTableCode: e.target.value.toUpperCase() })}
+              onChange={(e) => set({ interestTableCode: e.target.value })}
+              options={tableOptions}
             />
             <Select label="Rate type" value={d.rateType} onChange={(e) => set({ rateType: e.target.value as Draft['rateType'] })} options={opts(['FIXED', 'FLOATING'] as const)} />
             <Select label="Day count" value={d.dayCount} onChange={(e) => set({ dayCount: e.target.value as Draft['dayCount'] })} options={opts(['ACTUAL_365', 'ACTUAL_360', 'ACTUAL_ACTUAL', 'THIRTY_360', 'THIRTY_E_360', 'ACTUAL_366', 'ACTUAL_364', 'ACTUAL_336', 'ACTUAL_372'] as const)} />

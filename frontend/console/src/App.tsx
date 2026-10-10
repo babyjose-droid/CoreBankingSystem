@@ -57,6 +57,7 @@ import { ReportsPage } from './pages/reports/ReportsPage';
 import { HolidaysPage } from './pages/masters/HolidaysPage';
 import { TaxRatesPage } from './pages/masters/TaxRatesPage';
 import { BenchmarksPage } from './pages/masters/BenchmarksPage';
+import { InterestTablesPage } from './pages/masters/InterestTablesPage';
 import { ToastProvider } from './ui';
 
 export function createQueryClient(): QueryClient {
@@ -144,6 +145,7 @@ export function AppRoutes() {
         <Route path="masters/branches" element={guard(P.branchView, <BranchesPage />)} />
         <Route path="masters/holidays" element={guard(P.holidayView, <HolidaysPage />)} />
         <Route path="masters/tax-rates" element={guard(P.taxRateView, <TaxRatesPage />)} />
+        <Route path="masters/interest-tables" element={guard(P.productView, <InterestTablesPage />)} />
         <Route path="masters/benchmarks" element={guard(P.benchmarkView, <BenchmarksPage />)} />
         <Route path="masters/branch-sets" element={guard(P.branchView, <BranchSetsPage />)} />
         <Route path="masters/staff" element={guard(P.staffView, <StaffPage />)} />

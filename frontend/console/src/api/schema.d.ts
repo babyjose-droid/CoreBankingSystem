@@ -919,6 +919,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/interest-tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Interest-rate slab tables with their rows and the products that use them
+         * @description Permission product:view.
+         */
+        get: operations["listInterestTables"];
+        put?: never;
+        /**
+         * Propose a new interest table, or the replacement of an existing one's rows (maker-checker)
+         * @description Permission product:propose. The whole table is proposed: an existing code is replaced on approval. 422 when bands overlap (amount and tenor bands include both ends), a rate is out of range (0 to 60 percent; spreads 0 to 30), a band is malformed, or a table in use by a product would change to or from SPREAD. Approving a product that attaches a SPREAD table to a product without a benchmark (or a benchmark product to a non-SPREAD table) is also 422. Loans already booked keep their rate; a replaced SPREAD table applies from the loan's next reset.
+         */
+        post: operations["proposeInterestTable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/benchmarks": {
         parameters: {
             query?: never;
@@ -4362,6 +4386,53 @@ export interface components {
             /** Format: uuid */
             approvalId?: string | null;
         };
+        InterestTableRow: {
+            minAmount: string;
+            maxAmount: string;
+            minTenorMonths: number;
+            maxTenorMonths: number;
+            /** @description Percent per annum; for a SPREAD table the spread over the benchmark */
+            rate: string;
+        };
+        InterestTable: {
+            code: string;
+            name: string;
+            /**
+             * @description ABSOLUTE is the fixed table: the slab rate is the loan rate. ADDITIVE: base rate + slab. SPREAD: slab = spread over the product benchmark.
+             * @enum {string}
+             */
+            mode: "ABSOLUTE" | "ADDITIVE" | "SPREAD";
+            baseRate: string;
+            /** Format: date */
+            effectiveFrom: string;
+            rows: components["schemas"]["InterestTableRow"][];
+            usedByProducts: string[];
+        };
+        InterestTableRowInput: {
+            minAmount: number | string;
+            maxAmount: number | string;
+            minTenorMonths: number;
+            maxTenorMonths: number;
+            /** @description Percent, at most four decimals; 0 to 60 (spread: 0 to 30) */
+            rate: number | string;
+        };
+        InterestTableInput: {
+            code: string;
+            name: string;
+            /**
+             * @description FIXED is an alias of ABSOLUTE
+             * @enum {string}
+             */
+            mode: "FIXED" | "ABSOLUTE" | "ADDITIVE" | "SPREAD";
+            /** @description ADDITIVE only */
+            baseRate?: number | string;
+            /**
+             * Format: date
+             * @description Defaults to the business date
+             */
+            effectiveFrom?: string | null;
+            rows: components["schemas"]["InterestTableRowInput"][];
+        };
         BenchmarkInput: {
             code: string;
             name: string;
@@ -5175,7 +5246,7 @@ export interface components {
             /** @example 0 0 6 1 * * */
             schedule?: string | null;
             enabled?: boolean;
-            /** @description Report jobs take `period` (BUSINESS_DATE, PREVIOUS_DAY, MONTH_TO_DATE, PREVIOUS_MONTH), `parameters` (the report's own, without dates) and `emailTo`. Other jobs take none. */
+            /** @description Report jobs take `period` (BUSINESS_DATE, PREVIOUS_DAY, MONTH_TO_DATE, PREVIOUS_MONTH), `parameters` (the report's own, without dates) and `emailTo` (a list of addresses). Every address must be on a domain of the tenant property `mail.internal-domains`, else 422 naming the domain (never the address). Other jobs take none. */
             parameters?: {
                 [key: string]: unknown;
             };
@@ -6800,6 +6871,44 @@ export interface operations {
                     "application/json": components["schemas"]["LoanProduct"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listInterestTables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered by code; rows by amount band, then tenor band */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InterestTable"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeInterestTable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InterestTableInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
             default: components["responses"]["Problem"];
         };
     };
