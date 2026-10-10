@@ -148,6 +148,10 @@ class TrancheBulletAndRateStepTest {
         assertEquals(1, changes.size(), "one step");
         assertEquals(LoanAccount.RateCause.TENURE_STEP, changes.get(0).cause());
         assertEquals(6, a.futureSchedule().size(), "tenure kept");
+        Amendment.Effect effect = changes.get(0).effect();
+        assertTrue(effect.emiBefore().compareTo(effect.emiAfter()) < 0, "the history shows the EMI paid until the step, then the stepped one");
+        assertTrue(effect.emiBefore().subtract(disclosed.get(5).instalment()).abs().compareTo(BigDecimal.ONE) <= 0, "before = the instalment last demanded");
+        assertTrue(effect.emiAfter().subtract(disclosed.get(6).instalment()).abs().compareTo(BigDecimal.ONE) <= 0, "after = the stepped instalment");
         // paid on time, the rebuilt schedule is the disclosed one
         for (int i = 0; i < 6; i++) {
             assertTrue(a.futureSchedule().get(i).instalment().subtract(disclosed.get(6 + i).instalment()).abs().compareTo(BigDecimal.ONE) <= 0,

@@ -1274,7 +1274,7 @@ public final class LoanAccount {
                     rateReset != null && rateReset.outsideBand(), applied);
             rateChanges.add(new RateChange(RateCause.TENURE_STEP, day, List.of(day), null, null, null, before, rate,
                     Amendment.RateResetOption.KEEP_TENURE_CHANGE_EMI, o == null ? null : o.applied(), o == null ? null : o.fallbackReason(),
-                    false, null, o == null ? null : o.effect()));
+                    false, null, o == null ? null : stepEffect(o.effect())));
         }
         FloatingRate f = p.floating();
         if (f == null || !floatingNow() || rateReset.next() == null || rateReset.next().isAfter(day)) return;
@@ -1310,6 +1310,20 @@ public final class LoanAccount {
 
     private boolean floatingNow() {
         return p.floating() != null && rateReset != null && rateReset.fixedSince() == null;
+    }
+
+    /**
+     * The schedule of a stepped loan is laid out in advance (the KFS shows every step), so when the step is applied the
+     * rows ahead already carry the new instalment and the amendment would show the same EMI before and after. For the
+     * history the EMI "before" is the instalment last demanded, the one the borrower was paying until the step.
+     */
+    private Amendment.Effect stepEffect(Amendment.Effect e) {
+        if (e == null || demands.isEmpty() || e.emiBefore().compareTo(e.emiAfter()) != 0) return e;
+        DemandRow last = demands.get(demands.size() - 1);
+        BigDecimal paying = last.principalDue().add(last.interestDue());
+        return new Amendment.Effect(e.kind(), e.principal(), e.accruedCarried(), e.rateBefore(), e.rateAfter(), paying, e.emiAfter(),
+                e.remainingBefore(), e.remainingAfter(), e.nextDueBefore(), e.nextDueAfter(), e.maturityBefore(), e.maturityAfter(),
+                e.interestBefore(), e.interestAfter(), e.brokenPeriodInterest(), e.scheduleBefore(), e.scheduleAfter());
     }
 
     private record RateOutcome(Amendment.Effect effect, Amendment.RateResetOption applied, String fallbackReason) {}
