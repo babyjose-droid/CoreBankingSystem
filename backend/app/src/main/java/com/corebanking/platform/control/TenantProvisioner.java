@@ -34,6 +34,9 @@ public class TenantProvisioner {
                           String starterKit, HeadOffice headOffice, LocalDate firstBusinessDate, List<String> adminUsers,
                           String kmsKeyArn, String dbSecretArn) {}
 
+    /** @param registrationRef the RBI certificate of registration; required to record, kept when withdrawn */
+    public record DepositRegistration(Boolean depositTaking, String registrationRef) {}
+
     /** Keycloak client of the tenant's LOS / integration (see infra/keycloak/new-tenant-realm.py). */
     static final String SERVICE_ACCOUNT = "service-account-corebanking-service";
     public record MigrationResult(String tenant, String currentVersion, List<String> pending, String status, String error) {}
@@ -154,6 +157,7 @@ public class TenantProvisioner {
         List<Map<String, Object>> rows = control.queryForList("""
                 SELECT t.id, t.code, t.legal_name AS "legalName", t.entity_type AS "entityType",
                        t.deployment_tier AS "deploymentTier", t.edition_code AS edition, t.status,
+                       t.deposit_taking AS "depositTaking", t.deposit_registration_ref AS "depositRegistrationRef",
                        coalesce(array_to_string(array_agg(m.module_code ORDER BY m.module_code) FILTER (WHERE m.enabled), ','), '') AS modules
                   FROM control.tenant t LEFT JOIN control.tenant_module m ON m.tenant_id = t.id
                  WHERE t.code = ? GROUP BY t.id
@@ -178,6 +182,37 @@ public class TenantProvisioner {
         }
         control.update("INSERT INTO control.operator_action (tenant_id, operator, action, reason) VALUES (?, ?, 'SET_MODULES', ?)",
                 id, operator, String.join(",", modules));
+        directory.evict(code);
+        return tenant(code);
+    }
+
+    /**
+     * Records, or withdraws, an NBFC's registration with RBI to accept public deposits (open item P4-04). The control
+     * plane is written first: it refuses anything but an NBFC, a missing registration reference, and a withdrawal
+     * while the TD module is enabled, and it writes the operator log. The tenant's own database is then told, which
+     * puts the NBFC rule set in force there and adds the term deposit heads to its chart. The TD module is enabled
+     * separately (PUT /platform/v1/tenants/{code}/modules). Repeating the call is safe.
+     */
+    public Map<String, Object> setDepositTaking(String code, DepositRegistration r, String operator) {
+        if (r == null || r.depositTaking() == null) throw ApiException.invalid("depositTaking is required (true or false)");
+        String ref = r.registrationRef() == null ? null : r.registrationRef().trim();
+        if (r.depositTaking() && (ref == null || ref.isEmpty() || ref.length() > 100)) {
+            throw ApiException.invalid("registrationRef is required: the RBI certificate of registration (at most 100 characters)");
+        }
+        tenant(code);                                                   // 404 for an unknown tenant
+        control.queryForObject("SELECT true FROM control.set_deposit_taking(?, ?, ?, ?)", Boolean.class, code, r.depositTaking(), ref, operator);
+        javax.sql.DataSource ds = router.getResolvedDataSources().get(code);
+        if (ds == null) {
+            throw ApiException.conflict("the registration is recorded in the control plane, but tenant " + code
+                    + " is not running on this instance; repeat the call when it is");
+        }
+        try {
+            new JdbcTemplate(ds).queryForObject("SELECT true FROM deposits.set_deposit_taking(?, ?)", Boolean.class, r.depositTaking(), ref);
+        } catch (RuntimeException e) {
+            log.error("deposit registration of {} recorded in the control plane but not in the tenant database", code, e);
+            throw ApiException.conflict("the registration is recorded in the control plane, but the tenant database refused it; repeat the call: "
+                    + e.getMessage());
+        }
         directory.evict(code);
         return tenant(code);
     }

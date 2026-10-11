@@ -222,7 +222,11 @@
               "collection:create",
               "mandate:register",
               "payout:beneficiary",
-              "loan:classify"
+              "loan:classify",
+              "casa:view",
+              "casa:open",
+              "deposit:view",
+              "deposit:book"
             ]
           }
         }
@@ -263,7 +267,9 @@
               "mandate:view",
               "message:view",
               "payout:view",
-              "webhook:view"
+              "webhook:view",
+              "casa:view",
+              "deposit:view"
             ]
           }
         }
@@ -296,7 +302,9 @@
               "job:run",
               "integration:view",
               "message:view",
-              "webhook:view"
+              "webhook:view",
+              "casa:view",
+              "deposit:view"
             ]
           }
         }
@@ -336,7 +344,9 @@
               "mandate:view",
               "message:view",
               "payout:view",
-              "webhook:view"
+              "webhook:view",
+              "casa:view",
+              "deposit:view"
             ]
           }
         }
@@ -423,7 +433,11 @@
               "webhook:view",
               "webhook:admin",
               "session:admin",
-              "support-access:approve"
+              "support-access:approve",
+              "casa:view",
+              "casa:open",
+              "deposit:view",
+              "deposit:book"
             ]
           }
         }
@@ -886,6 +900,30 @@
           "description": "Approve or revoke platform support access",
           "composite": false,
           "clientRole": true
+        },
+        {
+          "name": "casa:view",
+          "description": "View savings and current accounts and their products",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "casa:open",
+          "description": "Propose the opening of a savings or current account (maker)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "deposit:view",
+          "description": "View term deposits and their products; preview a deposit",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "deposit:book",
+          "description": "Propose the booking of a term deposit (maker)",
+          "composite": false,
+          "clientRole": true
         }
       ]
     }
@@ -1259,7 +1297,11 @@
           "webhook:view",
           "webhook:admin",
           "session:admin",
-          "support-access:approve"
+          "support-access:approve",
+          "casa:view",
+          "casa:open",
+          "deposit:view",
+          "deposit:book"
         ]
       },
       {
@@ -1339,7 +1381,11 @@
           "webhook:view",
           "webhook:admin",
           "session:admin",
-          "support-access:approve"
+          "support-access:approve",
+          "casa:view",
+          "casa:open",
+          "deposit:view",
+          "deposit:book"
         ]
       },
       {
@@ -1420,7 +1466,11 @@
           "webhook:view",
           "webhook:admin",
           "session:admin",
-          "support-access:approve"
+          "support-access:approve",
+          "casa:view",
+          "casa:open",
+          "deposit:view",
+          "deposit:book"
         ]
       }
     ]

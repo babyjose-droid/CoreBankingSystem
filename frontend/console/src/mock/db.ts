@@ -1,3 +1,5 @@
+import type { DepositsDb, MockOpening } from './deposits';
+import type { DepositProduct } from '../api/types';
 import type {
   CustomField,
   DeferredReceipt,
@@ -123,7 +125,10 @@ export type ApprovalPayload =
   | { kind: 'PRODUCT_CUSTOM'; code: string; custom: Record<string, unknown> }
   | { kind: 'JOB_SCHEDULE'; code: string; schedule: string | null; enabled: boolean; parameters: Record<string, unknown> }
   | { kind: 'CUSTOMER_RELATIONSHIPS'; customerId: string; relationships: RelationshipInput[] }
-  | { kind: 'EXPOSURE_LIMIT'; customerId: string; limit: number | null; reason: string };
+  | { kind: 'EXPOSURE_LIMIT'; customerId: string; limit: number | null; reason: string }
+  | { kind: 'DEPOSIT_PRODUCT'; product: DepositProduct }
+  | { kind: 'DEPOSIT_PRODUCT_WITHDRAW'; code: string }
+  | { kind: 'DEPOSIT_ACCOUNT'; opening: MockOpening };
 
 export type StoredStaff = Required<Omit<Staff, 'userId'>> & { userId: string };
 
@@ -350,6 +355,8 @@ export interface MockDb {
   jobRuns: JobRun[];
   supportAccess: SupportAccess[];
   integration: IntegrationDb;
+  /** Deposits (Phase 4): what the demo tenant may offer, its products and accounts. */
+  deposits: DepositsDb;
   idempotency: Map<string, { status: number; body: unknown }>;
   /** Fault injection for demos/tests: the named EOD step fails once. */
   eodFailAtStep: string | null;

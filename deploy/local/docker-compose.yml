@@ -11,6 +11,8 @@ name: corebanking
 x-db-passwords: &db-passwords
   CONTROL_DB_PASSWORD: ${CONTROL_DB_PASSWORD:-control-local-only}
   TENANT_DEMO_NBFC_DB_PASSWORD: ${TENANT_DEMO_NBFC_DB_PASSWORD:-demo-nbfc-local-only}
+  TENANT_DEMO_BANK_DB_PASSWORD: ${TENANT_DEMO_BANK_DB_PASSWORD:-demo-bank-local-only}
+  TENANT_DEMO_NBFC_D_DB_PASSWORD: ${TENANT_DEMO_NBFC_D_DB_PASSWORD:-demo-nbfc-d-local-only}
 
 services:
   postgres:
@@ -31,6 +33,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # LOCAL ONLY, runs once on every `up` and exits: creates the databases of the demo tenants added in Phase 4
+  # (demo-bank, demo-nbfc-d) when they are missing, so a postgres volume created earlier needs no reset.
+  postgres-demo-tenants:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *db-passwords
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres-local-only}
+    volumes:
+      - ./postgres/ensure-demo-tenants.sh:/ensure-demo-tenants.sh:ro
+    entrypoint: ["bash", "/ensure-demo-tenants.sh"]
+    restart: "no"
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.4
@@ -110,6 +129,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-demo-tenants:
+        condition: service_completed_successfully
       keycloak:
         condition: service_healthy
       s3:
@@ -127,7 +148,9 @@ services:
       # Tokens say iss=http://localhost:8081/...; signing keys are fetched over the compose network instead.
       COREBANKING_OIDC_ISSUER_PREFIX: http://localhost:8081/realms/
       COREBANKING_OIDC_JWKS_BASE: http://keycloak:8081/realms/
-      # LOCAL ONLY: provision demo-nbfc on first start (starter kit, HO + MUM branches, business date 30-Jun-2026).
+      # LOCAL ONLY: provision the demo tenants on first start (starter kit, HO + MUM branches, business date
+      # 30-Jun-2026): demo-nbfc (lending, no deposits), demo-bank (savings, current and term deposits) and
+      # demo-nbfc-d (an NBFC recorded as deposit-taking: term deposits only).
       COREBANKING_BOOTSTRAP_DEMO_TENANT: "true"
       # P2-2 integrations, local only: the simulator reports payouts as paid without moving any money.
       # SMTP: the e-mail provider through the mail relay (Mailpit here).
@@ -168,6 +191,19 @@ services:
       COREBANKING_TENANT_DEMO_NBFC_URL: jdbc:postgresql://postgres:5432/tenant_demo_nbfc
       COREBANKING_TENANT_DEMO_NBFC_USER: tenant_demo_nbfc
       COREBANKING_TENANT_DEMO_NBFC_PASSWORD: ${TENANT_DEMO_NBFC_DB_PASSWORD:-demo-nbfc-local-only}
+      # The Phase 4 demo tenants. LOCAL ONLY: they share the demo personal-data keys above (each real tenant has
+      # its own keys). Their realms have no corebanking-admin client, so Sessions and API clients work on
+      # demo-nbfc only.
+      COREBANKING_TENANT_DEMO_BANK_URL: jdbc:postgresql://postgres:5432/tenant_demo_bank
+      COREBANKING_TENANT_DEMO_BANK_USER: tenant_demo_bank
+      COREBANKING_TENANT_DEMO_BANK_PASSWORD: ${TENANT_DEMO_BANK_DB_PASSWORD:-demo-bank-local-only}
+      COREBANKING_TENANT_DEMO_BANK_PII_KEY: ${DEMO_PII_KEY:?run ./init-env.sh first}
+      COREBANKING_TENANT_DEMO_BANK_PII_INDEX_KEY: ${DEMO_PII_INDEX_KEY:?run ./init-env.sh first}
+      COREBANKING_TENANT_DEMO_NBFC_D_URL: jdbc:postgresql://postgres:5432/tenant_demo_nbfc_d
+      COREBANKING_TENANT_DEMO_NBFC_D_USER: tenant_demo_nbfc_d
+      COREBANKING_TENANT_DEMO_NBFC_D_PASSWORD: ${TENANT_DEMO_NBFC_D_DB_PASSWORD:-demo-nbfc-d-local-only}
+      COREBANKING_TENANT_DEMO_NBFC_D_PII_KEY: ${DEMO_PII_KEY:?run ./init-env.sh first}
+      COREBANKING_TENANT_DEMO_NBFC_D_PII_INDEX_KEY: ${DEMO_PII_INDEX_KEY:?run ./init-env.sh first}
       TZ: Asia/Kolkata
     ports:
       - "127.0.0.1:8080:8080"
@@ -199,6 +235,9 @@ services:
       # this container shares the backend's network namespace (and with it Docker's DNS for the compose network),
       # exactly as COREBANKING_OIDC_JWKS_BASE above. localhost:8081 would NOT work inside this namespace.
       VITE_DEV_LOGIN: "1"
+      # LOCAL ONLY: the development sign-in offers these tenants (one Keycloak realm each, all with console-dev).
+      # The first is the default. SSO stays on the realm of VITE_OIDC_AUTHORITY.
+      VITE_DEV_TENANTS: demo-nbfc,demo-bank,demo-nbfc-d
       # LOCAL ONLY: the webhook form accepts http://webhook-echo:... (matches COREBANKING_WEBHOOK_LOCAL_ALLOW_HOSTS above).
       VITE_WEBHOOK_LOCAL_HOSTS: webhook-echo
       VITE_KEYCLOAK_PROXY_TARGET: http://keycloak:8081

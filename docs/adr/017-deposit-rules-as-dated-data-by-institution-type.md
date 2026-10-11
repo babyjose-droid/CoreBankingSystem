@@ -17,6 +17,12 @@ Date: 2026-10-10
 - **Unverified rules are visible as such.** Staff screens and the status document show `verified = false`; such a rule is still applied.
 
 ## Consequences
-- A regulatory change is made by a compliance user through maker-checker (from P4-1), without a release.
+- A regulatory change is meant to be made by a compliance user through maker-checker, without a release. That API is not built yet (open item P4-05); until it is, a changed rule is a migration.
 - Two tenants of different types run the same code and get different refusals and figures.
 - The product does not decide whether a tenant may take deposits: it records the tenant's registration and enforces the rules that follow from it.
+
+## Amendment (11-Oct-2026, P4-1): the rate card and the three places a rule is held
+- **The rate card holds the full rate** for an amount step and a tenure step, plus named add-ons (decision D-16, option A). It is never a base rate plus a slab rate. A step is given by where it starts and runs to the next one, so a card has no gaps between steps; what it can lack is a cell, and a product with a missing cell is not approved.
+- **A rule is checked in three places, with the same answer.** The engine reports every reason at once, so the API can answer 422 with all of them when a product or an account is proposed. The same check runs again when the request is approved, on the rule set of that day. The database holds the rule whatever the application does (tenant V29).
+- **What a deposit was promised is frozen on it.** A term deposit carries its rate with its parts and the product settings that decide its interest, tax and premature repayment, as they were on the day it was booked. A later product version changes new deposits only.
+- **Recording an NBFC's registration** is one operator call (`PUT /platform/v1/tenants/{code}/deposit-registration`) that writes the control plane and then the tenant's database.

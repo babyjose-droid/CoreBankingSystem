@@ -258,6 +258,22 @@ jobs:
           if python infra/keycloak/new-tenant-realm.py --tenant Bad_Code --console-url https://x.example.in; then
             echo "invalid tenant code accepted"; exit 1
           fi
+      - name: Local demo realms are the template, rendered
+        run: |
+          # demo-bank and demo-nbfc-d (Phase 4) are rendered from the demo-nbfc template for the local stack only
+          # (demo users and the development sign-in kept). A change to the template must be rendered into them.
+          for t in "demo-bank|CLAUDE-TEST Demo Bank (local development)" "demo-nbfc-d|CLAUDE-TEST Demo Deposit NBFC (local development)"; do
+            python infra/keycloak/new-tenant-realm.py --tenant "${t%%|*}" --console-url http://localhost:5173 \
+              --display-name "${t##*|}" --keep-demo-users --keep-dev-login --out "/tmp/${t%%|*}-realm.json"
+            python - "${t%%|*}" <<'EOF'
+          import json, sys
+          tenant = sys.argv[1]
+          committed = json.load(open(f"deploy/local/keycloak/{tenant}-realm.json"))
+          rendered = json.load(open(f"/tmp/{tenant}-realm.json"))
+          assert committed == rendered, f"deploy/local/keycloak/{tenant}-realm.json is not the rendered template; render it again (deploy/local/README.md)"
+          print(f"{tenant} realm matches the template")
+          EOF
+          done
       - name: Tenant realm has no development sign-in
         run: |
           python - <<'EOF'

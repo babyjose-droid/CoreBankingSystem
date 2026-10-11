@@ -19,6 +19,15 @@ export const config = {
   webhookLocalHosts: env.DEV
     ? ((env.VITE_WEBHOOK_LOCAL_HOSTS as string | undefined) ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
     : ([] as string[]),
+  /**
+   * LOCAL DEVELOPMENT ONLY: tenants (Keycloak realms) the development sign-in offers, set with VITE_DEV_TENANTS; the
+   * first is the default. Empty unless the development sign-in itself is on: then the realm of the identity provider
+   * URL is the only one.
+   */
+  devTenants:
+    env.DEV && env.VITE_DEV_LOGIN === '1' && !mock
+      ? ((env.VITE_DEV_TENANTS as string | undefined) ?? '').split(',').map((t) => t.trim()).filter((t) => /^[a-z][a-z0-9-]{2,30}$/.test(t))
+      : ([] as string[]),
   apiBaseUrl: (env.VITE_API_BASE_URL as string | undefined) ?? '',
   oidcAuthority: (env.VITE_OIDC_AUTHORITY as string | undefined) ?? 'http://localhost:8081/realms/demo-nbfc',
   oidcClientId: (env.VITE_OIDC_CLIENT_ID as string | undefined) ?? 'console',

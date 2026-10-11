@@ -1,3 +1,4 @@
+import { emptyDeposits } from './deposits';
 import type { Approval, Branch, EodRun, EodStep, GlHead, Holiday, TaxRate, VoucherInput } from '../api/types';
 import { DEMO_TENANT, DEMO_TENANT_NAME } from '../auth/demoUsers';
 import { customerNumber } from '../lib/luhn';
@@ -266,6 +267,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     jobRuns: [],
     supportAccess: [],
     integration: undefined as never, // filled by seedIntegrations below
+    deposits: emptyDeposits(),
     idempotency: new Map(),
     eodFailAtStep: null,
   };

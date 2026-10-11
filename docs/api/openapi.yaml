@@ -29,6 +29,7 @@ tags:
   - name: EOD
   - name: Audit
   - name: Lending
+  - name: Deposits
   - name: Documents
   - name: Reporting
   - name: Integrations
@@ -3192,6 +3193,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Tenant' }
         default: { $ref: '#/components/responses/Problem' }
+  /platform/v1/tenants/{code}/deposit-registration:
+    put:
+      tags: [Control plane]
+      operationId: setTenantDepositRegistration
+      summary: Record or withdraw an NBFC's registration to accept public deposits
+      description: >-
+        Permission platform:operator. The control plane records the registration (the evidence is the RBI certificate
+        reference) and writes the operator log; the tenant's own database is then told, which puts the deposit-taking NBFC
+        rule set in force there and adds the term deposit heads to its chart. The TD module can be enabled only afterwards
+        (PUT /platform/v1/tenants/{code}/modules). 409 for a tenant that is not an NBFC, and for a withdrawal while the TD
+        module is enabled. Repeating the call is safe.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositRegistration' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Problem' }
   /platform/v1/migrations:
     post:
       tags: [Control plane]
@@ -3622,6 +3648,373 @@ paths:
               schema: { $ref: '#/components/schemas/SupportAccess' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /api/v1/casa/rules:
+    get:
+      tags: [Deposits]
+      operationId: getCasaDepositRules
+      summary: The deposit rule set in force for this institution
+      description: >-
+        Module CASA. Permission product:view, casa:view or deposit:view. The rules are dated rows chosen by the institution's type
+        (BANK, or NBFC_DEPOSIT for an NBFC registered to accept public deposits), each with its source and whether the source
+        text was verified. The same answer under /api/v1/casa/rules and /api/v1/deposits/rules.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositRuleSet' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/products:
+    get:
+      tags: [Deposits]
+      operationId: listCasaProducts
+      summary: Savings and current products
+      description: >-
+        Module CASA. Permission product:view or casa:view. Ordered by code; withdrawn products included.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositProduct' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaProduct
+      summary: Propose a new savings and current product, or the replacement of an existing one (maker-checker)
+      description: >-
+        Module CASA. Permission product:propose. The whole product is proposed; an existing code is replaced on approval and
+        becomes its next version (every version is kept). 422 with `problems`, every reason at once, when the product cannot be
+        approved under the rule set in force: a savings rate band below the uniform-rate limit, interest on a current account,
+        or an institution that may not take demand deposits. The check is repeated when the
+        request is approved. The family and type of a product never change; a withdrawn product is not changed (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositProductInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/products/check:
+    post:
+      tags: [Deposits]
+      operationId: checkCasaProduct
+      summary: What stops a product as entered from being approved; nothing is stored
+      description: >-
+        Module CASA. Permission product:propose. `problems` is empty when the product can be proposed. 422 when the input
+        itself is malformed (a missing code, an amount with three decimals).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositProductInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositProblems' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/products/{code}:
+    get:
+      tags: [Deposits]
+      operationId: getCasaProduct
+      summary: One savings and current product
+      description: >-
+        Module CASA. Permission product:view or casa:view. 404 for a product of the other family.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositProduct' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/products/{code}/history:
+    get:
+      tags: [Deposits]
+      operationId: getCasaProductHistory
+      summary: Every version of the product, newest first
+      description: >-
+        Module CASA. Permission product:view.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositProductVersion' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/products/{code}/withdraw:
+    post:
+      tags: [Deposits]
+      operationId: withdrawCasaProduct
+      summary: Propose the withdrawal of a product (maker-checker)
+      description: >-
+        Module CASA. Permission product:propose. A withdrawn product takes no new account; its accounts go on as they are.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositProductWithdrawal' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts:
+    get:
+      tags: [Deposits]
+      operationId: listCasaAccounts
+      summary: Savings and current accounts in the caller's branches, newest first
+      description: >-
+        Module CASA. Permission casa:view. At most 500.
+      parameters:
+        - { name: customerId, in: query, schema: { type: string, format: uuid }, description: 'Accounts this customer holds, as any holder' }
+        - { name: status, in: query, schema: { type: string, enum: [BOOKED, ACTIVE, MATURED, CLOSED, CANCELLED] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositAccountSummary' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: openCasaAccount
+      summary: Propose the opening of a savings or current account (maker-checker)
+      description: >-
+        Module CASA. Permission casa:open. The account opens with no balance when the request is approved; its number comes
+        from the CASA series. 422 with `problems`, every reason at once: a holder who is not ACTIVE or whose KYC is not VERIFIED,
+        a holder under 18, the wrong number of holders for the operating mode, a joint holder that is not an individual, nominee
+        shares that do not total 100, more nominees than the rule set allows, a withdrawn product, a branch that is not active.
+        403 for a branch outside the caller's branch scope. 409 while the business day is not OPEN.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CasaAccountInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}:
+    get:
+      tags: [Deposits]
+      operationId: getCasaAccount
+      summary: One savings or current account with its holders and nominees
+      description: >-
+        Module CASA. Permission casa:view. 404 outside the caller's branch scope.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositAccount' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/rules:
+    get:
+      tags: [Deposits]
+      operationId: getTermDepositRules
+      summary: The deposit rule set in force for this institution
+      description: >-
+        Module TD. Permission product:view, casa:view or deposit:view. The rules are dated rows chosen by the institution's type
+        (BANK, or NBFC_DEPOSIT for an NBFC registered to accept public deposits), each with its source and whether the source
+        text was verified. The same answer under /api/v1/casa/rules and /api/v1/deposits/rules.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositRuleSet' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/products:
+    get:
+      tags: [Deposits]
+      operationId: listTermProducts
+      summary: Term deposit products
+      description: >-
+        Module TD. Permission product:view or deposit:view. Ordered by code; withdrawn products included.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositProduct' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeTermProduct
+      summary: Propose a new term deposit product, or the replacement of an existing one (maker-checker)
+      description: >-
+        Module TD. Permission product:propose. The whole product is proposed; an existing code is replaced on approval and
+        becomes its next version (every version is kept). 422 with `problems`, every reason at once, when the product cannot be
+        approved under the rule set in force: for a term deposit product that includes an amount or tenure it accepts that has no
+        rate, a rate above the ceiling with every add-on, and a tenure outside the rule set's limits. The check is repeated when the
+        request is approved. The family and type of a product never change; a withdrawn product is not changed (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositProductInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/products/check:
+    post:
+      tags: [Deposits]
+      operationId: checkTermProduct
+      summary: What stops a product as entered from being approved; nothing is stored
+      description: >-
+        Module TD. Permission product:propose. `problems` is empty when the product can be proposed. 422 when the input
+        itself is malformed (a missing code, an amount with three decimals).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositProductInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositProblems' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/products/{code}:
+    get:
+      tags: [Deposits]
+      operationId: getTermProduct
+      summary: One term deposit product
+      description: >-
+        Module TD. Permission product:view or deposit:view. 404 for a product of the other family.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositProduct' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/products/{code}/history:
+    get:
+      tags: [Deposits]
+      operationId: getTermProductHistory
+      summary: Every version of the product, newest first
+      description: >-
+        Module TD. Permission product:view.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositProductVersion' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/products/{code}/withdraw:
+    post:
+      tags: [Deposits]
+      operationId: withdrawTermProduct
+      summary: Propose the withdrawal of a product (maker-checker)
+      description: >-
+        Module TD. Permission product:propose. A withdrawn product takes no new account; its accounts go on as they are.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositProductWithdrawal' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/preview:
+    post:
+      tags: [Deposits]
+      operationId: previewTermDeposit
+      summary: The figures of a term deposit before it is booked; nothing is stored
+      description: >-
+        Module TD. Permission deposit:view or deposit:book. Rate with its parts (card rate, add-ons), maturity date and value,
+        every interest credit and, for a product that deducts tax, the tax expected on each credit from this deposit's interest
+        alone. The booking and (later) the day-end take the same figures from the same calculation. Interest starts when the
+        deposit is funded; the preview takes the business date as that day. Without a customer the senior citizen add-on
+        cannot be previewed. 422 with `problems` when the product or the rule set does not allow the deposit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TermDepositInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TermDepositPreview' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts:
+    get:
+      tags: [Deposits]
+      operationId: listTermDeposits
+      summary: Term deposits in the caller's branches, newest first
+      description: >-
+        Module TD. Permission deposit:view. At most 500.
+      parameters:
+        - { name: customerId, in: query, schema: { type: string, format: uuid }, description: 'Accounts this customer holds, as any holder' }
+        - { name: status, in: query, schema: { type: string, enum: [BOOKED, ACTIVE, MATURED, CLOSED, CANCELLED] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositAccountSummary' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: bookTermDeposit
+      summary: Propose the booking of a term deposit (maker-checker)
+      description: >-
+        Module TD. Permission deposit:book. On approval the deposit is BOOKED with a number from the term deposit series and
+        its terms are frozen (rate with its parts, interest period, day count, rounding, tax and premature-withdrawal settings
+        of the product version); it waits for its funds, and interest starts on the funding date. 422 with `problems` as for a
+        savings account, and also when the amount or tenure is outside the product or the rule set, an add-on is not the
+        product's or the depositor is not entitled to it, the payout account is not an active savings or current account of
+        the depositor, or the product does not allow renewal. Where the rule set needs the depositor's consent for a renewal
+        (deposit-taking NBFC), a deposit is booked to be paid out. 409 on approval when the product no longer gives the rate
+        that was shown when the deposit was proposed.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TermDepositInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}:
+    get:
+      tags: [Deposits]
+      operationId: getTermDeposit
+      summary: One term deposit with its holders, nominees and frozen terms
+      description: >-
+        Module TD. Permission deposit:view. 404 outside the caller's branch scope.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositAccount' }
+        default: { $ref: '#/components/responses/Problem' }
+
 components:
   securitySchemes:
     bearer:
@@ -3667,6 +4060,10 @@ components:
         status: { type: integer }
         detail: { type: string }
         instance: { type: string }
+        problems:
+          type: array
+          description: Every reason for a refusal, when a check reports them all at once (deposit products, account opening, bookings)
+          items: { type: string }
         errors:
           type: array
           description: Field-level problems (validation), when there are several
@@ -4210,7 +4607,15 @@ components:
         deploymentTier: { type: string }
         edition: { type: string }
         status: { type: string }
+        depositTaking: { type: boolean, description: An NBFC recorded as registered by RBI to accept public deposits }
+        depositRegistrationRef: { type: [string, 'null'] }
         modules: { type: array, items: { type: string } }
+    DepositRegistration:
+      type: object
+      required: [depositTaking]
+      properties:
+        depositTaking: { type: boolean }
+        registrationRef: { type: [string, 'null'], maxLength: 100, description: 'The RBI certificate of registration; required when depositTaking is true' }
     MigrationResult:
       type: object
       properties:
@@ -5382,3 +5787,335 @@ components:
         apiCalls: { type: integer }
         peakStorageBytes: { type: [integer, 'null'] }
         closingStorageBytes: { type: [integer, 'null'] }
+    DepositRuleSet:
+      type: object
+      properties:
+        kind: { type: [string, 'null'], enum: [BANK, NBFC_DEPOSIT, null], description: 'null: this institution takes no deposits here' }
+        entityType: { type: [string, 'null'] }
+        depositTaking: { type: [boolean, 'null'] }
+        depositRegistrationRef: { type: [string, 'null'] }
+        asOf: { type: [string, 'null'], format: date, description: The business date }
+        reason: { type: [string, 'null'], description: 'Why there is no rule set, when kind is null' }
+        unverified: { type: integer, description: Rules whose source text was not read; to be confirmed before go-live }
+        rules:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string, examples: ['td.max-rate-percent'] }
+              value: { type: string, description: 'A number; 1 and 0 for yes and no' }
+              effectiveFrom: { type: string, format: date }
+              source: { type: string }
+              verified: { type: boolean }
+              note: { type: [string, 'null'] }
+    DepositProblems:
+      type: object
+      properties:
+        problems: { type: array, items: { type: string } }
+    DepositInterestBand:
+      type: object
+      required: [fromBalance, ratePercent]
+      properties:
+        fromBalance: { type: [number, string], description: 'The band runs from this balance to the next band; the first starts at 0' }
+        ratePercent: { type: [number, string] }
+    DepositRate:
+      type: object
+      required: [fromAmount, ratePercent]
+      description: >-
+        One cell of the rate card: the full annual rate for deposits from this amount and from this tenure, up to the next
+        step. Never a base rate plus a slab rate.
+      properties:
+        fromAmount: { type: [number, string] }
+        fromMonths: { type: integer, minimum: 0 }
+        fromDays: { type: integer, minimum: 0 }
+        ratePercent: { type: [number, string] }
+    DepositAddOn:
+      type: object
+      required: [code, percent]
+      properties:
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,29}$', description: 'SENIOR_CITIZEN is given only to an individual of the rule set''s senior-citizen age' }
+        percent: { type: [number, string], description: 'Points added to the card rate (negative to take off)' }
+    DepositProductInput:
+      type: object
+      required: [code, name, productType]
+      description: Settings of the other family must be left out.
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9]{2,12}$' }
+        name: { type: string, maxLength: 200 }
+        productType: { type: string, enum: [SAVINGS, CURRENT, FD_CUMULATIVE, FD_PAYOUT] }
+        effectiveFrom: { type: [string, 'null'], format: date, description: Defaults to the business date }
+        dayCount: { type: [string, 'null'], enum: [ACTUAL_365, ACTUAL_360, ACTUAL_ACTUAL, null], description: Default ACTUAL_365 }
+        rounding: { type: [string, 'null'], enum: [PAISE_HALF_UP, PAISE_HALF_EVEN, RUPEE_HALF_UP, RUPEE_DOWN, RUPEE_UP, null], description: Default PAISE_HALF_UP }
+        tdsApplicable: { type: [boolean, 'null'], description: 'Default: true for a term deposit product; for savings, what the rule set says (no). false: no tax is deducted and no preview shows any' }
+        minBalance: { type: [number, string, 'null'], description: Savings and current. Default 0 }
+        interestBands: { type: [array, 'null'], maxItems: 20, items: { $ref: '#/components/schemas/DepositInterestBand' }, description: Savings (required) and current; none for an account that bears no interest }
+        bandMode: { type: [string, 'null'], enum: [WHOLE_BALANCE, INCREMENTAL, null], description: 'Whether the whole balance earns the rate of its band or each part its own. Default WHOLE_BALANCE' }
+        interestPostingMonths: { type: [integer, 'null'], enum: [1, 3, 6, 12, null], description: 'Months between two interest credits. Default 3 (quarterly)' }
+        chequeFacility: { type: [boolean, 'null'] }
+        minAmount: { type: [number, string, 'null'], description: Term deposits. Smallest deposit accepted }
+        maxAmount: { type: [number, string, 'null'], description: Largest deposit accepted; none for no limit }
+        minTenureMonths: { type: [integer, 'null'], minimum: 0 }
+        minTenureDays: { type: [integer, 'null'], minimum: 0 }
+        maxTenureMonths: { type: [integer, 'null'], minimum: 0 }
+        maxTenureDays: { type: [integer, 'null'], minimum: 0 }
+        interestPeriodMonths: { type: [integer, 'null'], enum: [0, 1, 3, 6, 12, null], description: 'Months between two interest credits; 0 (payout products) for interest once, at maturity' }
+        rateCard: { type: [array, 'null'], maxItems: 400, items: { $ref: '#/components/schemas/DepositRate' } }
+        addOns: { type: [array, 'null'], maxItems: 10, items: { $ref: '#/components/schemas/DepositAddOn' } }
+        prematureAllowed: { type: [boolean, 'null'], description: Default true }
+        prematurePenaltyPercent: { type: [number, string, 'null'], description: 'Points taken off the rate for the period run. Left out where the rule set fixes the rate (deposit-taking NBFC)' }
+        prematureMinDays: { type: [integer, 'null'], minimum: 0, description: 'No interest when the deposit ran for fewer days. Left out where the rule set fixes it' }
+        autoRenewalAllowed: { type: [boolean, 'null'], description: Default false }
+        glLiability: { type: [string, 'null'], description: 'Default 2401 savings, 2402 current, 2403 term deposits' }
+        glInterestExpense: { type: [string, 'null'], description: 'Default 5108 savings, 5107 term deposits' }
+    DepositProduct:
+      type: object
+      description: Amounts and rates are decimal strings. Settings of the other family are null.
+      properties:
+        code: { type: string }
+        name: { type: string }
+        family: { type: string, enum: [CASA, TERM_DEPOSIT] }
+        productType: { type: string, enum: [SAVINGS, CURRENT, FD_CUMULATIVE, FD_PAYOUT] }
+        status: { type: string, enum: [ACTIVE, WITHDRAWN] }
+        version: { type: [integer, 'null'] }
+        effectiveFrom: { type: string, format: date }
+        dayCount: { type: [string, 'null'] }
+        rounding: { type: string }
+        tdsApplicable: { type: boolean }
+        minBalance: { type: [string, 'null'] }
+        interestBands:
+          type: [array, 'null']
+          items:
+            type: object
+            properties:
+              fromBalance: { type: string }
+              ratePercent: { type: string }
+        bandMode: { type: [string, 'null'] }
+        interestPostingMonths: { type: [integer, 'null'] }
+        chequeFacility: { type: [boolean, 'null'] }
+        minAmount: { type: [string, 'null'] }
+        maxAmount: { type: [string, 'null'] }
+        minTenureMonths: { type: [integer, 'null'] }
+        minTenureDays: { type: [integer, 'null'] }
+        maxTenureMonths: { type: [integer, 'null'] }
+        maxTenureDays: { type: [integer, 'null'] }
+        interestPeriodMonths: { type: [integer, 'null'] }
+        rateCard:
+          type: [array, 'null']
+          description: Ordered by amount step, then tenure step
+          items:
+            type: object
+            properties:
+              fromAmount: { type: string }
+              fromMonths: { type: integer }
+              fromDays: { type: integer }
+              ratePercent: { type: string }
+        addOns:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/DepositAddOnGiven' }
+        prematureAllowed: { type: [boolean, 'null'] }
+        prematurePenaltyPercent: { type: [string, 'null'] }
+        prematureMinDays: { type: [integer, 'null'] }
+        autoRenewalAllowed: { type: [boolean, 'null'] }
+        glLiability: { type: string }
+        glInterestExpense: { type: [string, 'null'] }
+        updatedBy: { type: [string, 'null'] }
+        updatedAt: { type: [string, 'null'] }
+    DepositAddOnGiven:
+      type: object
+      properties:
+        code: { type: string }
+        percent: { type: string }
+    DepositProductVersion:
+      type: object
+      properties:
+        version: { type: integer }
+        changedBy: { type: string }
+        changedAt: { type: string }
+        approvalId: { type: [string, 'null'] }
+        name: { type: string }
+        status: { type: string }
+    DepositProductWithdrawal:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
+    DepositNomineeInput:
+      type: object
+      required: [name, relationship]
+      properties:
+        name: { type: string, maxLength: 200 }
+        relationship: { type: string, enum: [SPOUSE, CHILD, PARENT, SIBLING, GRANDCHILD, OTHER_RELATIVE, OTHER] }
+        sharePercent: { type: [number, string, 'null'], description: 'SIMULTANEOUS: the shares total 100. SUCCESSIVE: none, the order named decides' }
+        minor: { type: boolean, default: false }
+        guardianName: { type: [string, 'null'], maxLength: 200, description: 'Who receives on a minor nominee''s behalf; required for a minor, not given otherwise' }
+    CasaAccountInput:
+      type: object
+      required: [productCode, customerId, branchCode]
+      properties:
+        productCode: { type: string }
+        customerId: { type: string, format: uuid, description: The sole or first-named holder }
+        jointHolders: { type: array, maxItems: 3, items: { type: string, format: uuid }, description: 'The other holders, in the order named' }
+        branchCode: { type: string }
+        operatingMode: { type: [string, 'null'], enum: [SINGLE, EITHER_OR_SURVIVOR, FORMER_OR_SURVIVOR, ANYONE_OR_SURVIVOR, JOINTLY, null], description: 'Default SINGLE for one holder; required for a joint account' }
+        nominationMode: { type: [string, 'null'], enum: [NONE, SIMULTANEOUS, SUCCESSIVE, null], description: 'Default NONE when no nominee is named; required otherwise' }
+        nominees: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/DepositNomineeInput' } }
+    TermDepositInput:
+      type: object
+      required: [productCode, amount]
+      description: For a preview only productCode, amount and the tenure are required.
+      properties:
+        productCode: { type: string }
+        customerId: { type: [string, 'null'], format: uuid, description: The sole or first-named depositor. Required to book }
+        jointHolders: { type: [array, 'null'], maxItems: 3, items: { type: string, format: uuid } }
+        branchCode: { type: [string, 'null'], description: Required to book }
+        operatingMode: { type: [string, 'null'], enum: [SINGLE, EITHER_OR_SURVIVOR, FORMER_OR_SURVIVOR, ANYONE_OR_SURVIVOR, JOINTLY, null] }
+        nominationMode: { type: [string, 'null'], enum: [NONE, SIMULTANEOUS, SUCCESSIVE, null] }
+        nominees: { type: [array, 'null'], maxItems: 10, items: { $ref: '#/components/schemas/DepositNomineeInput' } }
+        amount: { type: [number, string] }
+        tenureMonths: { type: [integer, 'null'], minimum: 0 }
+        tenureDays: { type: [integer, 'null'], minimum: 0 }
+        addOns: { type: [array, 'null'], items: { type: string }, description: Codes of the product's add-ons claimed for this deposit }
+        payoutTo: { type: [string, 'null'], enum: [CASA, BANK_ACCOUNT, null], description: 'Where interest and maturity proceeds go. Default BANK_ACCOUNT' }
+        payoutAccountId: { type: [string, 'null'], format: uuid, description: 'With CASA: an active savings or current account held by the depositor' }
+        maturityInstruction: { type: [string, 'null'], enum: [PAY_OUT, RENEW_PRINCIPAL, RENEW_WITH_INTEREST, null], description: Default PAY_OUT }
+    TermDepositPreview:
+      type: object
+      properties:
+        productCode: { type: string }
+        productVersion: { type: integer }
+        amount: { $ref: '#/components/schemas/Money' }
+        tenureMonths: { type: integer }
+        tenureDays: { type: integer }
+        startDate: { type: string, format: date, description: 'The business date, taken as the funding date' }
+        maturityDate: { type: string, format: date }
+        ratePercent: { type: string, description: The card rate plus the add-ons given }
+        cardRatePercent: { type: string }
+        cardFromAmount: { type: string, description: The amount step of the rate card the deposit falls in }
+        cardFromMonths: { type: integer }
+        cardFromDays: { type: integer }
+        addOns: { type: array, items: { $ref: '#/components/schemas/DepositAddOnGiven' } }
+        interestPeriodMonths: { type: integer }
+        cumulative: { type: boolean }
+        totalInterest: { $ref: '#/components/schemas/Money' }
+        maturityValue: { $ref: '#/components/schemas/Money', description: 'Repaid at maturity before tax: the principal, plus all interest when cumulative' }
+        annualisedYieldPercent: { type: string }
+        periods:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              from: { type: string, format: date, description: First day that earns }
+              to: { type: string, format: date, description: Day of the credit }
+              balance: { $ref: '#/components/schemas/Money' }
+              interest: { $ref: '#/components/schemas/Money' }
+              whole: { type: boolean, description: 'false for a last period shorter than the interest period' }
+        tdsApplicable: { type: boolean }
+        tax:
+          type: array
+          description: Empty for a product that deducts no tax
+          items:
+            type: object
+            properties:
+              period: { type: integer }
+              'on': { type: string, format: date }
+              taxYearStarting: { type: integer }
+              interest: { $ref: '#/components/schemas/Money' }
+              tax: { $ref: '#/components/schemas/Money' }
+        totalTax: { type: [string, 'null'], description: null for a product that deducts no tax }
+        taxNote: { type: [string, 'null'] }
+        insured: { type: [boolean, 'null'], description: 'false: deposits with this institution are not insured (deposit-taking NBFC); say so on what the depositor is given' }
+    DepositAccountSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        accountNo: { type: string }
+        productCode: { type: string }
+        productName: { type: string }
+        productType: { type: string }
+        customerId: { type: string, format: uuid }
+        customerNo: { type: string }
+        customerName: { type: string }
+        branchCode: { type: string }
+        operatingMode: { type: string }
+        status: { type: string, enum: [BOOKED, ACTIVE, MATURED, CLOSED, CANCELLED] }
+        openedOn: { type: string, format: date }
+        holders: { type: integer }
+        principal: { type: [string, 'null'], description: Term deposits }
+        tenureMonths: { type: [integer, 'null'] }
+        tenureDays: { type: [integer, 'null'] }
+        ratePercent: { type: [string, 'null'] }
+        startDate: { type: [string, 'null'], format: date }
+        maturityDate: { type: [string, 'null'], format: date }
+    DepositAccount:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        accountNo: { type: string }
+        family: { type: string, enum: [CASA, TERM_DEPOSIT] }
+        productCode: { type: string }
+        productVersion: { type: integer, description: The product version the account was opened on }
+        productName: { type: string }
+        productType: { type: string }
+        branchCode: { type: string }
+        operatingMode: { type: string }
+        nominationMode: { type: string }
+        status: { type: string, enum: [BOOKED, ACTIVE, MATURED, CLOSED, CANCELLED], description: 'BOOKED: a term deposit waiting for its funds' }
+        openedOn: { type: string, format: date }
+        openedBy: { type: string }
+        approvalId: { type: [string, 'null'] }
+        holders:
+          type: array
+          items:
+            type: object
+            properties:
+              holderNo: { type: integer, description: 1 is the first-named holder }
+              customerId: { type: string, format: uuid }
+              customerNo: { type: string }
+              name: { type: string }
+        nominees:
+          type: array
+          items:
+            type: object
+            properties:
+              nomineeNo: { type: integer }
+              name: { type: string }
+              relationship: { type: string }
+              sharePercent: { type: [string, 'null'] }
+              minor: { type: boolean }
+              guardianName: { type: [string, 'null'] }
+        nextInterestDate: { type: [string, 'null'], format: date, description: 'Savings and current: the last day of the interest period in progress; null for an account that bears no interest' }
+        termDeposit: { $ref: '#/components/schemas/TermDepositTerms' }
+    TermDepositTerms:
+      type: object
+      description: The terms frozen at booking, with figures from the same calculation as the preview.
+      properties:
+        principal: { type: string }
+        tenureMonths: { type: integer }
+        tenureDays: { type: integer }
+        bookedOn: { type: string, format: date }
+        startDate: { type: [string, 'null'], format: date, description: The funding date; null until the deposit is funded }
+        maturityDate: { type: [string, 'null'], format: date }
+        ratePercent: { type: string }
+        cardRatePercent: { type: string }
+        cardFromAmount: { type: string }
+        cardFromMonths: { type: integer }
+        cardFromDays: { type: integer }
+        addOns: { type: array, items: { $ref: '#/components/schemas/DepositAddOnGiven' } }
+        interestPeriodMonths: { type: integer }
+        cumulative: { type: boolean }
+        dayCount: { type: string }
+        rounding: { type: string }
+        tdsApplicable: { type: boolean }
+        prematureAllowed: { type: boolean }
+        prematurePenaltyPercent: { type: [string, 'null'] }
+        prematureMinDays: { type: [integer, 'null'] }
+        payoutTo: { type: string, enum: [CASA, BANK_ACCOUNT] }
+        payoutAccountId: { type: [string, 'null'] }
+        payoutAccountNo: { type: [string, 'null'] }
+        maturityInstruction: { type: string, enum: [PAY_OUT, RENEW_PRINCIPAL, RENEW_WITH_INTEREST] }
+        funded: { type: boolean }
+        figuresFrom: { type: string, format: date, description: 'The start date of the figures below: the funding date, or the business date while the deposit is not funded' }
+        figuresMaturityDate: { type: string, format: date }
+        totalInterest: { $ref: '#/components/schemas/Money' }
+        maturityValue: { $ref: '#/components/schemas/Money' }

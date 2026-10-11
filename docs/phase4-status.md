@@ -1,6 +1,12 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 10-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 11-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+
+| Increment | State |
+|-----------|-------|
+| P4-0 deposit core | Built, pushed (`9cb5f8e`, `3851a93`), live-tested on the local stack on 10-Oct-2026 |
+| P4-1 products and opening | Built on 11-Oct-2026; not yet pushed or run on the local stack (see "Not verified here" below) |
+| P4-2 to P4-7 | Not started |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -10,6 +16,11 @@ Updated 10-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | 3 | Cheque clearing | Simulator only |
 | 4 | Overdraft on current accounts | Later, with the line-of-credit design |
 | 5 | Savings interest and TDS | Posting frequency is a product setting (default quarterly); TDS follows the Income-tax rule |
+| D-16 | Deposit rate model | Option A: the rate card holds the full rate per amount and tenure step, plus named add-ons. Not base + slab |
+| D-17 | TDS on savings interest | Not deducted by default |
+| D-18 | Bank premature withdrawal | Penalty 1 point, no interest under 7 days; both editable per product. Placeholders, not regulatory values |
+| D-19 | Recurring deposit late charge | A fixed amount per Rs 100 per month of delay, per product. A placeholder formula |
+| D-20 | Joint accounts and minors | Joint accounts yes; accounts for minors later |
 
 Module codes are the ones the control plane already had: `CASA` and `TD` (the plan called the second one `DEPOSITS_TD`).
 
@@ -72,7 +83,7 @@ These are the product's choices. They are settings or one place in the code, and
 - "Rate for the period run" is taken from the rate card as it stood when the deposit was booked, with the deposit's add-ons. The caller supplies it; the engine does not look it up.
 - The 1.5 × NOF cap and renewal consent are rules in the table; nothing enforces them until bookings exist (P4-1, P4-6).
 
-**Banks.** All 14 rows are `verified = false`: the RBI (Commercial Banks – Interest Rate on Deposits) Directions, 2025 could not be opened (open item P4-01). Seeded from summaries: one savings rate up to ₹1 lakh; premature withdrawal mandatory for individuals' term deposits up to ₹1 crore; four nominees (Banking Laws (Amendment) Act, 2025); review after one year, inoperative after two, unclaimed after ten. **Not seeded:** minimum tenor, periodicity of savings interest, interest on overdue deposits, the DICGC cover amount. The BANK rule set is also applied to small finance banks and co-operative banks, whose own Directions were not read.
+**Banks.** All 14 rows (15 with the row added by V29: no interest on current accounts) are `verified = false`: the RBI (Commercial Banks – Interest Rate on Deposits) Directions, 2025 could not be opened (open item P4-01). Seeded from summaries: one savings rate up to ₹1 lakh; premature withdrawal mandatory for individuals' term deposits up to ₹1 crore; four nominees (Banking Laws (Amendment) Act, 2025); review after one year, inoperative after two, unclaimed after ten. **Not seeded:** minimum tenor, periodicity of savings interest, interest on overdue deposits, the DICGC cover amount. The BANK rule set is also applied to small finance banks and co-operative banks, whose own Directions were not read.
 
 **Tax deducted at source.** Section 393 of the Income-tax Act, 2025: 10%; threshold ₹50,000 (₹1,00,000 for senior citizens) for banks and ₹10,000 for other payers; Form 121 in place of Forms 15G and 15H. From practitioner sites, `verified = false` (open item P4-02). The 20% rate without PAN is carried over from the 1961 Act. A declaration without a PAN is ignored, also carried over.
 
@@ -84,14 +95,78 @@ These are the product's choices. They are settings or one place in the code, and
 ### Not verified here
 - **Gradle:** the build sandbox cannot reach Maven Central or the Gradle plugin portal. The new module was compiled with `javac -Xlint:all -Werror` and its tests were run on a stand-in for the JUnit API. CI runs the real build and `:backend:deposits-core:test`.
 - **Spring:** `TenantProvisioner` changed in two statements. It was not compiled here; the changed SQL was prepared against a migrated control database.
-- **Live stack:** nothing in this increment has been run on the local stack. After `git am` and a rebuild, the check is that V28 and control V4 apply and lending still works.
+### Verified after the push (10-Oct-2026)
+- **CI.** `9cb5f8e`: the Gradle build with the new module passed; `sql-invariants` failed because CI's database sorts text in the en_US locale (CO_LENDING before COLLECTIONS) and the build sandbox in C (cause inferred from the result; the job log was not readable). `3851a93` sorts module codes with `COLLATE "C"` in the SQL tests: `sql-invariants`, console, API contract, secrets scan and JavaScript CodeQL passed. The Gradle build and Java CodeQL of `3851a93` were still running when last looked at.
+- **Live stack** (signed in as dev-admin): backend health UP after the rebuild; dashboard, loans, customers, loan products, approvals and reports load; both loans open and their schedule PDFs generate; the trial balance for 30-Jun-2026 balances (debit 6,20,000 = credit 6,20,000). `demo-nbfc` is refused `/api/v1/casa/...` and `/api/v1/deposits/...` (module not enabled) and its chart has no deposit heads, as intended. Migration versions were not read directly: the backend starting and serving the tenant is the evidence that V28 and control V4 applied.
+
+## Increment P4-1: products and opening
+
+No money moves in this increment: a savings or current account opens with no balance, and a term deposit is BOOKED and waits for its funds (P4-2).
+
+### What was built
+**Deposit engine** (`backend/deposits-core`, four new classes)
+- `TermDepositProduct` and `DemandDepositProduct`: whether a product may be approved under a rule set, every reason at once. For a term deposit product: a rate for every amount and tenure it accepts, no rate above the ceiling with every add-on, tenures and interest rests inside the rule set, premature-withdrawal settings that fit the institution. For savings and current: the uniform savings rate up to the rule set's limit, no interest on a current account, and no demand deposits at all for an NBFC.
+- `TermDepositBooking`: whether one deposit may be booked, and its figures: the rate with its parts (card rate, amount step, tenure step, add-ons), maturity date, every interest credit, maturity value, yield, and the tax expected on each credit. The preview, the proposal and the approval all call it. The senior citizen add-on is given only to an individual of the rule set's senior-citizen age on the start date.
+- `AccountHolders` and `Nomination`: holders against the operating mode (single; either, former or anyone or survivor; jointly; at most four holders, a product choice); nominees taking together with shares that total 100, or one after another, up to the rule set's limit (four for a bank, one for an NBFC).
+- `DepositRules.checkTermDeposit` on real dates, and `SavingsInterest.periodEnd` (the last day of the interest period in progress, counted from the first month of the financial year).
+
+**Tenant database** (`V29__deposit_products_and_opening.sql`)
+- One more rule row: a current account bears no interest (BANK, `verified = false`, open item P4-01).
+- `deposits.product` with `deposits.product_history` (every version is kept; history rows cannot be changed). An ACTIVE term deposit product is refused when its rate card has a gap (`deposits.rate_card_problems`, the same list as the engine's) or breaks the rule set.
+- `deposits.account`, `account_holder`, `nominee`, `casa_account` and `term_deposit`. The account number is issued by the database from the series of its family (CASA 2001…, term deposits 3001…), so the two can never share a number. An account is opened only for ACTIVE customers with verified KYC, at an active branch, on an ACTIVE product. The whole account (holders against the mode, nominees against their mode and the rule set, the row of its family) is checked at commit.
+- A term deposit's terms are frozen at booking: the rate must be the product's card rate for the amount and the real dates plus add-ons the product has, and the interest period, day count, rounding, tax and premature-withdrawal settings must be the product's. After booking only the funding dates, the payout and the maturity instruction can change.
+
+**Application** (new Spring module `com.corebanking.deposits`; paths under `/api/v1/casa` need the CASA module, under `/api/v1/deposits` the TD module)
+- Rule set: `GET /api/v1/casa/rules` and `/api/v1/deposits/rules` (the same answer): every rule in force with its source and whether it is verified.
+- Products, per family: list, read, history, `POST` to propose a new product or the replacement of an existing one, `POST …/check` to list what stops a product without proposing it, `POST …/{code}/withdraw`. A refusal is 422 with `problems`, every reason at once. The check runs again when the request is approved.
+- Savings and current accounts: list, read, `POST /api/v1/casa/accounts` to propose an opening.
+- Term deposits: list, read, `POST /api/v1/deposits/preview` (the figures, nothing stored), `POST /api/v1/deposits/accounts` to propose a booking. The request keeps the rate the maker saw; the approval is refused (409) when the product no longer gives that rate.
+- Everything goes through maker-checker: entity types `DEPOSIT_PRODUCT` (CREATE, UPDATE, WITHDRAW), `CASA_ACCOUNT` (OPEN) and `TERM_DEPOSIT` (BOOK, with the amount). Lists are filtered by branch scope; an account outside the scope is not found.
+- Permissions: products use `product:view` and `product:propose`; new `casa:view`, `casa:open`, `deposit:view`, `deposit:book` (realm roles: MAKER and TENANT_ADMIN get all four; CHECKER, AUDITOR and OPERATIONS the two view permissions).
+
+**Control plane** (open item P4-04, closed)
+- `PUT /platform/v1/tenants/{code}/deposit-registration` records or withdraws an NBFC's registration to accept public deposits: the control plane first (it validates and writes the operator log), then the tenant's database, which puts the NBFC rule set in force and adds the term deposit heads. The TD module is enabled afterwards with the existing modules call. No control migration was needed; V5 is still the next number.
+- `GET /platform/v1/tenants` shows `depositTaking` and `depositRegistrationRef`.
+
+**Local stack**
+- Two more demo tenants, provisioned on start like `demo-nbfc`: `demo-bank` (a bank on the ENTERPRISE edition: CASA and TD) and `demo-nbfc-d` (an NBFC recorded as deposit-taking, with TD). Each has its own database, its own Keycloak realm with the same demo users, and demo deposit products (bank: SB01, CA01, FDC01, FDP01; NBFC: FD01, FD02). The rates and the registration reference are demo data.
+- A one-shot compose service creates the two databases when they are missing, so the postgres volume needs no reset. Keycloak has to be re-created once (new realms, new permissions).
+- The console's development sign-in has a Tenant choice (`VITE_DEV_TENANTS`).
+
+**Console**
+- Deposits menu, shown by permission and by the tenant's modules: Savings and current, Term deposits, Products, Rule set.
+- Rule set page; product list, detail (rate card as a grid, versions, withdraw) and form (rate card edited as a grid, "Check product" before submitting); account lists and details; opening a savings or current account; booking a term deposit with a preview of the rate, maturity, every interest credit and tax. A refusal lists every reason. A deposit-taking NBFC's screens say that deposits are not insured.
+- Mock mode has the same three demo tenants (chosen on the sign-in page) and follows the engine's checks and figures.
+
+### Choices made in this increment (to confirm)
+- **Renewal on a deposit-taking NBFC.** The rule set needs the depositor's consent for a renewal (para 17). Recording that consent comes with maturity processing (P4-4), so until then such a deposit can only be booked to be paid out. A bank deposit can be booked with a renewal instruction when its product allows renewal.
+- **Payout to a bank account.** A deposit can be booked with proceeds going to the depositor's bank account, but the account itself is not captured yet: it is recorded with funding (P4-2). Payout to a savings or current account of the depositor is checked now.
+- **Minors.** A customer under 18 is refused as a holder (D-20); a minor can be a nominee, with a guardian named.
+- **Product permissions.** Deposit products reuse the loan product permissions rather than new ones.
+- **One Spring module.** CASA and term deposits share `com.corebanking.deposits` (products and accounts share tables); the plan had two.
+- **Savings day count.** Savings interest needs a fixed basis: actual/365 or actual/360.
+
+### Tests
+- **Engine:** 60 tests in `deposits-core` (22 new in `DepositProductsAndBookingTest`).
+- **Tenant database:** 110 checks in `deposits_products_accounts_test.sql`; the 17 earlier tenant suites and the 3 control suites still pass (`deposits_foundation_test.sql` and `deposits_bank_starter_kit_test.sql` now expect 15 bank rules).
+- **Application services:** 46 checks run in the build sandbox against migrated bank and deposit-taking NBFC databases (products proposed, approved, updated and withdrawn; accounts opened; deposits previewed and booked; every refusal). They are not in the repository: they ran on stand-ins for Spring (see below).
+- **Console:** 16 tests in `deposits.test.tsx` and 3 more in `devLogin.test.tsx`. The mock's interest and tax figures are pinned to the engine's for three sample deposits.
+- **API contract:** `docs/api/openapi.yaml` lints clean; every handler has an operation and every operation a handler.
+
+### Not verified here
+- **Gradle and Spring.** The build sandbox still cannot reach Maven Central. The new module was type-checked against stand-ins that have the method signatures of `JdbcTemplate`, the Spring annotations and the platform classes it uses, and its SQL was run through `psql` with parameters typed as the JDBC driver types them. That catches wrong SQL, wrong parameter counts and wrong types; it does not prove the Spring wiring, Jackson's handling of the records, or Modulith's module check. CI runs the real build.
+- **Not type-checked at all:** the changes to `TenantProvisioner`, `TenantAdminController` and `DemoTenantBootstrap` (they need Hikari and Spring Boot classes). Their two SQL statements were run by hand.
+- **Live stack.** Nothing in this increment has been run on the local stack: not the three-tenant bootstrap, the new realms, the compose service or the sign-in with a tenant choice.
 
 ### Not yet built
-- No deposit product, account, posting, day-end step, API, console screen or permission. They start with P4-1.
-- The application does not load `deposits.rule` yet, and rules cannot be changed through the API.
-- Recording an NBFC's registration through the platform API (open item P4-04). The local demo tenant `demo-nbfc` is therefore not deposit-taking, and there is no demo bank tenant.
-- Monthly payout at a discounted rate, floating-rate deposits, non-resident deposits, deposit-taking HFCs.
-- Recurring deposit maturity value with late or missed instalments (P4-5).
+- Money: deposits, withdrawals, funding a term deposit, interest, tax, charges (P4-2 onwards). No posting, no day-end step.
+- Changing a nomination, a payout or a maturity instruction after opening; closing or cancelling an account.
+- Changing a rule through the API (ADR-017 expected it from P4-1; it is not built).
+- Recurring deposits as a product type (P4-5).
+- Receipts and other documents (P4-7).
+- The 1.5 × net owned fund cap on an NBFC's deposits (P4-6).
+- Support access (read-only platform engineers) to the deposit endpoints.
+- Sessions and API clients on the two new demo tenants: their realms have no local Keycloak admin client.
 
-### Next: P4-1 products and opening
-Savings, current and term deposit products with the rate-coverage check at approval; account opening and booking with nominees and preview; the rule set shown in the console; a demo bank tenant and a deposit-taking demo NBFC on the local stack.
+### Next: P4-2 money movement
+Cash deposit and withdrawal, transfer, bank transfer in and out, reversal, freeze and lien on savings and current accounts; funding a term deposit from an account, the gateway or a receipt, with the payout bank account. Next tenant migration: V30; next control migration: V5.

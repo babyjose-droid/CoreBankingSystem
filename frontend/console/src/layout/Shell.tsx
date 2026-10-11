@@ -178,7 +178,7 @@ function UserMenu() {
 function Sidebar() {
   const me = useMe().data;
   const pending = usePendingForMe();
-  const groups = visibleNav((p) => hasPermission(me?.permissions, p));
+  const groups = visibleNav((p) => hasPermission(me?.permissions, p), me?.modules ?? []);
   return (
     <nav id="sidebar" className="sidebar" aria-label="Main">
       {groups.map((g, gi) => (

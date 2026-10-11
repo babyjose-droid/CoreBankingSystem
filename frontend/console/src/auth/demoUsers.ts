@@ -14,6 +14,37 @@ export interface DemoUser {
 export const DEMO_TENANT = 'demo-nbfc';
 export const DEMO_TENANT_NAME = 'Demo NBFC Ltd';
 
+/**
+ * The demo tenants of mock mode, as on the local stack: an NBFC that takes no deposits, a bank (savings, current
+ * and term deposits) and an NBFC registered to accept public deposits (term deposits only).
+ */
+export const DEMO_TENANTS = [
+  { code: DEMO_TENANT, name: DEMO_TENANT_NAME, description: 'NBFC: lending, no deposits' },
+  { code: 'demo-bank', name: 'Demo Bank Ltd', description: 'Bank: savings, current and term deposits' },
+  { code: 'demo-nbfc-d', name: 'Demo Deposit NBFC Ltd', description: 'Deposit-taking NBFC: term deposits only' },
+] as const;
+export type DemoTenantCode = (typeof DEMO_TENANTS)[number]['code'];
+
+const MOCK_TENANT_KEY = 'corebanking.mockTenant';
+
+/** The demo tenant chosen on the mock sign-in page; it lasts as long as the tab, like the mock session. */
+export function readMockTenant(): DemoTenantCode {
+  try {
+    const t = sessionStorage.getItem(MOCK_TENANT_KEY);
+    return DEMO_TENANTS.find((x) => x.code === t)?.code ?? DEMO_TENANT;
+  } catch {
+    return DEMO_TENANT;
+  }
+}
+
+export function saveMockTenant(tenant: DemoTenantCode): void {
+  try {
+    sessionStorage.setItem(MOCK_TENANT_KEY, tenant);
+  } catch {
+    /* storage unavailable: the default tenant is used */
+  }
+}
+
 export const DEMO_USERS: DemoUser[] = [
   {
     username: 'maker',
@@ -21,7 +52,7 @@ export const DEMO_USERS: DemoUser[] = [
     role: 'Maker',
     description: 'Views everything, proposes and creates changes',
     homeBranch: 'HO',
-    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose, P.collectionCreate, P.mandateRegister, P.payoutBeneficiary, P.loanClassify],
+    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose, P.collectionCreate, P.mandateRegister, P.payoutBeneficiary, P.loanClassify, P.casaOpen, P.depositBook],
     roles: ['MAKER'],
   },
   {
@@ -40,7 +71,7 @@ export const DEMO_USERS: DemoUser[] = [
     description: 'Runs end-of-day, payouts, collections, mandates and NACH files',
     homeBranch: 'HO',
     permissions: [
-      P.eodView, P.eodRun, P.glView, P.loanView,
+      P.eodView, P.eodRun, P.glView, P.loanView, P.casaView, P.depositView,
       P.payoutView, P.payoutBeneficiary, P.payoutAdmin,
       P.collectionView, P.collectionCreate, P.collectionAdmin,
       P.mandateView, P.mandateRegister, P.mandateAdmin, P.nachAdmin, P.nachFile,

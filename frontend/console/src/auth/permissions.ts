@@ -78,6 +78,10 @@ export const P = {
   webhookAdmin: 'webhook:admin',
   sessionAdmin: 'session:admin',
   supportAccessApprove: 'support-access:approve',
+  casaView: 'casa:view',
+  casaOpen: 'casa:open',
+  depositView: 'deposit:view',
+  depositBook: 'deposit:book',
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];
@@ -111,6 +115,8 @@ export const VIEW_PERMISSIONS: Permission[] = [
   P.messageView,
   P.payoutView,
   P.webhookView,
+  P.casaView,
+  P.depositView,
 ];
 
 export const PROPOSE_PERMISSIONS: Permission[] = [

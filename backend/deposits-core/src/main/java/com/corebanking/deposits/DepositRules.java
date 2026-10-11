@@ -1,6 +1,7 @@
 package com.corebanking.deposits;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +60,7 @@ public final class DepositRules {
     public static final String TD_DEPOSITS_TO_NOF = "td.deposits-to-nof-multiple";           // NBFC para 17: 1.5
     public static final String TD_RENEWAL_NEEDS_CONSENT = "td.renewal-needs-consent";        // NBFC para 17: 1
     public static final String SAVINGS_UNIFORM_RATE_UP_TO = "savings.uniform-rate-up-to";    // bank: 1 lakh
+    public static final String CURRENT_INTEREST_ALLOWED = "current.interest-allowed";        // bank: 0
     public static final String CASA_REVIEW_AFTER_MONTHS = "casa.review-after-months";        // bank: 12
     public static final String CASA_INOPERATIVE_AFTER_MONTHS = "casa.inoperative-after-months"; // bank: 24
     public static final String UNCLAIMED_AFTER_YEARS = "unclaimed-after-years";              // bank: 10
@@ -153,6 +155,31 @@ public final class DepositRules {
                 out.add(new Violation(NOMINEES_MAX, nominees + " nominees named; at most " + max + " allowed"));
             }
         });
+        return out;
+    }
+
+    /**
+     * The same check for a deposit with its dates: the tenure limits are applied to the real start and maturity
+     * dates, so "365 days" from 1-Apr-2026 is twelve months and from 1-Apr-2027, across 29 February, is not.
+     */
+    public List<Violation> checkTermDeposit(LocalDate start, LocalDate maturity, BigDecimal ratePercent,
+                                            int compoundingRestMonths, int nominees) {
+        List<Violation> out = new ArrayList<>();
+        whole(TD_MIN_TENURE_MONTHS).ifPresent(min -> {
+            if (maturity.isBefore(start.plusMonths(min))) {
+                out.add(new Violation(TD_MIN_TENURE_MONTHS, "the deposit matures on " + maturity + ", before it has run " + min + " months"));
+            }
+        });
+        whole(TD_MAX_TENURE_MONTHS).ifPresent(max -> {
+            if (maturity.isAfter(start.plusMonths(max))) {
+                out.add(new Violation(TD_MAX_TENURE_MONTHS, "the deposit matures on " + maturity + ", after more than " + max + " months"));
+            }
+        });
+        // the rate, the rests and the nominees do not depend on dates: one year is long enough for the tenure limits
+        for (Violation v : checkTermDeposit(Tenure.ofMonths(whole(TD_MIN_TENURE_MONTHS).orElse(12)), ratePercent,
+                compoundingRestMonths, nominees)) {
+            if (!v.rule().equals(TD_MIN_TENURE_MONTHS) && !v.rule().equals(TD_MAX_TENURE_MONTHS)) out.add(v);
+        }
         return out;
     }
 

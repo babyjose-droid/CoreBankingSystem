@@ -14,7 +14,7 @@ export interface ClientOptions {
 }
 
 /** POSTs that do not create a resource and therefore do not carry an Idempotency-Key. */
-const NON_CREATING_POST = [/\/approvals\//, /\/dedupe-check$/, /\/loans\/preview$/, /\/amendments\/preview$/, /\/restructure\/simulation$/, /\/simulations\/(disbursement|transaction)$/, /\/sanction-change\/preview$/, /\/loan-products\/preview$/, /\/(secret|retry|refresh|replay|replay-dead|simulate-response|resolve)$/, /\/simulator\/callbacks$/, /\/presentations\/generate$/];
+const NON_CREATING_POST = [/\/approvals\//, /\/dedupe-check$/, /\/loans\/preview$/, /\/amendments\/preview$/, /\/restructure\/simulation$/, /\/simulations\/(disbursement|transaction)$/, /\/sanction-change\/preview$/, /\/loan-products\/preview$/, /\/(secret|retry|refresh|replay|replay-dead|simulate-response|resolve)$/, /\/simulator\/callbacks$/, /\/presentations\/generate$/, /\/(casa|deposits)\/products\/check$/, /\/deposits\/preview$/];
 
 export function needsIdempotencyKey(method: string, url: string): boolean {
   if (method.toUpperCase() !== 'POST') return false;

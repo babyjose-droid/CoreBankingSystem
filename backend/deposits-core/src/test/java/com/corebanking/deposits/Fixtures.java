@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
 
-/** The two rule sets as seeded by tenant migration V28 (deposits_foundation_test.sql checks the same values). */
+/** The two rule sets as seeded by tenant migrations V28 and V29 (the SQL suites check the same values). */
 final class Fixtures {
 
     private Fixtures() {}
@@ -18,6 +18,7 @@ final class Fixtures {
         v.put(DepositRules.NOMINEES_MAX, bd("4"));
         v.put(DepositRules.TD_PREMATURE_MANDATORY_UP_TO, bd("10000000"));
         v.put(DepositRules.SAVINGS_UNIFORM_RATE_UP_TO, bd("100000"));
+        v.put(DepositRules.CURRENT_INTEREST_ALLOWED, bd("0"));
         v.put(DepositRules.CASA_REVIEW_AFTER_MONTHS, bd("12"));
         v.put(DepositRules.CASA_INOPERATIVE_AFTER_MONTHS, bd("24"));
         v.put(DepositRules.UNCLAIMED_AFTER_YEARS, bd("10"));

@@ -58,6 +58,14 @@ import { HolidaysPage } from './pages/masters/HolidaysPage';
 import { TaxRatesPage } from './pages/masters/TaxRatesPage';
 import { BenchmarksPage } from './pages/masters/BenchmarksPage';
 import { InterestTablesPage } from './pages/masters/InterestTablesPage';
+import { CasaAccountFormPage } from './pages/deposits/CasaAccountFormPage';
+import { DepositAccountDetailPage } from './pages/deposits/DepositAccountDetailPage';
+import { DepositAccountsPage } from './pages/deposits/DepositAccountsPage';
+import { DepositProductDetailPage } from './pages/deposits/DepositProductDetailPage';
+import { DepositProductFormPage } from './pages/deposits/DepositProductFormPage';
+import { DepositProductsPage } from './pages/deposits/DepositProductsPage';
+import { RuleSetPage } from './pages/deposits/RuleSetPage';
+import { TermDepositFormPage } from './pages/deposits/TermDepositFormPage';
 import { ToastProvider } from './ui';
 
 export function createQueryClient(): QueryClient {
@@ -133,6 +141,17 @@ export function AppRoutes() {
         <Route path="loan-products/new" element={guard(P.productPropose, <LoanProductFormPage />)} />
         <Route path="loan-products/:code" element={guard(P.productView, <LoanProductDetailPage />)} />
         <Route path="loan-products/:code/edit" element={guard(P.productPropose, <LoanProductFormPage />)} />
+        <Route path="deposits/rules" element={guard(P.productView, <RuleSetPage />)} />
+        <Route path="deposits/products" element={guard(P.productView, <DepositProductsPage />)} />
+        <Route path="deposits/products/:family/new" element={guard(P.productPropose, <DepositProductFormPage />)} />
+        <Route path="deposits/products/:family/:code" element={guard(P.productView, <DepositProductDetailPage />)} />
+        <Route path="deposits/products/:family/:code/edit" element={guard(P.productPropose, <DepositProductFormPage />)} />
+        <Route path="deposits/casa" element={guard(P.casaView, <DepositAccountsPage family="CASA" />)} />
+        <Route path="deposits/casa/new" element={guard(P.casaOpen, <CasaAccountFormPage />)} />
+        <Route path="deposits/casa/:id" element={guard(P.casaView, <DepositAccountDetailPage family="CASA" />)} />
+        <Route path="deposits/term" element={guard(P.depositView, <DepositAccountsPage family="TERM_DEPOSIT" />)} />
+        <Route path="deposits/term/new" element={guard(P.depositBook, <TermDepositFormPage />)} />
+        <Route path="deposits/term/:id" element={guard(P.depositView, <DepositAccountDetailPage family="TERM_DEPOSIT" />)} />
         <Route path="ledger/accounts" element={guard(P.glView, <AccountsPage />)} />
         <Route path="ledger/vouchers" element={guard(P.glView, <VouchersPage />)} />
         <Route path="ledger/vouchers/new" element={guard(P.voucherCreate, <VoucherFormPage />)} />

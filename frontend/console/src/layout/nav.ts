@@ -6,6 +6,8 @@ export interface NavItem {
   perm: string | null;
   badge?: 'approvals';
   end?: boolean;
+  /** Shown only to a tenant with one of these modules (GET /api/v1/me). */
+  modules?: string[];
 }
 export interface NavGroup {
   label: string | null;
@@ -23,6 +25,15 @@ export const NAV: NavGroup[] = [
       { to: '/loan-products', label: 'Products', perm: P.productView },
       { to: '/deferred-receipts', label: 'Deferred receipts', perm: P.loanView },
       { to: '/rate-resets', label: 'Rate resets', perm: P.loanView },
+    ],
+  },
+  {
+    label: 'Deposits',
+    items: [
+      { to: '/deposits/casa', label: 'Savings and current', perm: P.casaView, modules: ['CASA'] },
+      { to: '/deposits/term', label: 'Term deposits', perm: P.depositView, modules: ['TD'] },
+      { to: '/deposits/products', label: 'Products', perm: P.productView, modules: ['CASA', 'TD'] },
+      { to: '/deposits/rules', label: 'Rule set', perm: P.productView, modules: ['CASA', 'TD'] },
     ],
   },
   {
@@ -84,6 +95,8 @@ export const NAV: NavGroup[] = [
   { label: null, items: [{ to: '/audit', label: 'Audit', perm: P.auditView }] },
 ];
 
-export function visibleNav(can: (p: string) => boolean): NavGroup[] {
-  return NAV.map((g) => ({ ...g, items: g.items.filter((i) => !i.perm || can(i.perm)) })).filter((g) => g.items.length > 0);
+/** What the user may open: by permission, and by the tenant's modules for the entries that need one. */
+export function visibleNav(can: (p: string) => boolean, modules: readonly string[] = []): NavGroup[] {
+  const shown = (i: NavItem) => (!i.perm || can(i.perm)) && (!i.modules || i.modules.some((m) => modules.includes(m)));
+  return NAV.map((g) => ({ ...g, items: g.items.filter(shown) })).filter((g) => g.items.length > 0);
 }

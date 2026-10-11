@@ -2915,6 +2915,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/platform/v1/tenants/{code}/deposit-registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Record or withdraw an NBFC's registration to accept public deposits
+         * @description Permission platform:operator. The control plane records the registration (the evidence is the RBI certificate reference) and writes the operator log; the tenant's own database is then told, which puts the deposit-taking NBFC rule set in force there and adds the term deposit heads to its chart. The TD module can be enabled only afterwards (PUT /platform/v1/tenants/{code}/modules). 409 for a tenant that is not an NBFC, and for a withdrawal while the TD module is enabled. Repeating the call is safe.
+         */
+        put: operations["setTenantDepositRegistration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/v1/migrations": {
         parameters: {
             query?: never;
@@ -3342,6 +3362,362 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The deposit rule set in force for this institution
+         * @description Module CASA. Permission product:view, casa:view or deposit:view. The rules are dated rows chosen by the institution's type (BANK, or NBFC_DEPOSIT for an NBFC registered to accept public deposits), each with its source and whether the source text was verified. The same answer under /api/v1/casa/rules and /api/v1/deposits/rules.
+         */
+        get: operations["getCasaDepositRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Savings and current products
+         * @description Module CASA. Permission product:view or casa:view. Ordered by code; withdrawn products included.
+         */
+        get: operations["listCasaProducts"];
+        put?: never;
+        /**
+         * Propose a new savings and current product, or the replacement of an existing one (maker-checker)
+         * @description Module CASA. Permission product:propose. The whole product is proposed; an existing code is replaced on approval and becomes its next version (every version is kept). 422 with `problems`, every reason at once, when the product cannot be approved under the rule set in force: a savings rate band below the uniform-rate limit, interest on a current account, or an institution that may not take demand deposits. The check is repeated when the request is approved. The family and type of a product never change; a withdrawn product is not changed (409).
+         */
+        post: operations["proposeCasaProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/products/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What stops a product as entered from being approved; nothing is stored
+         * @description Module CASA. Permission product:propose. `problems` is empty when the product can be proposed. 422 when the input itself is malformed (a missing code, an amount with three decimals).
+         */
+        post: operations["checkCasaProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/products/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One savings and current product
+         * @description Module CASA. Permission product:view or casa:view. 404 for a product of the other family.
+         */
+        get: operations["getCasaProduct"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/products/{code}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every version of the product, newest first
+         * @description Module CASA. Permission product:view.
+         */
+        get: operations["getCasaProductHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/products/{code}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the withdrawal of a product (maker-checker)
+         * @description Module CASA. Permission product:propose. A withdrawn product takes no new account; its accounts go on as they are.
+         */
+        post: operations["withdrawCasaProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Savings and current accounts in the caller's branches, newest first
+         * @description Module CASA. Permission casa:view. At most 500.
+         */
+        get: operations["listCasaAccounts"];
+        put?: never;
+        /**
+         * Propose the opening of a savings or current account (maker-checker)
+         * @description Module CASA. Permission casa:open. The account opens with no balance when the request is approved; its number comes from the CASA series. 422 with `problems`, every reason at once: a holder who is not ACTIVE or whose KYC is not VERIFIED, a holder under 18, the wrong number of holders for the operating mode, a joint holder that is not an individual, nominee shares that do not total 100, more nominees than the rule set allows, a withdrawn product, a branch that is not active. 403 for a branch outside the caller's branch scope. 409 while the business day is not OPEN.
+         */
+        post: operations["openCasaAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One savings or current account with its holders and nominees
+         * @description Module CASA. Permission casa:view. 404 outside the caller's branch scope.
+         */
+        get: operations["getCasaAccount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The deposit rule set in force for this institution
+         * @description Module TD. Permission product:view, casa:view or deposit:view. The rules are dated rows chosen by the institution's type (BANK, or NBFC_DEPOSIT for an NBFC registered to accept public deposits), each with its source and whether the source text was verified. The same answer under /api/v1/casa/rules and /api/v1/deposits/rules.
+         */
+        get: operations["getTermDepositRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Term deposit products
+         * @description Module TD. Permission product:view or deposit:view. Ordered by code; withdrawn products included.
+         */
+        get: operations["listTermProducts"];
+        put?: never;
+        /**
+         * Propose a new term deposit product, or the replacement of an existing one (maker-checker)
+         * @description Module TD. Permission product:propose. The whole product is proposed; an existing code is replaced on approval and becomes its next version (every version is kept). 422 with `problems`, every reason at once, when the product cannot be approved under the rule set in force: for a term deposit product that includes an amount or tenure it accepts that has no rate, a rate above the ceiling with every add-on, and a tenure outside the rule set's limits. The check is repeated when the request is approved. The family and type of a product never change; a withdrawn product is not changed (409).
+         */
+        post: operations["proposeTermProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/products/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What stops a product as entered from being approved; nothing is stored
+         * @description Module TD. Permission product:propose. `problems` is empty when the product can be proposed. 422 when the input itself is malformed (a missing code, an amount with three decimals).
+         */
+        post: operations["checkTermProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/products/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One term deposit product
+         * @description Module TD. Permission product:view or deposit:view. 404 for a product of the other family.
+         */
+        get: operations["getTermProduct"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/products/{code}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every version of the product, newest first
+         * @description Module TD. Permission product:view.
+         */
+        get: operations["getTermProductHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/products/{code}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the withdrawal of a product (maker-checker)
+         * @description Module TD. Permission product:propose. A withdrawn product takes no new account; its accounts go on as they are.
+         */
+        post: operations["withdrawTermProduct"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The figures of a term deposit before it is booked; nothing is stored
+         * @description Module TD. Permission deposit:view or deposit:book. Rate with its parts (card rate, add-ons), maturity date and value, every interest credit and, for a product that deducts tax, the tax expected on each credit from this deposit's interest alone. The booking and (later) the day-end take the same figures from the same calculation. Interest starts when the deposit is funded; the preview takes the business date as that day. Without a customer the senior citizen add-on cannot be previewed. 422 with `problems` when the product or the rule set does not allow the deposit.
+         */
+        post: operations["previewTermDeposit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Term deposits in the caller's branches, newest first
+         * @description Module TD. Permission deposit:view. At most 500.
+         */
+        get: operations["listTermDeposits"];
+        put?: never;
+        /**
+         * Propose the booking of a term deposit (maker-checker)
+         * @description Module TD. Permission deposit:book. On approval the deposit is BOOKED with a number from the term deposit series and its terms are frozen (rate with its parts, interest period, day count, rounding, tax and premature-withdrawal settings of the product version); it waits for its funds, and interest starts on the funding date. 422 with `problems` as for a savings account, and also when the amount or tenure is outside the product or the rule set, an add-on is not the product's or the depositor is not entitled to it, the payout account is not an active savings or current account of the depositor, or the product does not allow renewal. Where the rule set needs the depositor's consent for a renewal (deposit-taking NBFC), a deposit is booked to be paid out. 409 on approval when the product no longer gives the rate that was shown when the deposit was proposed.
+         */
+        post: operations["bookTermDeposit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One term deposit with its holders, nominees and frozen terms
+         * @description Module TD. Permission deposit:view. 404 outside the caller's branch scope.
+         */
+        get: operations["getTermDeposit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3354,6 +3730,8 @@ export interface components {
             status?: number;
             detail?: string;
             instance?: string;
+            /** @description Every reason for a refusal, when a check reports them all at once (deposit products, account opening, bookings) */
+            problems?: string[];
             /** @description Field-level problems (validation), when there are several */
             errors?: {
                 field: string;
@@ -3976,7 +4354,15 @@ export interface components {
             deploymentTier?: string;
             edition?: string;
             status?: string;
+            /** @description An NBFC recorded as registered by RBI to accept public deposits */
+            depositTaking?: boolean;
+            depositRegistrationRef?: string | null;
             modules?: string[];
+        };
+        DepositRegistration: {
+            depositTaking: boolean;
+            /** @description The RBI certificate of registration; required when depositTaking is true */
+            registrationRef?: string | null;
         };
         MigrationResult: {
             tenant?: string;
@@ -5384,6 +5770,435 @@ export interface components {
             apiCalls?: number;
             peakStorageBytes?: number | null;
             closingStorageBytes?: number | null;
+        };
+        DepositRuleSet: {
+            /**
+             * @description null: this institution takes no deposits here
+             * @enum {string|null}
+             */
+            kind?: "BANK" | "NBFC_DEPOSIT" | null;
+            entityType?: string | null;
+            depositTaking?: boolean | null;
+            depositRegistrationRef?: string | null;
+            /**
+             * Format: date
+             * @description The business date
+             */
+            asOf?: string | null;
+            /** @description Why there is no rule set, when kind is null */
+            reason?: string | null;
+            /** @description Rules whose source text was not read; to be confirmed before go-live */
+            unverified?: number;
+            rules?: {
+                /** @example td.max-rate-percent */
+                code?: string;
+                /** @description A number; 1 and 0 for yes and no */
+                value?: string;
+                /** Format: date */
+                effectiveFrom?: string;
+                source?: string;
+                verified?: boolean;
+                note?: string | null;
+            }[];
+        };
+        DepositProblems: {
+            problems?: string[];
+        };
+        DepositInterestBand: {
+            /** @description The band runs from this balance to the next band; the first starts at 0 */
+            fromBalance: number | string;
+            ratePercent: number | string;
+        };
+        /** @description One cell of the rate card: the full annual rate for deposits from this amount and from this tenure, up to the next step. Never a base rate plus a slab rate. */
+        DepositRate: {
+            fromAmount: number | string;
+            fromMonths?: number;
+            fromDays?: number;
+            ratePercent: number | string;
+        };
+        DepositAddOn: {
+            /** @description SENIOR_CITIZEN is given only to an individual of the rule set's senior-citizen age */
+            code: string;
+            /** @description Points added to the card rate (negative to take off) */
+            percent: number | string;
+        };
+        /** @description Settings of the other family must be left out. */
+        DepositProductInput: {
+            code: string;
+            name: string;
+            /** @enum {string} */
+            productType: "SAVINGS" | "CURRENT" | "FD_CUMULATIVE" | "FD_PAYOUT";
+            /**
+             * Format: date
+             * @description Defaults to the business date
+             */
+            effectiveFrom?: string | null;
+            /**
+             * @description Default ACTUAL_365
+             * @enum {string|null}
+             */
+            dayCount?: "ACTUAL_365" | "ACTUAL_360" | "ACTUAL_ACTUAL" | null;
+            /**
+             * @description Default PAISE_HALF_UP
+             * @enum {string|null}
+             */
+            rounding?: "PAISE_HALF_UP" | "PAISE_HALF_EVEN" | "RUPEE_HALF_UP" | "RUPEE_DOWN" | "RUPEE_UP" | null;
+            /** @description Default: true for a term deposit product; for savings, what the rule set says (no). false: no tax is deducted and no preview shows any */
+            tdsApplicable?: boolean | null;
+            /** @description Savings and current. Default 0 */
+            minBalance?: number | string | null;
+            /** @description Savings (required) and current; none for an account that bears no interest */
+            interestBands?: components["schemas"]["DepositInterestBand"][] | null;
+            /**
+             * @description Whether the whole balance earns the rate of its band or each part its own. Default WHOLE_BALANCE
+             * @enum {string|null}
+             */
+            bandMode?: "WHOLE_BALANCE" | "INCREMENTAL" | null;
+            /**
+             * @description Months between two interest credits. Default 3 (quarterly)
+             * @enum {integer|null}
+             */
+            interestPostingMonths?: 1 | 3 | 6 | 12 | null;
+            chequeFacility?: boolean | null;
+            /** @description Term deposits. Smallest deposit accepted */
+            minAmount?: number | string | null;
+            /** @description Largest deposit accepted; none for no limit */
+            maxAmount?: number | string | null;
+            minTenureMonths?: number | null;
+            minTenureDays?: number | null;
+            maxTenureMonths?: number | null;
+            maxTenureDays?: number | null;
+            /**
+             * @description Months between two interest credits; 0 (payout products) for interest once, at maturity
+             * @enum {integer|null}
+             */
+            interestPeriodMonths?: 0 | 1 | 3 | 6 | 12 | null;
+            rateCard?: components["schemas"]["DepositRate"][] | null;
+            addOns?: components["schemas"]["DepositAddOn"][] | null;
+            /** @description Default true */
+            prematureAllowed?: boolean | null;
+            /** @description Points taken off the rate for the period run. Left out where the rule set fixes the rate (deposit-taking NBFC) */
+            prematurePenaltyPercent?: number | string | null;
+            /** @description No interest when the deposit ran for fewer days. Left out where the rule set fixes it */
+            prematureMinDays?: number | null;
+            /** @description Default false */
+            autoRenewalAllowed?: boolean | null;
+            /** @description Default 2401 savings, 2402 current, 2403 term deposits */
+            glLiability?: string | null;
+            /** @description Default 5108 savings, 5107 term deposits */
+            glInterestExpense?: string | null;
+        };
+        /** @description Amounts and rates are decimal strings. Settings of the other family are null. */
+        DepositProduct: {
+            code?: string;
+            name?: string;
+            /** @enum {string} */
+            family?: "CASA" | "TERM_DEPOSIT";
+            /** @enum {string} */
+            productType?: "SAVINGS" | "CURRENT" | "FD_CUMULATIVE" | "FD_PAYOUT";
+            /** @enum {string} */
+            status?: "ACTIVE" | "WITHDRAWN";
+            version?: number | null;
+            /** Format: date */
+            effectiveFrom?: string;
+            dayCount?: string | null;
+            rounding?: string;
+            tdsApplicable?: boolean;
+            minBalance?: string | null;
+            interestBands?: {
+                fromBalance?: string;
+                ratePercent?: string;
+            }[] | null;
+            bandMode?: string | null;
+            interestPostingMonths?: number | null;
+            chequeFacility?: boolean | null;
+            minAmount?: string | null;
+            maxAmount?: string | null;
+            minTenureMonths?: number | null;
+            minTenureDays?: number | null;
+            maxTenureMonths?: number | null;
+            maxTenureDays?: number | null;
+            interestPeriodMonths?: number | null;
+            /** @description Ordered by amount step, then tenure step */
+            rateCard?: {
+                fromAmount?: string;
+                fromMonths?: number;
+                fromDays?: number;
+                ratePercent?: string;
+            }[] | null;
+            addOns?: components["schemas"]["DepositAddOnGiven"][] | null;
+            prematureAllowed?: boolean | null;
+            prematurePenaltyPercent?: string | null;
+            prematureMinDays?: number | null;
+            autoRenewalAllowed?: boolean | null;
+            glLiability?: string;
+            glInterestExpense?: string | null;
+            updatedBy?: string | null;
+            updatedAt?: string | null;
+        };
+        DepositAddOnGiven: {
+            code?: string;
+            percent?: string;
+        };
+        DepositProductVersion: {
+            version?: number;
+            changedBy?: string;
+            changedAt?: string;
+            approvalId?: string | null;
+            name?: string;
+            status?: string;
+        };
+        DepositProductWithdrawal: {
+            reason: string;
+        };
+        DepositNomineeInput: {
+            name: string;
+            /** @enum {string} */
+            relationship: "SPOUSE" | "CHILD" | "PARENT" | "SIBLING" | "GRANDCHILD" | "OTHER_RELATIVE" | "OTHER";
+            /** @description SIMULTANEOUS: the shares total 100. SUCCESSIVE: none, the order named decides */
+            sharePercent?: number | string | null;
+            /** @default false */
+            minor: boolean;
+            /** @description Who receives on a minor nominee's behalf; required for a minor, not given otherwise */
+            guardianName?: string | null;
+        };
+        CasaAccountInput: {
+            productCode: string;
+            /**
+             * Format: uuid
+             * @description The sole or first-named holder
+             */
+            customerId: string;
+            /** @description The other holders, in the order named */
+            jointHolders?: string[];
+            branchCode: string;
+            /**
+             * @description Default SINGLE for one holder; required for a joint account
+             * @enum {string|null}
+             */
+            operatingMode?: "SINGLE" | "EITHER_OR_SURVIVOR" | "FORMER_OR_SURVIVOR" | "ANYONE_OR_SURVIVOR" | "JOINTLY" | null;
+            /**
+             * @description Default NONE when no nominee is named; required otherwise
+             * @enum {string|null}
+             */
+            nominationMode?: "NONE" | "SIMULTANEOUS" | "SUCCESSIVE" | null;
+            nominees?: components["schemas"]["DepositNomineeInput"][];
+        };
+        /** @description For a preview only productCode, amount and the tenure are required. */
+        TermDepositInput: {
+            productCode: string;
+            /**
+             * Format: uuid
+             * @description The sole or first-named depositor. Required to book
+             */
+            customerId?: string | null;
+            jointHolders?: string[] | null;
+            /** @description Required to book */
+            branchCode?: string | null;
+            /** @enum {string|null} */
+            operatingMode?: "SINGLE" | "EITHER_OR_SURVIVOR" | "FORMER_OR_SURVIVOR" | "ANYONE_OR_SURVIVOR" | "JOINTLY" | null;
+            /** @enum {string|null} */
+            nominationMode?: "NONE" | "SIMULTANEOUS" | "SUCCESSIVE" | null;
+            nominees?: components["schemas"]["DepositNomineeInput"][] | null;
+            amount: number | string;
+            tenureMonths?: number | null;
+            tenureDays?: number | null;
+            /** @description Codes of the product's add-ons claimed for this deposit */
+            addOns?: string[] | null;
+            /**
+             * @description Where interest and maturity proceeds go. Default BANK_ACCOUNT
+             * @enum {string|null}
+             */
+            payoutTo?: "CASA" | "BANK_ACCOUNT" | null;
+            /**
+             * Format: uuid
+             * @description With CASA: an active savings or current account held by the depositor
+             */
+            payoutAccountId?: string | null;
+            /**
+             * @description Default PAY_OUT
+             * @enum {string|null}
+             */
+            maturityInstruction?: "PAY_OUT" | "RENEW_PRINCIPAL" | "RENEW_WITH_INTEREST" | null;
+        };
+        TermDepositPreview: {
+            productCode?: string;
+            productVersion?: number;
+            amount?: components["schemas"]["Money"];
+            tenureMonths?: number;
+            tenureDays?: number;
+            /**
+             * Format: date
+             * @description The business date, taken as the funding date
+             */
+            startDate?: string;
+            /** Format: date */
+            maturityDate?: string;
+            /** @description The card rate plus the add-ons given */
+            ratePercent?: string;
+            cardRatePercent?: string;
+            /** @description The amount step of the rate card the deposit falls in */
+            cardFromAmount?: string;
+            cardFromMonths?: number;
+            cardFromDays?: number;
+            addOns?: components["schemas"]["DepositAddOnGiven"][];
+            interestPeriodMonths?: number;
+            cumulative?: boolean;
+            totalInterest?: components["schemas"]["Money"];
+            /** @description Repaid at maturity before tax: the principal, plus all interest when cumulative */
+            maturityValue?: components["schemas"]["Money"];
+            annualisedYieldPercent?: string;
+            periods?: {
+                number?: number;
+                /**
+                 * Format: date
+                 * @description First day that earns
+                 */
+                from?: string;
+                /**
+                 * Format: date
+                 * @description Day of the credit
+                 */
+                to?: string;
+                balance?: components["schemas"]["Money"];
+                interest?: components["schemas"]["Money"];
+                /** @description false for a last period shorter than the interest period */
+                whole?: boolean;
+            }[];
+            tdsApplicable?: boolean;
+            /** @description Empty for a product that deducts no tax */
+            tax?: {
+                period?: number;
+                /** Format: date */
+                on?: string;
+                taxYearStarting?: number;
+                interest?: components["schemas"]["Money"];
+                tax?: components["schemas"]["Money"];
+            }[];
+            /** @description null for a product that deducts no tax */
+            totalTax?: string | null;
+            taxNote?: string | null;
+            /** @description false: deposits with this institution are not insured (deposit-taking NBFC); say so on what the depositor is given */
+            insured?: boolean | null;
+        };
+        DepositAccountSummary: {
+            /** Format: uuid */
+            id?: string;
+            accountNo?: string;
+            productCode?: string;
+            productName?: string;
+            productType?: string;
+            /** Format: uuid */
+            customerId?: string;
+            customerNo?: string;
+            customerName?: string;
+            branchCode?: string;
+            operatingMode?: string;
+            /** @enum {string} */
+            status?: "BOOKED" | "ACTIVE" | "MATURED" | "CLOSED" | "CANCELLED";
+            /** Format: date */
+            openedOn?: string;
+            holders?: number;
+            /** @description Term deposits */
+            principal?: string | null;
+            tenureMonths?: number | null;
+            tenureDays?: number | null;
+            ratePercent?: string | null;
+            /** Format: date */
+            startDate?: string | null;
+            /** Format: date */
+            maturityDate?: string | null;
+        };
+        DepositAccount: {
+            /** Format: uuid */
+            id?: string;
+            accountNo?: string;
+            /** @enum {string} */
+            family?: "CASA" | "TERM_DEPOSIT";
+            productCode?: string;
+            /** @description The product version the account was opened on */
+            productVersion?: number;
+            productName?: string;
+            productType?: string;
+            branchCode?: string;
+            operatingMode?: string;
+            nominationMode?: string;
+            /**
+             * @description BOOKED: a term deposit waiting for its funds
+             * @enum {string}
+             */
+            status?: "BOOKED" | "ACTIVE" | "MATURED" | "CLOSED" | "CANCELLED";
+            /** Format: date */
+            openedOn?: string;
+            openedBy?: string;
+            approvalId?: string | null;
+            holders?: {
+                /** @description 1 is the first-named holder */
+                holderNo?: number;
+                /** Format: uuid */
+                customerId?: string;
+                customerNo?: string;
+                name?: string;
+            }[];
+            nominees?: {
+                nomineeNo?: number;
+                name?: string;
+                relationship?: string;
+                sharePercent?: string | null;
+                minor?: boolean;
+                guardianName?: string | null;
+            }[];
+            /**
+             * Format: date
+             * @description Savings and current: the last day of the interest period in progress; null for an account that bears no interest
+             */
+            nextInterestDate?: string | null;
+            termDeposit?: components["schemas"]["TermDepositTerms"];
+        };
+        /** @description The terms frozen at booking, with figures from the same calculation as the preview. */
+        TermDepositTerms: {
+            principal?: string;
+            tenureMonths?: number;
+            tenureDays?: number;
+            /** Format: date */
+            bookedOn?: string;
+            /**
+             * Format: date
+             * @description The funding date; null until the deposit is funded
+             */
+            startDate?: string | null;
+            /** Format: date */
+            maturityDate?: string | null;
+            ratePercent?: string;
+            cardRatePercent?: string;
+            cardFromAmount?: string;
+            cardFromMonths?: number;
+            cardFromDays?: number;
+            addOns?: components["schemas"]["DepositAddOnGiven"][];
+            interestPeriodMonths?: number;
+            cumulative?: boolean;
+            dayCount?: string;
+            rounding?: string;
+            tdsApplicable?: boolean;
+            prematureAllowed?: boolean;
+            prematurePenaltyPercent?: string | null;
+            prematureMinDays?: number | null;
+            /** @enum {string} */
+            payoutTo?: "CASA" | "BANK_ACCOUNT";
+            payoutAccountId?: string | null;
+            payoutAccountNo?: string | null;
+            /** @enum {string} */
+            maturityInstruction?: "PAY_OUT" | "RENEW_PRINCIPAL" | "RENEW_WITH_INTEREST";
+            funded?: boolean;
+            /**
+             * Format: date
+             * @description The start date of the figures below: the funding date, or the business date while the deposit is not funded
+             */
+            figuresFrom?: string;
+            /** Format: date */
+            figuresMaturityDate?: string;
+            totalInterest?: components["schemas"]["Money"];
+            maturityValue?: components["schemas"]["Money"];
         };
     };
     responses: {
@@ -9656,6 +10471,33 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    setTenantDepositRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositRegistration"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     migrateAllTenants: {
         parameters: {
             query?: {
@@ -10263,6 +11105,463 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SupportAccess"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaDepositRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositRuleSet"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCasaProducts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProduct"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCasaProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositProductInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    checkCasaProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositProductInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProblems"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProduct"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaProductHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProductVersion"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    withdrawCasaProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositProductWithdrawal"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCasaAccounts: {
+        parameters: {
+            query?: {
+                /** @description Accounts this customer holds, as any holder */
+                customerId?: string;
+                status?: "BOOKED" | "ACTIVE" | "MATURED" | "CLOSED" | "CANCELLED";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositAccountSummary"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    openCasaAccount: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CasaAccountInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositAccount"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTermDepositRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositRuleSet"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTermProducts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProduct"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTermProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositProductInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    checkTermProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositProductInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProblems"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTermProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProduct"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTermProductHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositProductVersion"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    withdrawTermProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositProductWithdrawal"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    previewTermDeposit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermDepositInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TermDepositPreview"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTermDeposits: {
+        parameters: {
+            query?: {
+                /** @description Accounts this customer holds, as any holder */
+                customerId?: string;
+                status?: "BOOKED" | "ACTIVE" | "MATURED" | "CLOSED" | "CANCELLED";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositAccountSummary"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    bookTermDeposit: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermDepositInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTermDeposit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositAccount"];
                 };
             };
             default: components["responses"]["Problem"];

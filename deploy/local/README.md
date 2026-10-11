@@ -6,8 +6,8 @@
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| PostgreSQL 16 | `localhost:5432` | databases `control`, `tenant_demo_nbfc`; superuser `postgres` / `postgres-local-only` |
-| Keycloak 26 (dev mode) | http://localhost:8081 | admin console: `admin` / `admin-local-only`; realm `demo-nbfc` |
+| PostgreSQL 16 | `localhost:5432` | databases `control`, `tenant_demo_nbfc`, `tenant_demo_bank`, `tenant_demo_nbfc_d`; superuser `postgres` / `postgres-local-only` |
+| Keycloak 26 (dev mode) | http://localhost:8081 | admin console: `admin` / `admin-local-only`; realms `demo-nbfc`, `demo-bank`, `demo-nbfc-d`, `platform` |
 | Backend | http://localhost:8080 | health: `/actuator/health` |
 | S3Mock (S3 for documents) | API http://localhost:9090 | bucket `corebanking-documents`; no credentials checked |
 | Mailpit (mail catcher) | http://localhost:8025 | every e-mail the backend sends |
@@ -30,7 +30,7 @@ docker compose down -v                      # stop and wipe the database volume 
 
 Override any default password with environment variables or a git-ignored `.env` file next to
 `docker-compose.yml`: `POSTGRES_PASSWORD`, `CONTROL_DB_PASSWORD`, `TENANT_DEMO_NBFC_DB_PASSWORD`,
-`KEYCLOAK_ADMIN_PASSWORD`.
+`TENANT_DEMO_BANK_DB_PASSWORD`, `TENANT_DEMO_NBFC_D_DB_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD`.
 
 ## Demo tenant (first run)
 
@@ -67,15 +67,59 @@ tenant code upper-cased with `-` replaced by `_`; see `TenancyConfig.envCredenti
 encrypted with local-only keys that `init-env.sh` generates into `.env`. If you delete `.env`,
 the existing demo customers can no longer be decrypted, so recreate the database volume as well.
 
-## Demo users (realm `demo-nbfc`)
+## The three demo tenants (Phase 4)
+
+| Tenant | What it is | Deposits |
+|--------|-----------|----------|
+| `demo-nbfc` | An NBFC that lends | None: `/api/v1/casa/...` and `/api/v1/deposits/...` answer 403, and the console shows no Deposits menu |
+| `demo-bank` | A bank (ENTERPRISE edition, bank chart of accounts) | Savings, current and term deposits. Demo products `SB01`, `CA01`, `FDC01` (cumulative), `FDP01` (monthly payout) |
+| `demo-nbfc-d` | An NBFC recorded as registered to accept public deposits | Term deposits only, under the NBFC rule set (12 to 60 months, 12.5% ceiling, one nominee, not insured). Demo products `FD01`, `FD02` |
+
+Each tenant has its own database, its own Keycloak realm and the same demo users. They are provisioned on start by
+the same bootstrap as `demo-nbfc`; for `demo-nbfc-d` it then records the registration
+(`PUT /platform/v1/tenants/{code}/deposit-registration`) and enables the TD module, as an operator would. The rates of
+the demo products, the premature penalty (1 point, 7 days) and the registration reference are demo data, not
+regulatory values and not a certificate. The demo customers are yours to create: an account needs a customer whose
+KYC is verified (three documents, verified by a second user).
+
+- **Databases.** `postgres/init/01-databases.sh` (empty volume only) creates `control` and `tenant_demo_nbfc`. The
+  `postgres-demo-tenants` service runs `postgres/ensure-demo-tenants.sh` on every `up` and creates
+  `tenant_demo_bank` and `tenant_demo_nbfc_d` when they are missing, so an existing volume needs no reset.
+- **Realms.** `keycloak/demo-bank-realm.json` and `keycloak/demo-nbfc-d-realm.json` are rendered from the
+  `demo-nbfc` template; do not edit them by hand. After a change to the template, render them again (CI fails when
+  they differ):
+
+  ```bash
+  for t in "demo-bank|CLAUDE-TEST Demo Bank (local development)" "demo-nbfc-d|CLAUDE-TEST Demo Deposit NBFC (local development)"; do
+    python3 infra/keycloak/new-tenant-realm.py --tenant "${t%%|*}" --console-url http://localhost:5173 \
+      --display-name "${t##*|}" --keep-demo-users --keep-dev-login --out "deploy/local/keycloak/${t%%|*}-realm.json"
+  done
+  ```
+
+  The rendered realms have no `corebanking-admin` client, so the Sessions page and API clients work on `demo-nbfc`
+  only. The three tenants share the local personal-data keys of `.env`.
+- **Signing in.** The development sign-in has a **Tenant** choice (`VITE_DEV_TENANTS` on the console service); the
+  users and the password are the same in every realm. The SSO button stays on `demo-nbfc`
+  (`VITE_OIDC_AUTHORITY`); to use SSO on another tenant, change that variable and restart the console.
+- **A stack started before these tenants existed** gets them with (no data is lost; Keycloak is re-created, so
+  password changes and TOTP enrolments of the non-dev users are reset):
+
+  ```bash
+  cd deploy/local
+  docker compose rm -sf keycloak
+  docker compose --profile console up -d --build
+  docker compose logs -f backend      # look for "tenant demo-bank registered" and "tenant demo-nbfc-d registered"
+  ```
+
+## Demo users (every demo realm)
 
 Every user starts with password `ChangeMe#2026` (temporary) and must set a new password and enrol
 TOTP (Google Authenticator, FreeOTP, ...) on first login — MFA is mandatory for staff (ADR-007).
 
 | User | Realm role | What it can do |
 |------|-----------|----------------|
-| `maker` | MAKER | view masters, propose branch/holiday/tax/GL-head changes, create customers and vouchers, reverse vouchers, GL reports |
-| `checker` | CHECKER | view, approve/reject proposals, GL reports |
+| `maker` | MAKER | view masters, propose branch/holiday/tax/GL-head changes, create customers and vouchers, reverse vouchers, GL reports; propose deposit products, open accounts, book term deposits |
+| `checker` | CHECKER | view (deposits included), approve/reject proposals, GL reports |
 | `ops` | OPERATIONS | view/run end-of-day, GL view and reports |
 | `auditor` | AUDITOR | read-only including the audit trail |
 | `admin` | TENANT_ADMIN | every permission — do not use it for maker-checker testing (ADR-012) |
@@ -98,9 +142,12 @@ How it works and why it cannot reach a real tenant (ADR-007 amendment):
 
 - The form appears only when the console runs on the Vite dev server with `VITE_DEV_LOGIN=1` and `VITE_MOCK=0`
   (the `console` service sets both). A production build compiles the flag to false.
-- It uses the realm's `console-dev` client (password grant). That client and the `dev-*` users exist only in
-  `keycloak/demo-nbfc-realm.json`; `infra/keycloak/new-tenant-realm.py` removes them from every tenant realm and
-  CI fails if a rendered realm has a password-grant client.
+- It uses the realm's `console-dev` client (password grant). That client and the `dev-*` users exist only in the
+  demo realm files of this directory (the two Phase 4 realms are rendered with `--keep-dev-login`, a flag for local
+  development only); `infra/keycloak/new-tenant-realm.py` removes them from every tenant realm and CI fails if a
+  rendered tenant realm has a password-grant client.
+- With `VITE_DEV_TENANTS` the form has a Tenant choice and signs in to that tenant's realm; a tenant that is not
+  listed is refused before any request is made.
 - The browser posts to the same-origin `/realms/...` path; the dev server forwards it to
   `VITE_KEYCLOAK_PROXY_TARGET` (`http://keycloak:8081` here) with `Host: localhost:8081`, so the token's issuer
   stays `http://localhost:8081/realms/demo-nbfc`. The console refuses a token with any other issuer and says so.

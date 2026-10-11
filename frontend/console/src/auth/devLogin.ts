@@ -22,6 +22,8 @@ export interface DevTokens {
   refreshToken: string;
   /** Epoch milliseconds at which the access token expires. */
   expiresAt: number;
+  /** The tenant realm signed in to, when it is not the realm of the configured authority (VITE_DEV_TENANTS). */
+  realm?: string;
 }
 
 export class DevLoginError extends Error {}
@@ -34,23 +36,41 @@ function trimSlash(s: string): string {
   return s.replace(/\/+$/, '');
 }
 
-/** Same-origin path of the realm's OIDC endpoints; the realm comes from the configured authority URL. */
-export function devOidcPath(endpoint: 'token' | 'logout'): string {
-  let realm: string | undefined;
+/** The realm of the configured authority URL: the tenant signed in to unless another is chosen. */
+export function configuredRealm(): string | undefined {
   try {
-    realm = /\/realms\/([^/]+)/.exec(new URL(config.oidcAuthority).pathname)?.[1];
+    return /\/realms\/([^/]+)/.exec(new URL(config.oidcAuthority).pathname)?.[1];
   } catch {
-    realm = undefined;
+    return undefined;
   }
-  if (!realm) throw new DevLoginError(`Cannot read the realm from the identity provider URL ${config.oidcAuthority}.`);
-  return `/realms/${realm}/protocol/openid-connect/${endpoint}`;
 }
 
-async function tokenRequest(form: Record<string, string>): Promise<DevTokens> {
+/** A tenant the sign-in form may choose: the configured realm, or one listed in VITE_DEV_TENANTS. */
+function checkedRealm(realm: string | undefined): string {
+  const own = configuredRealm();
+  const chosen = realm ?? own;
+  if (!chosen) throw new DevLoginError(`Cannot read the realm from the identity provider URL ${config.oidcAuthority}.`);
+  if (chosen !== own && !config.devTenants.includes(chosen)) throw new DevLoginError(`Tenant ${chosen} is not offered by this development sign-in.`);
+  return chosen;
+}
+
+/** Same-origin path of a realm's OIDC endpoints; the realm of the configured authority URL unless one is given. */
+export function devOidcPath(endpoint: 'token' | 'logout', realm?: string): string {
+  return `/realms/${checkedRealm(realm)}/protocol/openid-connect/${endpoint}`;
+}
+
+/** The issuer a token of this realm must carry: the configured authority, with its realm replaced. */
+function expectedIssuer(realm: string | undefined): string {
+  const authority = trimSlash(config.oidcAuthority);
+  return realm ? authority.replace(/\/realms\/[^/]+$/, `/realms/${realm}`) : authority;
+}
+
+async function tokenRequest(form: Record<string, string>, realm?: string): Promise<DevTokens> {
   assertEnabled();
+  const path = devOidcPath('token', realm); // outside the try: a tenant that is not offered is not a network failure
   let response: Response;
   try {
-    response = await fetch(devOidcPath('token'), {
+    response = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body: new URLSearchParams({ client_id: DEV_LOGIN_CLIENT_ID, ...form }).toString(),
@@ -80,7 +100,7 @@ async function tokenRequest(form: Record<string, string>): Promise<DevTokens> {
   // The backend accepts only tokens whose issuer is the public realm URL. Refuse anything else here, so a proxy
   // or Keycloak hostname misconfiguration is obvious instead of producing 401s on every API call.
   const iss = decodeJwt(accessToken).iss;
-  const expected = trimSlash(config.oidcAuthority);
+  const expected = expectedIssuer(realm);
   if (typeof iss !== 'string' || trimSlash(iss) !== expected) {
     throw new DevLoginError(
       `Token issuer mismatch: Keycloak issued "${typeof iss === 'string' ? iss : 'none'}" but the console is configured for ` +
@@ -88,31 +108,31 @@ async function tokenRequest(form: Record<string, string>): Promise<DevTokens> {
     );
   }
   const expiresIn = typeof body?.expires_in === 'number' && body.expires_in > 0 ? body.expires_in : 300;
-  return { accessToken, refreshToken, expiresAt: Date.now() + expiresIn * 1000 };
+  return { accessToken, refreshToken, expiresAt: Date.now() + expiresIn * 1000, ...(realm ? { realm } : {}) };
 }
 
-/** Resource-owner password grant. The caller must not keep the password. */
-export function devSignIn(username: string, password: string): Promise<DevTokens> {
-  return tokenRequest({ grant_type: 'password', scope: 'openid', username, password });
+/** Resource-owner password grant. The caller must not keep the password. `realm`: the tenant chosen on the form. */
+export function devSignIn(username: string, password: string, realm?: string): Promise<DevTokens> {
+  return tokenRequest({ grant_type: 'password', scope: 'openid', username, password }, realm === configuredRealm() ? undefined : realm);
 }
 
 // Refresh tokens rotate and are single-use (revokeRefreshToken), so concurrent callers (React StrictMode mounts
 // effects twice) must share one request.
 const inflight = new Map<string, Promise<DevTokens>>();
 
-export function devRefresh(refreshToken: string): Promise<DevTokens> {
+export function devRefresh(refreshToken: string, realm?: string): Promise<DevTokens> {
   let p = inflight.get(refreshToken);
   if (!p) {
-    p = tokenRequest({ grant_type: 'refresh_token', refresh_token: refreshToken }).finally(() => inflight.delete(refreshToken));
+    p = tokenRequest({ grant_type: 'refresh_token', refresh_token: refreshToken }, realm).finally(() => inflight.delete(refreshToken));
     inflight.set(refreshToken, p);
   }
   return p;
 }
 
 /** Ends the Keycloak session (back-channel style POST; no redirect). Best effort. */
-export async function devSignOut(refreshToken: string): Promise<void> {
+export async function devSignOut(refreshToken: string, realm?: string): Promise<void> {
   assertEnabled();
-  await fetch(devOidcPath('logout'), {
+  await fetch(devOidcPath('logout', realm), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: DEV_LOGIN_CLIENT_ID, refresh_token: refreshToken }).toString(),
@@ -137,7 +157,7 @@ export function loadDevTokens(): DevTokens | null {
     if (!raw) return null;
     const t = JSON.parse(raw) as Partial<DevTokens>;
     if (typeof t.accessToken !== 'string' || typeof t.refreshToken !== 'string' || typeof t.expiresAt !== 'number') return null;
-    return { accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt };
+    return { accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt, ...(typeof t.realm === 'string' ? { realm: t.realm } : {}) };
   } catch {
     return null;
   }

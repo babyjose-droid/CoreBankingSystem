@@ -32,6 +32,8 @@ import { applyIntegrationApproval, registerIntegrationRoutes, rejectIntegrationA
 import { applyPlatformMoreApproval, assertCustom, bookDeferredReceipts, maskCustom, registerPlatformMoreRoutes } from './platformMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
+import { applyDepositApproval, applyTenant, registerDepositRoutes } from './deposits';
+import type { DemoTenantCode } from '../auth/demoUsers';
 
 /** Largest request body the API accepts (the contract's maxLength for CSV uploads). */
 const MAX_BODY_CHARS = 5_000_000;
@@ -65,6 +67,8 @@ export interface MockServerOptions {
   /** Artificial latency (ms) for every request; 0 in tests. */
   latencyMs?: number;
   db?: MockDb;
+  /** The demo tenant to be: an NBFC without deposits (default), a bank, or a deposit-taking NBFC. */
+  tenant?: DemoTenantCode;
 }
 
 export interface MockServer {
@@ -78,6 +82,7 @@ const accepted = (body: unknown) => ({ status: 202, body });
 
 export function createMockServer(options: MockServerOptions = {}): MockServer {
   const db = options.db ?? createSeedDb();
+  if (options.tenant) applyTenant(db, options.tenant);
   const stepMs = options.eodStepMs ?? 400;
   const latency = options.latencyMs ?? 0;
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -287,7 +292,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at) && !applyIntegrationApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at) && !applyIntegrationApproval(db, p, a, checker, at) && !applyDepositApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -447,7 +452,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
       businessDate: db.businessDate,
       permissions: [...user.permissions],
       roles: [...user.roles],
-      modules: ['CUSTOMER', 'GL', 'EOD', 'LENDING'],
+      modules: ['CUSTOMER', 'GL', 'EOD', 'LENDING', ...db.deposits.modules],
     };
     return ok(me);
   });
@@ -880,6 +885,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   registerDocumentRoutes(db, { on, require, nowIso });
   registerPlatformMoreRoutes(db, { on, require, propose, nowIso });
   registerIntegrationRoutes(db, { on, require, propose, nowIso });
+  registerDepositRoutes(db, { on, require, propose });
 
   // ---------- dispatcher ----------
   function respond(status: number, body: unknown, raw?: RawBody): Response {

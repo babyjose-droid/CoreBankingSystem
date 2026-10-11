@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { config } from '../config';
-import { DEMO_TENANT, findDemoUser, mockToken } from './demoUsers';
+import { findDemoUser, mockToken, readMockTenant } from './demoUsers';
 import {
   clearDevTokens,
   devRefresh,
@@ -32,8 +32,8 @@ export interface AuthContextValue {
   login: (returnTo?: string) => Promise<void>;
   /** True only on a local development stack (VITE_DEV_LOGIN=1 on the dev server, not mock mode). */
   devLogin: boolean;
-  /** LOCAL DEVELOPMENT ONLY: direct username/password sign-in. Rejects with a displayable message. */
-  loginDev: (username: string, password: string) => Promise<void>;
+  /** LOCAL DEVELOPMENT ONLY: direct username/password sign-in, to the tenant chosen. Rejects with a displayable message. */
+  loginDev: (username: string, password: string, tenant?: string) => Promise<void>;
   completeLogin: () => Promise<string>;
   completeSilentRenew: () => Promise<void>;
   logout: () => Promise<void>;
@@ -56,7 +56,7 @@ function readMockSession(): Session | null {
 function mockSession(username: string): Session | null {
   const u = findDemoUser(username);
   if (!u) return null;
-  return { token: mockToken(u.username), username: u.username, name: u.name, tenant: DEMO_TENANT, permissions: u.permissions };
+  return { token: mockToken(u.username), username: u.username, name: u.name, tenant: readMockTenant(), permissions: u.permissions };
 }
 
 function devSession(tokens: DevTokens): Session {
@@ -100,7 +100,7 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
       setSession(devSession(tokens));
       // Access tokens last 5 minutes: renew with the (rotating) refresh token shortly before expiry.
       devTimer.current = setTimeout(() => {
-        devRefresh(tokens.refreshToken).then(
+        devRefresh(tokens.refreshToken, tokens.realm).then(
           (next) => {
             if (devRef.current === tokens) applyDev(next);
           },
@@ -124,7 +124,7 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
         applyDev(stored);
         setReady(true);
       } else {
-        devRefresh(stored.refreshToken)
+        devRefresh(stored.refreshToken, stored.realm)
           .then(
             (next) => {
               if (!cancelled) applyDev(next);
@@ -180,9 +180,9 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
   }, [mode, applyDev, dropDev]);
 
   const loginDev = useCallback(
-    async (username: string, password: string) => {
+    async (username: string, password: string, tenant?: string) => {
       if (!config.devLogin) throw new DevLoginError('Development sign-in is not enabled in this build.');
-      applyDev(await devSignIn(username, password));
+      applyDev(await devSignIn(username, password, tenant));
     },
     [applyDev],
   );
@@ -227,7 +227,7 @@ export function AuthProvider({ children, initialMockUser }: { children: ReactNod
       // Development sign-in: clear locally first, then end the Keycloak session through the proxy. No redirect.
       dropDev();
       setSession(null);
-      await devSignOut(dev.refreshToken).catch(() => undefined);
+      await devSignOut(dev.refreshToken, dev.realm).catch(() => undefined);
       return;
     }
     await getUserManager().signoutRedirect();

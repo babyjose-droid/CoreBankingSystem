@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const cfg = vi.hoisted(() => ({
   mock: false,
   devLogin: true,
+  devTenants: [] as string[],
   apiBaseUrl: '',
   oidcAuthority: 'http://localhost:8081/realms/demo-nbfc',
   oidcClientId: 'console',
@@ -87,6 +88,7 @@ async function signIn(password = 'LocalDev#2026') {
 
 beforeEach(() => {
   cfg.devLogin = true;
+  cfg.devTenants = [];
 });
 
 afterEach(() => {
@@ -204,6 +206,39 @@ describe('development sign-in (local only)', () => {
     renderConsole();
     expect(await screen.findByRole('heading', { name: /Welcome/ })).toBeInTheDocument();
     expect(calls).toHaveLength(0);
+  });
+
+  it('offers the tenants of the local stack and signs in to the realm of the one chosen', async () => {
+    cfg.devTenants = ['demo-nbfc', 'demo-bank', 'demo-nbfc-d'];
+    const bank = 'http://localhost:8081/realms/demo-bank';
+    const calls = stubKeycloak((c) => (c.path.includes('/logout') ? new Response(null, { status: 204 }) : tokenResponse(1, bank)));
+    renderConsole();
+    const user = userEvent.setup();
+    const tenant = await screen.findByLabelText('Tenant');
+    expect(tenant).toHaveValue('demo-nbfc'); // the realm of the configured authority is the default
+    await user.selectOptions(tenant, 'demo-bank');
+    await signIn();
+    expect(await screen.findByRole('heading', { name: /Welcome/ })).toBeInTheDocument();
+    expect(calls[0]!.path).toBe('/realms/demo-bank/protocol/openid-connect/token');
+    expect(JSON.parse(sessionStorage.getItem(STORE)!).realm).toBe('demo-bank'); // refresh and sign-out go to the same realm
+    await user.click(screen.getByRole('button', { name: /maker/i }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Sign out' }));
+    await waitFor(() => expect(calls.some((c) => c.path === '/realms/demo-bank/protocol/openid-connect/logout')).toBe(true));
+  });
+
+  it('refuses a token of another realm than the tenant chosen, and a tenant that is not offered', async () => {
+    cfg.devTenants = ['demo-nbfc', 'demo-bank'];
+    stubKeycloak(() => tokenResponse(1)); // Keycloak answers with a demo-nbfc token
+    await expect(devSignIn('dev-maker', 'x', 'demo-bank')).rejects.toThrow(/Token issuer mismatch.*realms\/demo-bank/);
+    await expect(devSignIn('dev-maker', 'x', 'acme-finance')).rejects.toThrow(/not offered/);
+    await expect(devSignIn('dev-maker', 'x', 'demo-nbfc')).resolves.toMatchObject({ refreshToken: 'refresh-1' });
+  });
+
+  it('shows no tenant choice when only one tenant is configured', async () => {
+    stubKeycloak(() => tokenResponse(1));
+    renderConsole();
+    expect(await screen.findByLabelText(/Username/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Tenant')).not.toBeInTheDocument();
   });
 
   it('sign-out clears the session and ends the Keycloak session without a redirect', async () => {

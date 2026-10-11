@@ -2,9 +2,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthProvider';
-import { DEMO_TENANT, DEMO_USERS } from '../auth/demoUsers';
+import { DEMO_TENANTS, DEMO_USERS, readMockTenant, saveMockTenant, type DemoTenantCode } from '../auth/demoUsers';
+import { configuredRealm } from '../auth/devLogin';
 import { config } from '../config';
-import { Badge, Banner, Button, Card, Input } from '../ui';
+import { Badge, Banner, Button, Card, Input, Select } from '../ui';
 
 export function LoginPage() {
   const auth = useAuth();
@@ -19,6 +20,10 @@ export function LoginPage() {
   const [devUser, setDevUser] = useState('');
   const [devError, setDevError] = useState<string | null>(null);
   const [devBusy, setDevBusy] = useState(false);
+  // Local stack: the tenants of VITE_DEV_TENANTS, each its own Keycloak realm. Mock mode: the demo tenants.
+  const devTenants = config.devTenants.length ? config.devTenants : [];
+  const [devTenant, setDevTenant] = useState(() => (devTenants.includes(configuredRealm() ?? '') ? configuredRealm()! : devTenants[0] ?? ''));
+  const [mockTenant, setMockTenant] = useState<DemoTenantCode>(() => readMockTenant());
 
   const submitDev = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -34,7 +39,7 @@ export function LoginPage() {
     setDevError(null);
     try {
       qc.clear();
-      await auth.loginDev(devUser.trim(), password);
+      await auth.loginDev(devUser.trim(), password, devTenant || undefined);
     } catch (err) {
       setDevError(err instanceof Error ? err.message : 'Sign-in failed');
     } finally {
@@ -64,6 +69,15 @@ export function LoginPage() {
                     through SSO; passwords never pass through the console there.
                   </Banner>
                   {devError && <Banner tone="danger">{devError}</Banner>}
+                  {devTenants.length > 1 && (
+                    <Select
+                      label="Tenant"
+                      value={devTenant}
+                      onChange={(e) => setDevTenant(e.target.value)}
+                      options={devTenants.map((t) => ({ value: t, label: t }))}
+                      hint="Each demo tenant is its own institution with its own users and data."
+                    />
+                  )}
                   <Input
                     label="Username"
                     name="username"
@@ -108,16 +122,24 @@ export function LoginPage() {
           ) : (
             <div className="stack">
               <Banner tone="info">
-                Mock mode — in-memory data for tenant <strong>&nbsp;{DEMO_TENANT}&nbsp;</strong>, reset on reload.
+                Mock mode — in-memory data for tenant <strong>&nbsp;{mockTenant}&nbsp;</strong>, reset on reload.
               </Banner>
+              <Select
+                label="Demo tenant"
+                value={mockTenant}
+                onChange={(e) => setMockTenant(e.target.value as DemoTenantCode)}
+                options={DEMO_TENANTS.map((t) => ({ value: t.code, label: `${t.name} — ${t.description}` }))}
+              />
               <div className="demo-users" role="list" aria-label="Demo users">
                 {DEMO_USERS.map((u) => (
                   <div role="listitem" key={u.username}>
                     <button
                       type="button"
                       className="demo-user"
-                      onClick={() => {
+                      onClick={async () => {
                         qc.clear();
+                        saveMockTenant(mockTenant);
+                        (await import('../mock')).switchMockTenant(mockTenant);
                         auth.loginDemo(u.username);
                         navigate(from, { replace: true });
                       }}

@@ -55,6 +55,24 @@ public final class SavingsInterest {
         this.dayCount = dayCount;
     }
 
+    /**
+     * The last day of the interest period that holds {@code date}. Periods are {@code postingMonths} long (1, 3, 6
+     * or 12) and counted from the first month of the financial year, so a quarterly product in a year starting in
+     * April credits for the quarters ending 30 June, 30 September, 31 December and 31 March.
+     */
+    public static LocalDate periodEnd(LocalDate date, int postingMonths, int financialYearStartMonth) {
+        if (postingMonths != 1 && postingMonths != 3 && postingMonths != 6 && postingMonths != 12) {
+            throw new IllegalArgumentException("interest is credited every 1, 3, 6 or 12 months");
+        }
+        if (financialYearStartMonth < 1 || financialYearStartMonth > 12) {
+            throw new IllegalArgumentException("the financial year starts in a month from 1 to 12");
+        }
+        int sinceYearStart = Math.floorMod(date.getMonthValue() - financialYearStartMonth, 12);
+        LocalDate yearStart = date.withDayOfMonth(1).minusMonths(sinceYearStart);
+        int periods = sinceYearStart / postingMonths + 1;
+        return yearStart.plusMonths((long) periods * postingMonths).minusDays(1);
+    }
+
     /** Why the bands break a rule set; empty when they do not. */
     public List<DepositRules.Violation> check(DepositRules rules) {
         List<DepositRules.Violation> out = new ArrayList<>(rules.checkDemandDeposit());

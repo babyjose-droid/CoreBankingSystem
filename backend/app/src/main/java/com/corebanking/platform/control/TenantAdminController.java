@@ -43,6 +43,12 @@ class TenantAdminController {
         return provisioner.setModules(code, modules, CurrentUser.username());
     }
 
+    /** Records or withdraws an NBFC's registration to accept public deposits; the TD module needs it. */
+    @PutMapping("/tenants/{code}/deposit-registration")
+    Map<String, Object> depositRegistration(@PathVariable String code, @RequestBody TenantProvisioner.DepositRegistration registration) {
+        return provisioner.setDepositTaking(code, registration, CurrentUser.username());
+    }
+
     @PostMapping("/migrations")
     List<TenantProvisioner.MigrationResult> migrate(@RequestParam(defaultValue = "true") boolean dryRun) {
         return provisioner.migrateAll(dryRun, CurrentUser.username());
