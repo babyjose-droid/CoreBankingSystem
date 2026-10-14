@@ -99,9 +99,10 @@ public class DepositAccountService {
     private final DepositRuleSets ruleSets;
     private final DepositProductService products;
     private final Json json;
+    private final DepositMoneyService money;
 
     DepositAccountService(JdbcTemplate jdbc, ApprovalService approvals, BusinessDays days, BranchScope scope, DepositRuleSets ruleSets,
-                          DepositProductService products, Json json) {
+                          DepositProductService products, Json json, @Lazy DepositMoneyService money) {
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.days = days;
@@ -109,6 +110,7 @@ public class DepositAccountService {
         this.ruleSets = ruleSets;
         this.products = products;
         this.json = json;
+        this.money = money;
     }
 
     // ---- proposing ------------------------------------------------------------------------------------------------
@@ -462,17 +464,26 @@ public class DepositAccountService {
         @Override public String apply(ApprovalRequest r) { return accounts.open(r); }
     }
 
+    /** A term deposit request: its booking (P4-1), its funding and the reversal of its funding (P4-2). */
     @Service
     static class TermDepositApplier implements ApprovalApplier {
         private final DepositAccountService accounts;
+        private final DepositMoneyService money;
 
-        TermDepositApplier(@Lazy DepositAccountService accounts) {
+        TermDepositApplier(@Lazy DepositAccountService accounts, @Lazy DepositMoneyService money) {
             this.accounts = accounts;
+            this.money = money;
         }
 
         @Override public String entityType() { return TD_ENTITY; }
 
-        @Override public String apply(ApprovalRequest r) { return accounts.open(r); }
+        @Override
+        public String apply(ApprovalRequest r) {
+            return switch (r.action()) {
+                case DepositMoneyService.FUND, DepositMoneyService.REVERSE_FUNDING -> money.applyFunding(r);
+                default -> accounts.open(r);
+            };
+        }
     }
 
     // ---- reading ------------------------------------------------------------------------------------------------
@@ -483,7 +494,9 @@ public class DepositAccountService {
                 SELECT a.id, a.account_no, a.product_code, p.name, p.product_type, a.customer_id, c.customer_no, c.display_name,
                        a.branch_code, a.operating_mode, a.status, a.opened_on, t.principal::text, t.tenure_months, t.tenure_days,
                        t.rate_percent::text, t.start_date, t.maturity_date,
-                       (SELECT count(*) FROM deposits.account_holder h WHERE h.account_id = a.id)
+                       (SELECT count(*) FROM deposits.account_holder h WHERE h.account_id = a.id),
+                       coalesce((SELECT b.balance FROM deposits.account_balance b WHERE b.account_id = a.id), 0)::text,
+                       EXISTS (SELECT 1 FROM deposits.account_hold x WHERE x.account_id = a.id AND x.status = 'ACTIVE')
                   FROM deposits.account a
                   JOIN deposits.product p ON p.code = a.product_code
                   JOIN customer.customer c ON c.id = a.customer_id
@@ -515,6 +528,8 @@ public class DepositAccountService {
                         m.put("maturityDate", rs.getObject(18, LocalDate.class));
                     }
                     m.put("holders", rs.getInt(19));
+                    m.put("balance", DepositRuleSets.plain(rs.getString(20)));
+                    m.put("onHold", rs.getBoolean(21));
                     return m;
                 }, family, scope.user(), customerId == null ? null : customerId.toString(), customerId == null ? null : customerId.toString(),
                 status, status);
@@ -572,6 +587,7 @@ public class DepositAccountService {
                     m.put("guardianName", rs.getString(6));
                     return m;
                 }, id));
+        out.putAll(money.balanceView(id));
         if (DepositProductService.CASA.equals(family)) {
             out.put("nextInterestDate", jdbc.queryForObject("SELECT next_interest_date::text FROM deposits.casa_account WHERE account_id = ?", String.class, id));
         } else {
@@ -590,8 +606,9 @@ public class DepositAccountService {
                           FROM jsonb_array_elements(t.add_ons) x)::text,
                        t.interest_period_months, t.cumulative, t.day_count, t.rounding, t.tds_applicable, t.premature_allowed,
                        t.premature_penalty_percent, t.premature_min_days, t.payout_to, t.payout_account_id::text, pay.account_no,
-                       t.maturity_instruction
+                       t.maturity_instruction, t.funding_source, fa.account_no, t.funding_reference, t.payout_bank_account_last4, t.payout_bank_ifsc
                   FROM deposits.term_deposit t LEFT JOIN deposits.account pay ON pay.id = t.payout_account_id
+                  LEFT JOIN deposits.account fa ON fa.id = t.funding_account_id
                  WHERE t.account_id = ?
                 """, (rs, i) -> {
                     Map<String, Object> m = new LinkedHashMap<>();
@@ -623,6 +640,11 @@ public class DepositAccountService {
                     m.put("payoutAccountId", rs.getString(22));
                     m.put("payoutAccountNo", rs.getString(23));
                     m.put("maturityInstruction", rs.getString(24));
+                    m.put("fundingSource", rs.getString(25));
+                    m.put("fundingAccountNo", rs.getString(26));
+                    m.put("fundingReference", rs.getString(27));
+                    m.put("payoutBankAccountMasked", rs.getString(28) == null ? null : "XXXXXXXX" + rs.getString(28));
+                    m.put("payoutBankIfsc", rs.getString(29));
                     // figures from the engine, on the frozen terms
                     LocalDate from = start != null ? start : day == null ? rs.getObject(4, LocalDate.class) : day.businessDate();
                     TermDeposit.Terms terms = new TermDeposit.Terms(principal, rate, from, tenure.addTo(from), rs.getInt(13), rs.getBoolean(14),

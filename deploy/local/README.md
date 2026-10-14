@@ -108,7 +108,8 @@ KYC is verified (three documents, verified by a second user).
   cd deploy/local
   docker compose rm -sf keycloak
   docker compose --profile console up -d --build
-  docker compose logs -f backend      # look for "tenant demo-bank registered" and "tenant demo-nbfc-d registered"
+  docker compose logs -f backend      # first start: "bootstrapping LOCAL demo tenant demo-bank" (and demo-nbfc-d), then
+                                      # "demo tenant: 4 deposit product(s) added"; later starts: "tenant demo-bank registered"
   ```
 
 ## Demo users (every demo realm)
@@ -118,7 +119,7 @@ TOTP (Google Authenticator, FreeOTP, ...) on first login — MFA is mandatory fo
 
 | User | Realm role | What it can do |
 |------|-----------|----------------|
-| `maker` | MAKER | view masters, propose branch/holiday/tax/GL-head changes, create customers and vouchers, reverse vouchers, GL reports; propose deposit products, open accounts, book term deposits |
+| `maker` | MAKER | view masters, propose branch/holiday/tax/GL-head changes, create customers and vouchers, reverse vouchers, GL reports; propose deposit products, open accounts, book term deposits; move money, freeze and lien, fund deposits (posted at once below ₹2,00,000) |
 | `checker` | CHECKER | view (deposits included), approve/reject proposals, GL reports |
 | `ops` | OPERATIONS | view/run end-of-day, GL view and reports |
 | `auditor` | AUDITOR | read-only including the audit trail |

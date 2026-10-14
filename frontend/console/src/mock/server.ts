@@ -32,6 +32,7 @@ import { applyIntegrationApproval, registerIntegrationRoutes, rejectIntegrationA
 import { applyPlatformMoreApproval, assertCustom, bookDeferredReceipts, maskCustom, registerPlatformMoreRoutes } from './platformMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE, type FieldProblem } from './problems';
+import { depositCheckers } from './depositMoney';
 import { applyDepositApproval, applyTenant, registerDepositRoutes } from './deposits';
 import type { DemoTenantCode } from '../auth/demoUsers';
 
@@ -110,6 +111,8 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   /** The backend's approval rules as the mock knows them: restructures and vouchers of ₹10 lakh or more need two checkers. */
   function checkersRequired(entityType: string, amount: string | null, payload?: ApprovalPayload): number {
     if (payload?.kind === 'INTEGRATION') return payload.checkers;
+    const deposit = payload ? depositCheckers(payload, amount) : null;
+    if (deposit !== null) return deposit;
     if (payload?.kind === 'LOAN_PARTY_RELEASE') return payload.stressed ? 2 : 1;
     if (entityType === 'LOAN_RESTRUCTURE' || entityType === 'LOAN_NPA_OVERRIDE') return 2;
     if (entityType === 'VOUCHER' && amount && isMoney(amount) && toUnits(amount) >= toUnits(TWO_CHECKER_VOUCHER_AMOUNT)) return 2;
@@ -146,6 +149,17 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     const stored: StoredApproval = { approval, payload, approvedBy: [] };
     db.approvals.push(stored);
     appendAudit(db, approval.madeAt, user.username, 'APPROVAL_REQUESTED', entityType, approval.id, { action, entityId });
+    if (approval.checkersRequired === 0) {
+      // a rule says no checker is needed (deposit money below the threshold): applied at once, as the backend does
+      try {
+        applyApproval(stored, user.username);
+      } catch (e) {
+        db.approvals.splice(db.approvals.indexOf(stored), 1);
+        throw e;
+      }
+      if (!approval.appliedRef) approval.appliedRef = approval.entityId ?? null;
+      Object.assign(approval, { status: 'APPROVED', checker: user.username, checkedAt: nowIso(), note: 'auto-approved by rule' });
+    }
     return accepted(approvalView(stored));
   }
 

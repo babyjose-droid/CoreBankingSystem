@@ -1,12 +1,14 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 11-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 14-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
 
 | Increment | State |
 |-----------|-------|
 | P4-0 deposit core | Built, pushed (`9cb5f8e`, `3851a93`), live-tested on the local stack on 10-Oct-2026 |
-| P4-1 products and opening | Built on 11-Oct-2026; not yet pushed or run on the local stack (see "Not verified here" below) |
-| P4-2 to P4-7 | Not started |
+| P4-1 products and opening | Built, pushed (`586b8e8`), live-tested on the local stack on 11-Oct-2026 |
+| P4-2 money movement | Built on 14-Oct-2026; not yet pushed or run on the local stack (see "Not verified here" under P4-2) |
+| P4-2b gateway for deposits | Not started: bank transfers and gateway funding through the payout and collection pipeline |
+| P4-3 to P4-7 | Not started |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -168,5 +170,67 @@ No money moves in this increment: a savings or current account opens with no bal
 - Support access (read-only platform engineers) to the deposit endpoints.
 - Sessions and API clients on the two new demo tenants: their realms have no local Keycloak admin client.
 
-### Next: P4-2 money movement
-Cash deposit and withdrawal, transfer, bank transfer in and out, reversal, freeze and lien on savings and current accounts; funding a term deposit from an account, the gateway or a receipt, with the payout bank account. Next tenant migration: V30; next control migration: V5.
+### Verified after the push (11-Oct-2026)
+- **Local stack.** The Docker build compiled the backend with Gradle and it started, so the Spring wiring and Jackson handling the sandbox could not prove are proven. V29 applied to `demo-nbfc`; `demo-bank` and `demo-nbfc-d` were created, migrated to V29 and seeded with 4 and 2 products.
+- **Through the API, as the development users** (maker proposes, checker approves): tenant separation (`demo-nbfc` 403 on every deposit path; `demo-nbfc-d` 403 on `/casa`); the deposit heads of each chart; a product checked for a rate-card gap, proposed and approved (the maker could not approve it); a joint savings account refused with two reasons at once, then opened; a bank term deposit previewed (7.1% + 0.5% senior, maturity 1,07,819.36), a senior add-on refused for a younger depositor, booked and approved; an NBFC deposit previewed (8.75%, not insured), refused with four reasons, then booked; an NBFC product at 13% refused on the ceiling and both tenure limits.
+- **Console pages read:** rule set, product list and detail with the rate-card grid, both account lists and details, the booking form on both tenants.
+- **Not covered:** CI for `586b8e8` was not read; the forms were not driven by clicks; the deposit-registration route was not called over HTTP (the bootstrap calls the same method).
+- **Found and fixed in P4-2:** a customer with an unknown gender code was accepted and failed only at approval; product timestamps were not ISO-8601; the booked-deposit banner showed a raw date; the README named a log line written only on later starts.
+
+## Increment P4-2: money movement
+
+Money now moves on deposit accounts. Bank transfers are recorded by staff with the bank's reference (UTR); sending and receiving them through the payment gateway is P4-2b (decided 14-Oct-2026: the payout and collection pipeline is wired to loans and is extended to deposits separately). No interest, tax or charges yet (P4-3, P4-4).
+
+### What was built
+**Deposit engine** (`backend/deposits-core`, now also on `ledger-core`)
+- `DepositPostings`: one balanced lot per movement. Cash deposit Dr cash in hand / Cr the account; withdrawal the reverse; bank transfer in Dr the collection bank; bank transfer out Cr the disbursement bank; transfer Dr the paying account / Cr the receiving account, with inter-branch legs on the tenant's inter-branch head when the branches differ; funding Dr the paying account, cash or the collection bank / Cr the term deposit. A reversal is the mirror lot.
+- `AccountHolds`: freezes (debit, credit, total) and liens, and whether money may move. No movement takes the balance below zero; a debit never goes below the liens; a lien is placed only within the available balance; a freeze of a kind already in force is refused. A reversal (a correction) is not stopped by a freeze but still by the balance and the liens. Every reason at once.
+
+**Tenant database** (`V30__deposit_money_movement.sql`)
+- Settings: the cash and bank heads deposits settle against (`deposits.gl.cash` 1201, `deposits.gl.bank-in` 1203, `deposits.gl.bank-out` 1202) and the funding window (`deposits.funding-within-days`, 30).
+- `deposits.movement`: one row per account per movement, tied to its ledger lot, with the balance after it. Value date is the business date. Never changed or deleted, except to record the movement that reverses it. Checked at COMMIT: the movements of an account in a lot equal what the lot posts to the account on its product's liability head.
+- `deposits.account_balance`: kept by the movements only; never below zero. `deposits.balance_problems()` lists every account whose balance is not what the ledger says (empty when the books agree).
+- `deposits.account_hold`: freezes and liens, released not deleted; one freeze of a kind at a time; a term deposit takes liens only, once funded.
+- Funding: how a deposit was funded, from which account, the funding movement and reference, and the payout bank account (sealed, last four digits and IFSC kept; open item P4-07 closed). A deposit is funded on the business date, with its principal, from an account its depositor holds, within the funding window; it is ACTIVE exactly while funded and then holds its principal. The reversal of the funding takes it back to BOOKED.
+- Approval rules: money in and out and a funding apply at once below 2,00,000 and need a checker from it upward; a reversal, a hold and a funding reversal always need one. The threshold is a starting value for the tenant, not a regulatory figure. Amount-limit types `DEPOSIT_CREDIT` and `DEPOSIT_DEBIT`.
+
+**Application** (`com.corebanking.deposits`)
+- `DepositMoneyService` and `DepositMoneyController`: transactions (`POST /api/v1/casa/accounts/{id}/transactions`), transfers (`POST /api/v1/casa/transfers`), reversals (`POST /api/v1/casa/movements/{movementId}/reverse`), statement (`GET …/movements`), holds (`GET`/`POST …/holds`, `POST …/holds/{holdId}/release`) on savings and current accounts; funding (`POST /api/v1/deposits/accounts/{id}/fund`), its reversal (`…/funding/reverse`), movements and liens on term deposits.
+- Every request through maker-checker (entity types `DEPOSIT_TXN`, `DEPOSIT_HOLD`, and `TERM_DEPOSIT` with actions `FUND` and `REVERSE_FUNDING`). The maker's role amount limit applies when the request is raised, the checker's when it is approved. Each check runs when the request is raised and again when it is applied.
+- Account detail and list show the balance, the liens, the available balance and the freezes in force; a term deposit shows how it was funded and the payout bank account masked.
+- Permissions: new `casa:transact`, `casa:hold`, `deposit:fund`, `deposit:hold` (MAKER and TENANT_ADMIN). The three demo realms carry them.
+
+**Console**
+- Account page: balance card, statement with the balance after each movement and a Reverse action, freezes and liens with Release, and buttons for money in, money out, transfer, freeze or lien; a term deposit page has Fund the deposit, Lien and Reverse the funding. A request that posts at once says "done"; one that waits says it was sent for approval.
+- The account list shows each savings or current account's balance and whether a hold is in force.
+- Mock mode follows the same checks, posts at once below the threshold, and keeps balances from the movements.
+
+### Choices made in this increment (to confirm)
+- **The threshold** for a checker on money in and out and on funding: 2,00,000, the same for cash and transfers. A tenant changes it in its approval rules.
+- **Value date** is always the business date: no back-valued movement.
+- **Funding window:** a booking lapses if not funded within 30 days (its rate is held that long). Book again after that.
+- **A lien** may not exceed the available balance when it is placed; a reversal that would break a lien is refused until the lien is released.
+- **A term deposit** takes liens only (no freezes) and money only by its funding until maturity processing (P4-4).
+- **Cash** is posted against the account's own branch; there is no teller or cash-drawer control yet.
+- **The funding reversal** is refused once anything else has moved on the deposit.
+
+### Tests
+- **Engine:** 72 tests in `deposits-core` (12 new in `DepositMovementsTest`).
+- **Tenant database:** 68 checks in the new `deposits_money_movement_test.sql`; all 18 other tenant suites and the 3 control suites pass (`deposits_products_accounts_test.sql` no longer sets funding dates by hand).
+- **Application services:** 67 checks run in the build sandbox against migrated bank and deposit-taking NBFC databases, on stand-ins for Spring (as for P4-1, not in the repository); the 46 checks of P4-1 still pass.
+- **Console:** 9 tests in `depositMoney.test.tsx`; the whole suite, typecheck and build pass.
+- **API contract:** 13 new operations; `docs/api/openapi.yaml` lints clean and every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring:** as before, the build sandbox cannot reach Maven Central. The module was type-checked against stand-ins and its SQL run through `psql` with JDBC-typed parameters. CI runs the real build.
+- **No automated service test in the repository** (open item P4-08): a Testcontainers test that boots the services was not written, because it could not be run here and would first be run by CI.
+- **Live stack:** nothing in P4-2 has run there yet.
+
+### Not yet built
+- Bank transfers and gateway funding through the payout and collection pipeline (P4-2b).
+- Interest, tax, charges, minimum balance, closure (P4-3, P4-4).
+- Cheques, standing instructions, dormancy (P4-5, P4-6).
+- Cash drawer and teller limits beyond the role amount limits.
+
+### Next: P4-2b or P4-3
+P4-2b extends the payout and collection pipeline to deposit accounts (bank transfers out sent through the gateway, money in and term deposit funding through collection orders). P4-3 is the day-end interest: savings accrual and credit, term deposit accrual, payout and compounding, the TDS ledger. Next tenant migration: V31; next control migration: V5.

@@ -82,6 +82,10 @@ export const P = {
   casaOpen: 'casa:open',
   depositView: 'deposit:view',
   depositBook: 'deposit:book',
+  casaTransact: 'casa:transact',
+  casaHold: 'casa:hold',
+  depositFund: 'deposit:fund',
+  depositHold: 'deposit:hold',
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];

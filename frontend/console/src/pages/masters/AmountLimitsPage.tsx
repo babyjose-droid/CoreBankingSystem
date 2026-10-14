@@ -8,7 +8,7 @@ import { isMoney } from '../../lib/money';
 import { Badge, Button, Card, Checkbox, DateText, Dialog, EmptyState, ErrorBanner, Input, MoneyText, PageHeader, Select, Spinner, Table, humanize } from '../../ui';
 import { useProposalToast } from '../proposal';
 
-export const LIMIT_TXN_TYPES: LimitTxnType[] = ['LOAN_DISBURSEMENT', 'LOAN_REPAYMENT', 'LOAN_PRECLOSURE', 'LOAN_WAIVER', 'FEE_WAIVER', 'VOUCHER'];
+export const LIMIT_TXN_TYPES: LimitTxnType[] = ['LOAN_DISBURSEMENT', 'LOAN_REPAYMENT', 'LOAN_PRECLOSURE', 'LOAN_WAIVER', 'FEE_WAIVER', 'VOUCHER', 'DEPOSIT_CREDIT', 'DEPOSIT_DEBIT'];
 
 export function AmountLimitsPage() {
   const me = useMe().data!;

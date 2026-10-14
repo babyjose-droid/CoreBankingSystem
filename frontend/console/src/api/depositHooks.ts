@@ -4,6 +4,12 @@ import type {
   Approval,
   CasaAccountInput,
   DepositAccount,
+  DepositHold,
+  DepositHoldInput,
+  DepositMovement,
+  DepositTransactionInput,
+  DepositTransferInput,
+  TermDepositFundingInput,
   DepositAccountSummary,
   DepositFamily,
   DepositProduct,
@@ -146,5 +152,117 @@ export function useBookTermDeposit() {
   return useMutation({
     mutationFn: (body: TermDepositInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts', { body }) as never),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['approvals'] }),
+  });
+}
+
+// ---- money on deposit accounts (P4-2) ---------------------------------------------------------------------------
+
+/** After money moves (or a request is raised): the accounts, their movements and holds, and the approval queue. */
+function useMoneyInvalidation() {
+  const qc = useQueryClient();
+  return () => {
+    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals']) qc.invalidateQueries({ queryKey: [key] });
+  };
+}
+
+export function useDepositMovements(family: DepositFamily, id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['deposit-movements', family, id],
+    queryFn: () =>
+      unwrap<DepositMovement[]>(
+        family === 'CASA'
+          ? api.GET('/api/v1/casa/accounts/{id}/movements', { params: { path: { id: id! } } })
+          : api.GET('/api/v1/deposits/accounts/{id}/movements', { params: { path: { id: id! } } }),
+      ),
+    enabled: !!id,
+  });
+}
+
+export function useDepositHolds(family: DepositFamily, id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['deposit-holds', family, id],
+    queryFn: () =>
+      unwrap<DepositHold[]>(
+        family === 'CASA'
+          ? api.GET('/api/v1/casa/accounts/{id}/holds', { params: { path: { id: id! } } })
+          : api.GET('/api/v1/deposits/accounts/{id}/holds', { params: { path: { id: id! } } }),
+      ),
+    enabled: !!id,
+  });
+}
+
+export function useCasaTransaction(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: DepositTransactionInput) => unwrap<Approval>(api.POST('/api/v1/casa/accounts/{id}/transactions', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useCasaTransfer() {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: DepositTransferInput) => unwrap<Approval>(api.POST('/api/v1/casa/transfers', { body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useReverseMovement() {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: ({ movementId, reason }: { movementId: string; reason: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/casa/movements/{movementId}/reverse', { params: { path: { movementId } }, body: { reason } }) as never),
+    onSuccess: done,
+  });
+}
+
+export function usePlaceHold(family: DepositFamily, id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: DepositHoldInput) =>
+      unwrap<Approval>(
+        (family === 'CASA'
+          ? api.POST('/api/v1/casa/accounts/{id}/holds', { params: { path: { id } }, body })
+          : api.POST('/api/v1/deposits/accounts/{id}/holds', { params: { path: { id } }, body })) as never,
+      ),
+    onSuccess: done,
+  });
+}
+
+export function useReleaseHold(family: DepositFamily) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: ({ holdId, reason }: { holdId: string; reason: string }) =>
+      unwrap<Approval>(
+        (family === 'CASA'
+          ? api.POST('/api/v1/casa/holds/{holdId}/release', { params: { path: { holdId } }, body: { reason } })
+          : api.POST('/api/v1/deposits/holds/{holdId}/release', { params: { path: { holdId } }, body: { reason } })) as never,
+      ),
+    onSuccess: done,
+  });
+}
+
+export function useFundTermDeposit(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: TermDepositFundingInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/fund', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useReverseFunding(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (reason: string) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/funding/reverse', { params: { path: { id } }, body: { reason } }) as never),
+    onSuccess: done,
   });
 }

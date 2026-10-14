@@ -3818,6 +3818,137 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DepositAccount' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/transactions:
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaTransaction
+      summary: Propose a cash deposit or withdrawal, or a bank transfer in or out (maker-checker by amount)
+      description: >-
+        Module CASA. Permission casa:transact. Applied at once below the tenant's threshold (approval rules: 2,00,000 to start
+        with), when the answer is already APPROVED; from the threshold upward it waits for a checker. The maker's role amount limit
+        DEPOSIT_CREDIT (money in) or DEPOSIT_DEBIT (money out) applies, and the checker's on approval. A bank transfer is recorded
+        with the bank's reference (UTR); a transfer out names the payee's bank account, which is stored sealed and shown masked.
+        Sending and receiving through the payment gateway comes later (P4-2b). 422 with `problems`, every reason at once: an
+        amount not above zero or in fractions of a paisa, a balance that would fall below zero or below the liens, a freeze in
+        force, a missing UTR or bank account, an invalid IFSC. The same checks run again when the request is applied.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositTransactionInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/movements:
+    get:
+      tags: [Deposits]
+      operationId: listCasaMovements
+      summary: The movements of a savings or current account, newest first, with the balance after each
+      description: Module CASA. Permission casa:view. At most 1000. 404 outside the caller's branch scope.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: from, in: query, schema: { type: string, format: date }, description: First business date }
+        - { name: to, in: query, schema: { type: string, format: date }, description: Last business date }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositMovement' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/holds:
+    get:
+      tags: [Deposits]
+      operationId: listCasaHolds
+      summary: The freezes and liens of a savings or current account, active first
+      description: Module CASA. Permission casa:view.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositHold' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaHold
+      summary: Propose a freeze or a lien (maker-checker)
+      description: >-
+        Module CASA. Permission casa:hold. Always waits for a checker. A debit freeze stops money going out, a credit freeze money
+        coming in, a total freeze both; a lien holds an amount of the balance. 422: a freeze of a kind already in force, a freeze
+        with an amount, a lien without one or above the available balance, no reason, an account that is not active.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositHoldInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/holds/{holdId}/release:
+    post:
+      tags: [Deposits]
+      operationId: releaseCasaHold
+      summary: Propose the release of a freeze or lien (maker-checker)
+      description: Module CASA. Permission casa:hold. Always waits for a checker. 422 when already released or without a reason.
+      parameters:
+        - { name: holdId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/transfers:
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaTransfer
+      summary: Propose a transfer between two savings or current accounts (maker-checker by amount)
+      description: >-
+        Module CASA. Permission casa:transact. The paying account must be in the caller's branch scope; the receiving account may
+        be at any branch (inter-branch legs are posted). As the other transactions: at once below the threshold, the DEPOSIT_DEBIT
+        limit, 422 with every reason (including a credit freeze on the receiving account).
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositTransferInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/movements/{movementId}/reverse:
+    post:
+      tags: [Deposits]
+      operationId: proposeMovementReversal
+      summary: Propose the reversal of a posted movement, with a reason (maker-checker)
+      description: >-
+        Module CASA. Permission casa:transact. Always waits for a checker. The mirror lot is posted; a transfer is reversed on both
+        sides. A freeze does not stop a reversal (a correction), but the balance may not fall below zero or below the liens. 422:
+        no reason, a movement already reversed, a reversal, a movement that funded a term deposit (reverse the funding instead).
+      parameters:
+        - { name: movementId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/rules:
     get:
       tags: [Deposits]
@@ -4015,6 +4146,112 @@ paths:
               schema: { $ref: '#/components/schemas/DepositAccount' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /api/v1/deposits/accounts/{id}/fund:
+    post:
+      tags: [Deposits]
+      operationId: proposeTermDepositFunding
+      summary: Propose funding a booked term deposit with its principal (maker-checker by amount)
+      description: >-
+        Module TD. Permission deposit:fund. From a savings or current account the depositor holds, in cash, or by a bank transfer
+        (with its UTR). Interest starts on the business date it is applied; the maturity date follows. A deposit paid out to a bank
+        account has that account recorded now. At once below the threshold, as money in and out. 422 with every reason: a deposit
+        that is not BOOKED, a booking older than the funding window (tenant setting, 30 days to start with), an account the
+        depositor does not hold, a balance that would fall below zero or the liens, a missing UTR, a missing or unneeded bank account.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TermDepositFundingInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/funding/reverse:
+    post:
+      tags: [Deposits]
+      operationId: proposeTermDepositFundingReversal
+      summary: Propose the reversal of a deposit's funding (maker-checker)
+      description: >-
+        Module TD. Permission deposit:fund. Always waits for a checker. The money goes back where it came from and the deposit is
+        BOOKED again. 422: no reason, a deposit not funded, a lien in force, money moved on the deposit since.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/movements:
+    get:
+      tags: [Deposits]
+      operationId: listTermDepositMovements
+      summary: The movements of a term deposit, newest first
+      description: Module TD. Permission deposit:view.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositMovement' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/holds:
+    get:
+      tags: [Deposits]
+      operationId: listTermDepositHolds
+      summary: The liens of a term deposit, active first
+      description: Module TD. Permission deposit:view.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositHold' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeTermDepositLien
+      summary: Propose a lien on a funded term deposit (maker-checker)
+      description: >-
+        Module TD. Permission deposit:hold. Kind LIEN only (a term deposit takes no freeze). Always waits for a checker. 422: a
+        deposit not funded, an amount above the available balance, no reason.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositHoldInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/holds/{holdId}/release:
+    post:
+      tags: [Deposits]
+      operationId: releaseTermDepositLien
+      summary: Propose the release of a lien on a term deposit (maker-checker)
+      description: Module TD. Permission deposit:hold. Always waits for a checker.
+      parameters:
+        - { name: holdId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearer:
@@ -4297,7 +4534,7 @@ components:
         strength: { type: string, enum: [EXACT, STRONG, POSSIBLE] }
     LimitTxnType:
       type: string
-      enum: [LOAN_DISBURSEMENT, LOAN_REPAYMENT, LOAN_WAIVER, VOUCHER, LOAN_PRECLOSURE, FEE_WAIVER]
+      enum: [LOAN_DISBURSEMENT, LOAN_REPAYMENT, LOAN_WAIVER, VOUCHER, LOAN_PRECLOSURE, FEE_WAIVER, DEPOSIT_CREDIT, DEPOSIT_DEBIT]
     AmountLimitInput:
       type: object
       required: [roleName, txnType, perTransactionMax, effectiveFrom]
@@ -6025,6 +6262,88 @@ components:
         totalTax: { type: [string, 'null'], description: null for a product that deducts no tax }
         taxNote: { type: [string, 'null'] }
         insured: { type: [boolean, 'null'], description: 'false: deposits with this institution are not insured (deposit-taking NBFC); say so on what the depositor is given' }
+    BankAccountInput:
+      type: object
+      description: An account at another bank. Stored sealed; shown with its last four digits only.
+      required: [holderName, accountNumber, ifsc]
+      properties:
+        holderName: { type: string, maxLength: 100 }
+        accountNumber: { type: string, description: 6 to 35 letters or digits; spaces are ignored }
+        ifsc: { type: string, pattern: '^[A-Za-z]{4}0[A-Za-z0-9]{6}$' }
+    DepositTransactionInput:
+      type: object
+      required: [type, amount]
+      properties:
+        type: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT] }
+        amount: { type: number, exclusiveMinimum: 0, multipleOf: 0.01 }
+        reference: { type: [string, 'null'], maxLength: 60, description: 'The bank''s UTR (required for a bank transfer), or a slip number' }
+        narration: { type: [string, 'null'], maxLength: 200 }
+        bankAccount: { $ref: '#/components/schemas/BankAccountInput', description: 'The payee (required for BANK_TRANSFER_OUT) or the remitter (optional for BANK_TRANSFER_IN)' }
+    DepositTransferInput:
+      type: object
+      required: [fromAccountId, toAccountId, amount]
+      properties:
+        fromAccountId: { type: string, format: uuid }
+        toAccountId: { type: string, format: uuid }
+        amount: { type: number, exclusiveMinimum: 0, multipleOf: 0.01 }
+        narration: { type: [string, 'null'], maxLength: 200 }
+    ReasonInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
+    DepositHoldInput:
+      type: object
+      required: [kind, reason]
+      properties:
+        kind: { type: string, enum: [DEBIT_FREEZE, CREDIT_FREEZE, TOTAL_FREEZE, LIEN] }
+        amount: { type: [number, 'null'], description: A lien's amount; a freeze has none }
+        reason: { type: string, maxLength: 500 }
+        reference: { type: [string, 'null'], maxLength: 100, description: The order or the loan the hold is for }
+    TermDepositFundingInput:
+      type: object
+      required: [source]
+      properties:
+        source: { type: string, enum: [ACCOUNT, CASH, BANK_TRANSFER] }
+        fromAccountId: { type: [string, 'null'], format: uuid, description: 'The paying savings or current account (ACCOUNT only)' }
+        reference: { type: [string, 'null'], maxLength: 60, description: 'The bank''s UTR (required for BANK_TRANSFER), or a receipt number' }
+        payoutBankAccount: { $ref: '#/components/schemas/BankAccountInput', description: Required when the deposit is paid out to a bank account }
+    DepositMovement:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer, description: The order movements were made in }
+        businessDate: { type: string, format: date }
+        valueDate: { type: string, format: date }
+        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL] }
+        direction: { type: string, enum: [DEBIT, CREDIT] }
+        amount: { $ref: '#/components/schemas/Money' }
+        balanceAfter: { $ref: '#/components/schemas/Money' }
+        reference: { type: [string, 'null'] }
+        narration: { type: [string, 'null'] }
+        counterpartyAccountNo: { type: [string, 'null'], description: The other account of a transfer or a funding }
+        bankAccountMasked: { type: [string, 'null'] }
+        bankIfsc: { type: [string, 'null'] }
+        reverses: { type: [string, 'null'], format: uuid }
+        reversedBy: { type: [string, 'null'], format: uuid }
+        reversalReason: { type: [string, 'null'] }
+        createdBy: { type: string, description: The maker }
+        approvalId: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    DepositHold:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [DEBIT_FREEZE, CREDIT_FREEZE, TOTAL_FREEZE, LIEN] }
+        amount: { type: [string, 'null'] }
+        reason: { type: string }
+        reference: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, RELEASED] }
+        placedOn: { type: string, format: date }
+        placedBy: { type: string }
+        releasedOn: { type: [string, 'null'], format: date }
+        releasedBy: { type: [string, 'null'] }
+        releaseReason: { type: [string, 'null'] }
     DepositAccountSummary:
       type: object
       properties:
@@ -6047,6 +6366,8 @@ components:
         ratePercent: { type: [string, 'null'] }
         startDate: { type: [string, 'null'], format: date }
         maturityDate: { type: [string, 'null'], format: date }
+        balance: { $ref: '#/components/schemas/Money' }
+        onHold: { type: boolean, description: A freeze or lien is in force }
     DepositAccount:
       type: object
       properties:
@@ -6084,6 +6405,10 @@ components:
               sharePercent: { type: [string, 'null'] }
               minor: { type: boolean }
               guardianName: { type: [string, 'null'] }
+        balance: { $ref: '#/components/schemas/Money' }
+        lienAmount: { $ref: '#/components/schemas/Money' }
+        availableBalance: { $ref: '#/components/schemas/Money', description: The balance less the liens }
+        freezes: { type: array, items: { type: string, enum: [DEBIT_FREEZE, CREDIT_FREEZE, TOTAL_FREEZE] } }
         nextInterestDate: { type: [string, 'null'], format: date, description: 'Savings and current: the last day of the interest period in progress; null for an account that bears no interest' }
         termDeposit: { $ref: '#/components/schemas/TermDepositTerms' }
     TermDepositTerms:
@@ -6114,6 +6439,11 @@ components:
         payoutAccountId: { type: [string, 'null'] }
         payoutAccountNo: { type: [string, 'null'] }
         maturityInstruction: { type: string, enum: [PAY_OUT, RENEW_PRINCIPAL, RENEW_WITH_INTEREST] }
+        fundingSource: { type: [string, 'null'], enum: [ACCOUNT, CASH, BANK_TRANSFER, null] }
+        fundingAccountNo: { type: [string, 'null'] }
+        fundingReference: { type: [string, 'null'] }
+        payoutBankAccountMasked: { type: [string, 'null'], description: Recorded at funding }
+        payoutBankIfsc: { type: [string, 'null'] }
         funded: { type: boolean }
         figuresFrom: { type: string, format: date, description: 'The start date of the figures below: the funding date, or the business date while the deposit is not funded' }
         figuresMaturityDate: { type: string, format: date }

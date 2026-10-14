@@ -32,7 +32,10 @@ export function DepositAccountsPage({ family }: { family: DepositFamily }) {
           { key: 'rate', header: 'Rate', numeric: true, render: (a) => pct(a.ratePercent) },
           { key: 'maturity', header: 'Matures', render: (a) => (a.maturityDate ? <DateText value={a.maturityDate} /> : <span className="muted">when funded</span>) },
         ] as Column<DepositAccountSummary>[])
-      : ([{ key: 'mode', header: 'Operated', render: (a) => humanize(a.operatingMode ?? '') }] as Column<DepositAccountSummary>[])),
+      : ([
+          { key: 'mode', header: 'Operated', render: (a) => humanize(a.operatingMode ?? '') },
+          { key: 'balance', header: 'Balance', numeric: true, render: (a) => (<span><MoneyText value={a.balance} />{a.onHold && <><br /><span className="muted" style={{ fontSize: 12 }}>on hold</span></>}</span>) },
+        ] as Column<DepositAccountSummary>[])),
     { key: 'status', header: 'Status', render: (a) => <StatusBadge status={a.status ?? ''} /> },
     { key: 'opened', header: term ? 'Booked' : 'Opened', render: (a) => <DateText value={a.openedOn} /> },
     { key: 'branch', header: 'Branch', render: (a) => a.branchCode },
@@ -41,7 +44,7 @@ export function DepositAccountsPage({ family }: { family: DepositFamily }) {
     <div className="stack">
       <PageHeader
         title={term ? 'Term deposits' : 'Savings and current accounts'}
-        subtitle={term ? 'A deposit is booked first and funded afterwards; interest starts on the funding date.' : 'Accounts open with no balance; money moves from the next increment.'}
+        subtitle={term ? 'A deposit is booked first and funded afterwards; interest starts on the funding date.' : 'Accounts open with no balance. Money in and out below ₹2,00,000 posts at once; from that amount a checker approves it.'}
         actions={canOpen && <Button variant="primary" onClick={() => navigate(`${path}/new`)}>{term ? 'Book a deposit' : 'Open an account'}</Button>}
       />
       <Card flush>

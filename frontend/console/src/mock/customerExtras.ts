@@ -42,7 +42,7 @@ const ok = (body: unknown): Result => ({ status: 200, body });
 const created = (body: unknown): Result => ({ status: 201, body });
 const forbidden = (title: string, detail: string) => new HttpProblem(403, title, detail, {}, PROBLEM_BASE + 'forbidden');
 
-export const LIMIT_TXN_TYPES: LimitTxnType[] = ['LOAN_DISBURSEMENT', 'LOAN_REPAYMENT', 'LOAN_WAIVER', 'VOUCHER', 'LOAN_PRECLOSURE', 'FEE_WAIVER'];
+export const LIMIT_TXN_TYPES: LimitTxnType[] = ['LOAN_DISBURSEMENT', 'LOAN_REPAYMENT', 'LOAN_WAIVER', 'VOUCHER', 'LOAN_PRECLOSURE', 'FEE_WAIVER', 'DEPOSIT_CREDIT', 'DEPOSIT_DEBIT'];
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const KYC_TYPES = ['PAN', 'AADHAAR_MASKED', 'ADDRESS_PROOF', 'PHOTO', 'PASSPORT', 'VOTER_ID', 'DRIVING_LICENCE'];
 const CONSENT_PURPOSES = ['LOAN_PROCESSING', 'CREDIT_BUREAU_REPORTING', 'MARKETING', 'KYC_VERIFICATION', 'ACCOUNT_AGGREGATOR'];

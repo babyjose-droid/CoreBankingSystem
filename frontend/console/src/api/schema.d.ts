@@ -3530,6 +3530,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/accounts/{id}/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose a cash deposit or withdrawal, or a bank transfer in or out (maker-checker by amount)
+         * @description Module CASA. Permission casa:transact. Applied at once below the tenant's threshold (approval rules: 2,00,000 to start with), when the answer is already APPROVED; from the threshold upward it waits for a checker. The maker's role amount limit DEPOSIT_CREDIT (money in) or DEPOSIT_DEBIT (money out) applies, and the checker's on approval. A bank transfer is recorded with the bank's reference (UTR); a transfer out names the payee's bank account, which is stored sealed and shown masked. Sending and receiving through the payment gateway comes later (P4-2b). 422 with `problems`, every reason at once: an amount not above zero or in fractions of a paisa, a balance that would fall below zero or below the liens, a freeze in force, a missing UTR or bank account, an invalid IFSC. The same checks run again when the request is applied.
+         */
+        post: operations["proposeCasaTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/movements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The movements of a savings or current account, newest first, with the balance after each
+         * @description Module CASA. Permission casa:view. At most 1000. 404 outside the caller's branch scope.
+         */
+        get: operations["listCasaMovements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The freezes and liens of a savings or current account, active first
+         * @description Module CASA. Permission casa:view.
+         */
+        get: operations["listCasaHolds"];
+        put?: never;
+        /**
+         * Propose a freeze or a lien (maker-checker)
+         * @description Module CASA. Permission casa:hold. Always waits for a checker. A debit freeze stops money going out, a credit freeze money coming in, a total freeze both; a lien holds an amount of the balance. 422: a freeze of a kind already in force, a freeze with an amount, a lien without one or above the available balance, no reason, an account that is not active.
+         */
+        post: operations["proposeCasaHold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/holds/{holdId}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the release of a freeze or lien (maker-checker)
+         * @description Module CASA. Permission casa:hold. Always waits for a checker. 422 when already released or without a reason.
+         */
+        post: operations["releaseCasaHold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose a transfer between two savings or current accounts (maker-checker by amount)
+         * @description Module CASA. Permission casa:transact. The paying account must be in the caller's branch scope; the receiving account may be at any branch (inter-branch legs are posted). As the other transactions: at once below the threshold, the DEPOSIT_DEBIT limit, 422 with every reason (including a credit freeze on the receiving account).
+         */
+        post: operations["proposeCasaTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/movements/{movementId}/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the reversal of a posted movement, with a reason (maker-checker)
+         * @description Module CASA. Permission casa:transact. Always waits for a checker. The mirror lot is posted; a transfer is reversed on both sides. A freeze does not stop a reversal (a correction), but the balance may not fall below zero or below the liens. 422: no reason, a movement already reversed, a reversal, a movement that funded a term deposit (reverse the funding instead).
+         */
+        post: operations["proposeMovementReversal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/deposits/rules": {
         parameters: {
             query?: never;
@@ -3712,6 +3836,110 @@ export interface paths {
         get: operations["getTermDeposit"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/fund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose funding a booked term deposit with its principal (maker-checker by amount)
+         * @description Module TD. Permission deposit:fund. From a savings or current account the depositor holds, in cash, or by a bank transfer (with its UTR). Interest starts on the business date it is applied; the maturity date follows. A deposit paid out to a bank account has that account recorded now. At once below the threshold, as money in and out. 422 with every reason: a deposit that is not BOOKED, a booking older than the funding window (tenant setting, 30 days to start with), an account the depositor does not hold, a balance that would fall below zero or the liens, a missing UTR, a missing or unneeded bank account.
+         */
+        post: operations["proposeTermDepositFunding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/funding/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the reversal of a deposit's funding (maker-checker)
+         * @description Module TD. Permission deposit:fund. Always waits for a checker. The money goes back where it came from and the deposit is BOOKED again. 422: no reason, a deposit not funded, a lien in force, money moved on the deposit since.
+         */
+        post: operations["proposeTermDepositFundingReversal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/movements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The movements of a term deposit, newest first
+         * @description Module TD. Permission deposit:view.
+         */
+        get: operations["listTermDepositMovements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The liens of a term deposit, active first
+         * @description Module TD. Permission deposit:view.
+         */
+        get: operations["listTermDepositHolds"];
+        put?: never;
+        /**
+         * Propose a lien on a funded term deposit (maker-checker)
+         * @description Module TD. Permission deposit:hold. Kind LIEN only (a term deposit takes no freeze). Always waits for a checker. 422: a deposit not funded, an amount above the available balance, no reason.
+         */
+        post: operations["proposeTermDepositLien"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/holds/{holdId}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose the release of a lien on a term deposit (maker-checker)
+         * @description Module TD. Permission deposit:hold. Always waits for a checker.
+         */
+        post: operations["releaseTermDepositLien"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3979,7 +4207,7 @@ export interface components {
             strength?: "EXACT" | "STRONG" | "POSSIBLE";
         };
         /** @enum {string} */
-        LimitTxnType: "LOAN_DISBURSEMENT" | "LOAN_REPAYMENT" | "LOAN_WAIVER" | "VOUCHER" | "LOAN_PRECLOSURE" | "FEE_WAIVER";
+        LimitTxnType: "LOAN_DISBURSEMENT" | "LOAN_REPAYMENT" | "LOAN_WAIVER" | "VOUCHER" | "LOAN_PRECLOSURE" | "FEE_WAIVER" | "DEPOSIT_CREDIT" | "DEPOSIT_DEBIT";
         AmountLimitInput: {
             /** @description A realm role as it appears in the access token, e.g. MAKER */
             roleName: string;
@@ -6081,6 +6309,106 @@ export interface components {
             /** @description false: deposits with this institution are not insured (deposit-taking NBFC); say so on what the depositor is given */
             insured?: boolean | null;
         };
+        /** @description An account at another bank. Stored sealed; shown with its last four digits only. */
+        BankAccountInput: {
+            holderName: string;
+            /** @description 6 to 35 letters or digits; spaces are ignored */
+            accountNumber: string;
+            ifsc: string;
+        };
+        DepositTransactionInput: {
+            /** @enum {string} */
+            type: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT";
+            amount: number;
+            /** @description The bank's UTR (required for a bank transfer), or a slip number */
+            reference?: string | null;
+            narration?: string | null;
+            /** @description The payee (required for BANK_TRANSFER_OUT) or the remitter (optional for BANK_TRANSFER_IN) */
+            bankAccount?: components["schemas"]["BankAccountInput"];
+        };
+        DepositTransferInput: {
+            /** Format: uuid */
+            fromAccountId: string;
+            /** Format: uuid */
+            toAccountId: string;
+            amount: number;
+            narration?: string | null;
+        };
+        ReasonInput: {
+            reason: string;
+        };
+        DepositHoldInput: {
+            /** @enum {string} */
+            kind: "DEBIT_FREEZE" | "CREDIT_FREEZE" | "TOTAL_FREEZE" | "LIEN";
+            /** @description A lien's amount; a freeze has none */
+            amount?: number | null;
+            reason: string;
+            /** @description The order or the loan the hold is for */
+            reference?: string | null;
+        };
+        TermDepositFundingInput: {
+            /** @enum {string} */
+            source: "ACCOUNT" | "CASH" | "BANK_TRANSFER";
+            /**
+             * Format: uuid
+             * @description The paying savings or current account (ACCOUNT only)
+             */
+            fromAccountId?: string | null;
+            /** @description The bank's UTR (required for BANK_TRANSFER), or a receipt number */
+            reference?: string | null;
+            /** @description Required when the deposit is paid out to a bank account */
+            payoutBankAccount?: components["schemas"]["BankAccountInput"];
+        };
+        DepositMovement: {
+            /** Format: uuid */
+            id?: string;
+            /** @description The order movements were made in */
+            seq?: number;
+            /** Format: date */
+            businessDate?: string;
+            /** Format: date */
+            valueDate?: string;
+            /** @enum {string} */
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL";
+            /** @enum {string} */
+            direction?: "DEBIT" | "CREDIT";
+            amount?: components["schemas"]["Money"];
+            balanceAfter?: components["schemas"]["Money"];
+            reference?: string | null;
+            narration?: string | null;
+            /** @description The other account of a transfer or a funding */
+            counterpartyAccountNo?: string | null;
+            bankAccountMasked?: string | null;
+            bankIfsc?: string | null;
+            /** Format: uuid */
+            reverses?: string | null;
+            /** Format: uuid */
+            reversedBy?: string | null;
+            reversalReason?: string | null;
+            /** @description The maker */
+            createdBy?: string;
+            approvalId?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        DepositHold: {
+            /** Format: uuid */
+            id?: string;
+            /** @enum {string} */
+            kind?: "DEBIT_FREEZE" | "CREDIT_FREEZE" | "TOTAL_FREEZE" | "LIEN";
+            amount?: string | null;
+            reason?: string;
+            reference?: string | null;
+            /** @enum {string} */
+            status?: "ACTIVE" | "RELEASED";
+            /** Format: date */
+            placedOn?: string;
+            placedBy?: string;
+            /** Format: date */
+            releasedOn?: string | null;
+            releasedBy?: string | null;
+            releaseReason?: string | null;
+        };
         DepositAccountSummary: {
             /** Format: uuid */
             id?: string;
@@ -6108,6 +6436,9 @@ export interface components {
             startDate?: string | null;
             /** Format: date */
             maturityDate?: string | null;
+            balance?: components["schemas"]["Money"];
+            /** @description A freeze or lien is in force */
+            onHold?: boolean;
         };
         DepositAccount: {
             /** Format: uuid */
@@ -6148,6 +6479,11 @@ export interface components {
                 minor?: boolean;
                 guardianName?: string | null;
             }[];
+            balance?: components["schemas"]["Money"];
+            lienAmount?: components["schemas"]["Money"];
+            /** @description The balance less the liens */
+            availableBalance?: components["schemas"]["Money"];
+            freezes?: ("DEBIT_FREEZE" | "CREDIT_FREEZE" | "TOTAL_FREEZE")[];
             /**
              * Format: date
              * @description Savings and current: the last day of the interest period in progress; null for an account that bears no interest
@@ -6189,6 +6525,13 @@ export interface components {
             payoutAccountNo?: string | null;
             /** @enum {string} */
             maturityInstruction?: "PAY_OUT" | "RENEW_PRINCIPAL" | "RENEW_WITH_INTEREST";
+            /** @enum {string|null} */
+            fundingSource?: "ACCOUNT" | "CASH" | "BANK_TRANSFER" | null;
+            fundingAccountNo?: string | null;
+            fundingReference?: string | null;
+            /** @description Recorded at funding */
+            payoutBankAccountMasked?: string | null;
+            payoutBankIfsc?: string | null;
             funded?: boolean;
             /**
              * Format: date
@@ -11326,6 +11669,160 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    proposeCasaTransaction: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositTransactionInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCasaMovements: {
+        parameters: {
+            query?: {
+                /** @description First business date */
+                from?: string;
+                /** @description Last business date */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositMovement"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCasaHolds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositHold"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCasaHold: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositHoldInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    releaseCasaHold: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                holdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCasaTransfer: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositTransferInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeMovementReversal: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                movementId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
     getTermDepositRules: {
         parameters: {
             query?: never;
@@ -11564,6 +12061,136 @@ export interface operations {
                     "application/json": components["schemas"]["DepositAccount"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTermDepositFunding: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermDepositFundingInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTermDepositFundingReversal: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTermDepositMovements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositMovement"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTermDepositHolds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositHold"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTermDepositLien: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositHoldInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    releaseTermDepositLien: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                holdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
             default: components["responses"]["Problem"];
         };
     };

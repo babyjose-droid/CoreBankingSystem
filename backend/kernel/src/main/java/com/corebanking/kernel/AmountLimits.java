@@ -26,7 +26,7 @@ public final class AmountLimits {
 
     /** Transaction types a limit can be set for. */
     public static final Set<String> TYPES = Set.of("LOAN_DISBURSEMENT", "LOAN_REPAYMENT", "LOAN_WAIVER", "VOUCHER",
-            "LOAN_PRECLOSURE", "FEE_WAIVER");
+            "LOAN_PRECLOSURE", "FEE_WAIVER", "DEPOSIT_CREDIT", "DEPOSIT_DEBIT");
 
     public record Limit(String role, String txnType, BigDecimal perTxnMax, BigDecimal perDayMax, LocalDate effectiveFrom,
                         LocalDate effectiveTo) {

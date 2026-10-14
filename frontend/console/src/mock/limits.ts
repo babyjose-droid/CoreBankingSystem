@@ -37,6 +37,8 @@ const LABEL: Record<LimitTxnType, string> = {
   VOUCHER: 'voucher',
   LOAN_PRECLOSURE: 'loan pre-closure',
   FEE_WAIVER: 'fee waiver',
+  DEPOSIT_CREDIT: 'deposit credit',
+  DEPOSIT_DEBIT: 'deposit debit',
 };
 
 /** 403 when `amount` is above the user's per-transaction or per-day limit. `record` adds it to the day's usage. */

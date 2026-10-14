@@ -1,6 +1,7 @@
 // Pure Java deposit engine (Phase 4): rule sets by tenant type, rate tables, term and savings interest,
-// premature withdrawal, TDS on interest, recurring deposits. Same code for preview, posting and day-end (ADR-006).
-// No Spring, no I/O, no clock.
+// premature withdrawal, TDS on interest, recurring deposits, and the posting rules of deposit movements (P4-2).
+// Same code for preview, posting and day-end (ADR-006). No Spring, no I/O, no clock.
 dependencies {
     "api"(project(":backend:calc"))
+    "api"(project(":backend:ledger-core"))
 }

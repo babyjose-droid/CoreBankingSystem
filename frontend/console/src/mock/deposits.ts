@@ -1,5 +1,5 @@
 /**
- * Mock of the deposits API (Phase 4, P4-1): the rule set by institution type, savings, current and term deposit
+ * Mock of the deposits API (Phase 4, P4-1; money movement P4-2 in depositMoney.ts): the rule set by institution type, savings, current and term deposit
  * products, account opening and term deposit booking. The checks and the figures follow the backend's deposit
  * engine closely enough to try the screens; the backend is the truth. Not mirrored here: GL heads of a product are
  * not checked against the chart, ACTUAL_ACTUAL counts a year as 365 days, and branch scope is not applied to lists.
@@ -23,6 +23,7 @@ import { addDays, ageOn, toUtcDate, fromUtcDate } from '../lib/dates';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
 import { BANK_RULES, NBFC_DEPOSIT_RULES, type MockDepositRule } from './depositRules';
+import { applyDepositMoneyApproval, balanceView, onHold, registerDepositMoneyRoutes, type MockHold, type MockMovement } from './depositMoney';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
 export type DepositKind = 'BANK' | 'NBFC_DEPOSIT' | null;
@@ -56,6 +57,11 @@ export interface DepositsDb {
   accounts: DepositAccount[];
   casaSeq: number;
   termSeq: number;
+  /** P4-2: every amount into or out of an account, its freezes and liens, and the balances the movements make. */
+  movements: MockMovement[];
+  holds: MockHold[];
+  balances: Record<string, string>;
+  movementSeq: number;
 }
 
 type Result = { status: number; body: unknown };
@@ -87,7 +93,7 @@ const TENANT_KIND: Record<DemoTenantCode, { kind: DepositKind; modules: string[]
 };
 
 export function emptyDeposits(): DepositsDb {
-  return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0 };
+  return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0 };
 }
 
 /** Makes the mock database the given demo tenant: its name, its deposit modules and its demo deposit products. */
@@ -712,17 +718,19 @@ function openAccount(db: MockDb, o: MockOpening, q: Quote | null, maker: string,
   return account;
 }
 
-const summaryOf = (a: DepositAccount): DepositAccountSummary => ({
+const summaryOf = (db: MockDb, a: DepositAccount): DepositAccountSummary => ({
   id: a.id, accountNo: a.accountNo, productCode: a.productCode, productName: a.productName, productType: a.productType,
   customerId: a.holders?.[0]?.customerId, customerNo: a.holders?.[0]?.customerNo, customerName: a.holders?.[0]?.name,
   branchCode: a.branchCode, operatingMode: a.operatingMode, status: a.status, openedOn: a.openedOn, holders: a.holders?.length ?? 0,
   principal: a.termDeposit?.principal ?? null, tenureMonths: a.termDeposit?.tenureMonths ?? null, tenureDays: a.termDeposit?.tenureDays ?? null,
   ratePercent: a.termDeposit?.ratePercent ?? null, startDate: a.termDeposit?.startDate ?? null, maturityDate: a.termDeposit?.maturityDate ?? null,
+  balance: balanceView(db, a.id!).balance, onHold: onHold(db, a.id!),
 });
 
 // ---------- approvals ----------
 
 export function applyDepositApproval(db: MockDb, p: ApprovalPayload, approval: { id?: string; entityId?: string | null; maker?: string; appliedRef?: string | null }, checker: string, at: string): boolean {
+  if (applyDepositMoneyApproval(db, p, approval, checker, at)) return true;
   if (p.kind === 'DEPOSIT_PRODUCT') {
     const existing = db.deposits.products.find((x) => x.code === p.product.code);
     if (existing && existing.status !== 'ACTIVE') throw conflict('Conflict', `deposit product ${p.product.code} is not active any more`);
@@ -833,14 +841,14 @@ export function registerDepositRoutes(db: MockDb, r: Registrar): void {
       require(user, view);
       const customerId = url.searchParams.get('customerId');
       const status = url.searchParams.get('status');
-      return ok(db.deposits.accounts.filter((a) => a.family === family && (!customerId || (a.holders ?? []).some((h) => h.customerId === customerId)) && (!status || a.status === status)).map(summaryOf));
+      return ok(db.deposits.accounts.filter((a) => a.family === family && (!customerId || (a.holders ?? []).some((h) => h.customerId === customerId)) && (!status || a.status === status)).map((a) => summaryOf(db, a)));
     });
     on('GET', `/api/v1/${base}/accounts/{id}`, ({ user, params }) => {
       module(mod);
       require(user, view);
       const a = db.deposits.accounts.find((x) => x.id === params.id && x.family === family);
       if (!a) throw notFound(family === 'CASA' ? `account ${params.id}` : `term deposit ${params.id}`);
-      return ok(a);
+      return ok({ ...a, ...balanceView(db, a.id!) });
     });
     on('POST', `/api/v1/${base}/accounts`, ({ user, body }) => {
       module(mod);
@@ -849,6 +857,8 @@ export function registerDepositRoutes(db: MockDb, r: Registrar): void {
       return propose(user, family === 'CASA' ? 'CASA_ACCOUNT' : 'TERM_DEPOSIT', family === 'CASA' ? 'OPEN' : 'BOOK', { kind: 'DEPOSIT_ACCOUNT', opening }, { ...opening }, null, null, opening.amount);
     });
   }
+
+  registerDepositMoneyRoutes(db, r, module);
 
   on('POST', '/api/v1/deposits/preview', ({ user, body }) => {
     module('TD');

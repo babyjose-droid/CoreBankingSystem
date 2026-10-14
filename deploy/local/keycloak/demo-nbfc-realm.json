@@ -226,7 +226,11 @@
               "casa:view",
               "casa:open",
               "deposit:view",
-              "deposit:book"
+              "deposit:book",
+              "casa:transact",
+              "casa:hold",
+              "deposit:fund",
+              "deposit:hold"
             ]
           }
         }
@@ -437,7 +441,11 @@
               "casa:view",
               "casa:open",
               "deposit:view",
-              "deposit:book"
+              "deposit:book",
+              "casa:transact",
+              "casa:hold",
+              "deposit:fund",
+              "deposit:hold"
             ]
           }
         }
@@ -924,6 +932,30 @@
           "description": "Propose the booking of a term deposit (maker)",
           "composite": false,
           "clientRole": true
+        },
+        {
+          "name": "casa:transact",
+          "description": "Propose cash deposits and withdrawals, transfers, bank transfers and reversals on savings and current accounts (maker)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "casa:hold",
+          "description": "Propose freezes and liens on savings and current accounts, and their release (maker)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "deposit:fund",
+          "description": "Propose the funding of a term deposit, or the reversal of its funding (maker)",
+          "composite": false,
+          "clientRole": true
+        },
+        {
+          "name": "deposit:hold",
+          "description": "Propose a lien on a term deposit, or its release (maker)",
+          "composite": false,
+          "clientRole": true
         }
       ]
     }
@@ -1301,7 +1333,11 @@
           "casa:view",
           "casa:open",
           "deposit:view",
-          "deposit:book"
+          "deposit:book",
+          "casa:transact",
+          "casa:hold",
+          "deposit:fund",
+          "deposit:hold"
         ]
       },
       {
@@ -1385,7 +1421,11 @@
           "casa:view",
           "casa:open",
           "deposit:view",
-          "deposit:book"
+          "deposit:book",
+          "casa:transact",
+          "casa:hold",
+          "deposit:fund",
+          "deposit:hold"
         ]
       },
       {
@@ -1470,7 +1510,11 @@
           "casa:view",
           "casa:open",
           "deposit:view",
-          "deposit:book"
+          "deposit:book",
+          "casa:transact",
+          "casa:hold",
+          "deposit:fund",
+          "deposit:hold"
         ]
       }
     ]

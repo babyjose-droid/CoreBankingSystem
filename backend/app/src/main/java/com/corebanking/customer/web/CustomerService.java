@@ -72,6 +72,10 @@ class CustomerService {
         if (in.dateOfBirth() == null) throw ApiException.invalid("dateOfBirth is required");
         if (in.homeBranch() == null) throw ApiException.invalid("homeBranch is required");
         if (in.mobile() == null) throw ApiException.invalid("mobile is required");
+        // the database allows these three only; checked here so the maker hears it, not the checker at approval
+        if (in.gender() != null && !java.util.Set.of("FEMALE", "MALE", "OTHER").contains(in.gender())) {
+            throw ApiException.invalid("gender is one of FEMALE, MALE, OTHER");
+        }
         Dedupe.normaliseMobile(in.mobile());
         if (in.pan() != null && !in.pan().isBlank()) Dedupe.normalisePan(in.pan());
         if ("INDIVIDUAL".equals(in.customerType()) && Period.between(in.dateOfBirth(), LocalDate.now()).getYears() < 18) {

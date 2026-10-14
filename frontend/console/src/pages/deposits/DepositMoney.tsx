@@ -1,0 +1,433 @@
+import { useState } from 'react';
+import {
+  useCasaTransaction,
+  useCasaTransfer,
+  useDepositAccounts,
+  useDepositHolds,
+  useDepositMovements,
+  useFundTermDeposit,
+  usePlaceHold,
+  useReleaseHold,
+  useReverseFunding,
+  useReverseMovement,
+} from '../../api/depositHooks';
+import type { Approval, BankAccountInput, DepositAccount, DepositFamily, DepositHold, DepositMovement } from '../../api/types';
+import { Banner, Button, Card, DateText, Dialog, EmptyState, Input, MoneyText, Select, Spinner, Table, Textarea, humanize, useToast } from '../../ui';
+import { Problems } from './common';
+
+/** Money on deposit accounts (P4-2): balances, statement, holds, and the dialogs that move money or hold it. */
+
+const KIND_LABEL: Record<string, string> = {
+  CASH_DEPOSIT: 'Cash deposit',
+  CASH_WITHDRAWAL: 'Cash withdrawal',
+  BANK_TRANSFER_IN: 'Bank transfer in',
+  BANK_TRANSFER_OUT: 'Bank transfer out',
+  TRANSFER_IN: 'Transfer in',
+  TRANSFER_OUT: 'Transfer out',
+  FUNDING: 'Funding',
+  FUNDING_PAID: 'Paid to a term deposit',
+  REVERSAL: 'Reversal',
+};
+const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
+
+/** Below the threshold money posts at once (APPROVED); from it upward it waits for a checker. */
+export function useMoneyToast() {
+  const toast = useToast();
+  return (a: Approval, what: string) =>
+    a.status === 'APPROVED'
+      ? toast({ tone: 'success', message: `${what}: done.` })
+      : toast({ tone: 'success', message: `${what} sent for approval.`, link: { to: `/approvals?id=${encodeURIComponent(a.id)}`, label: 'View request' } });
+}
+
+export function BalanceCard({ a }: { a: DepositAccount }) {
+  const freezes = a.freezes ?? [];
+  return (
+    <Card title="Balance">
+      <dl className="kv">
+        <dt>Balance</dt>
+        <dd data-testid="balance"><strong><MoneyText value={a.balance} /></strong></dd>
+        <dt>Held under lien</dt>
+        <dd><MoneyText value={a.lienAmount} /></dd>
+        <dt>Available</dt>
+        <dd data-testid="available"><MoneyText value={a.availableBalance} /></dd>
+        <dt>Freezes</dt>
+        <dd data-testid="freezes">{freezes.length ? freezes.map((f) => HOLD_LABEL[f]).join(', ') : 'None'}</dd>
+      </dl>
+    </Card>
+  );
+}
+
+export function MovementsCard({ family, accountId, canReverse }: { family: DepositFamily; accountId: string; canReverse: boolean }) {
+  const q = useDepositMovements(family, accountId);
+  const [reversing, setReversing] = useState<DepositMovement | null>(null);
+  const reversible = (m: DepositMovement) => canReverse && family === 'CASA' && m.kind !== 'REVERSAL' && !m.reversedBy && m.kind !== 'FUNDING' && m.kind !== 'FUNDING_PAID';
+  return (
+    <Card title="Statement" flush>
+      {q.isLoading ? (
+        <Spinner />
+      ) : (q.data ?? []).length === 0 ? (
+        <EmptyState title="No money has moved on this account yet" />
+      ) : (
+        <Table
+          caption="Movements"
+          captionHidden
+          columns={[
+            { key: 'date', header: 'Date', render: (m) => <DateText value={m.businessDate} /> },
+            {
+              key: 'what',
+              header: 'Movement',
+              render: (m) => (
+                <span>
+                  {KIND_LABEL[m.kind ?? ''] ?? m.kind}
+                  {m.counterpartyAccountNo && <span className="muted"> · <span className="mono">{m.counterpartyAccountNo}</span></span>}
+                  {m.bankAccountMasked && <span className="muted"> · {m.bankAccountMasked} {m.bankIfsc}</span>}
+                  {m.reference && <span className="muted"> · {m.reference}</span>}
+                  {m.narration && <span className="muted"> · {m.narration}</span>}
+                  {m.reversalReason && <span className="muted"> · {m.reversalReason}</span>}
+                  {m.reversedBy && <span className="muted"> (reversed)</span>}
+                </span>
+              ),
+            },
+            { key: 'dr', header: 'Debit', numeric: true, render: (m) => (m.direction === 'DEBIT' ? <MoneyText value={m.amount} /> : '') },
+            { key: 'cr', header: 'Credit', numeric: true, render: (m) => (m.direction === 'CREDIT' ? <MoneyText value={m.amount} /> : '') },
+            { key: 'bal', header: 'Balance', numeric: true, render: (m) => <MoneyText value={m.balanceAfter} /> },
+            {
+              key: 'act',
+              header: <span className="sr-only">Actions</span>,
+              render: (m) =>
+                reversible(m) ? (
+                  <Button size="sm" aria-label={`Reverse ${KIND_LABEL[m.kind ?? '']} of ${m.amount}`} onClick={() => setReversing(m)}>
+                    Reverse
+                  </Button>
+                ) : null,
+            },
+          ]}
+          rows={q.data ?? []}
+          rowKey={(m) => m.id!}
+        />
+      )}
+      {reversing && <ReverseDialog movement={reversing} onClose={() => setReversing(null)} />}
+    </Card>
+  );
+}
+
+function ReverseDialog({ movement, onClose }: { movement: DepositMovement; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const m = useReverseMovement();
+  const toast = useMoneyToast();
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Reverse ${(KIND_LABEL[movement.kind ?? ''] ?? '').toLowerCase()} of ${movement.amount}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={m.isPending} disabled={!reason.trim()} onClick={() => m.mutate({ movementId: movement.id!, reason: reason.trim() }, { onSuccess: (a) => (toast(a, 'Reversal'), onClose()) })}>
+            Submit for approval
+          </Button>
+        </>
+      }
+    >
+      <p className="muted" style={{ marginTop: 0 }}>The movement is reversed with its mirror entry; a transfer is reversed on both accounts. A checker approves every reversal.</p>
+      <Textarea label="Reason" required rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Problems error={m.error} title="The movement cannot be reversed:" />
+    </Dialog>
+  );
+}
+
+export function HoldsCard({ family, accountId, canRelease }: { family: DepositFamily; accountId: string; canRelease: boolean }) {
+  const q = useDepositHolds(family, accountId);
+  const [releasing, setReleasing] = useState<DepositHold | null>(null);
+  const rows = q.data ?? [];
+  if (!q.isLoading && rows.length === 0) return null;
+  return (
+    <Card title={family === 'CASA' ? 'Freezes and liens' : 'Liens'} flush>
+      {q.isLoading ? (
+        <Spinner />
+      ) : (
+        <Table
+          caption="Holds"
+          captionHidden
+          columns={[
+            { key: 'kind', header: 'Hold', render: (h) => HOLD_LABEL[h.kind ?? ''] },
+            { key: 'amount', header: 'Amount', numeric: true, render: (h) => (h.amount ? <MoneyText value={h.amount} /> : '—') },
+            { key: 'reason', header: 'Reason', render: (h) => <span>{h.reason}{h.reference && <span className="muted"> · {h.reference}</span>}</span> },
+            { key: 'placed', header: 'Placed', render: (h) => <span><DateText value={h.placedOn} /> <span className="muted">by {h.placedBy}</span></span> },
+            { key: 'status', header: 'Status', render: (h) => (h.status === 'ACTIVE' ? 'In force' : <span>Released <DateText value={h.releasedOn} /><span className="muted"> · {h.releaseReason}</span></span>) },
+            {
+              key: 'act',
+              header: <span className="sr-only">Actions</span>,
+              render: (h) =>
+                canRelease && h.status === 'ACTIVE' ? (
+                  <Button size="sm" aria-label={`Release ${HOLD_LABEL[h.kind ?? '']}`} onClick={() => setReleasing(h)}>
+                    Release
+                  </Button>
+                ) : null,
+            },
+          ]}
+          rows={rows}
+          rowKey={(h) => h.id!}
+        />
+      )}
+      {releasing && <ReleaseDialog family={family} hold={releasing} onClose={() => setReleasing(null)} />}
+    </Card>
+  );
+}
+
+function ReleaseDialog({ family, hold, onClose }: { family: DepositFamily; hold: DepositHold; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const m = useReleaseHold(family);
+  const toast = useMoneyToast();
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Release the ${(HOLD_LABEL[hold.kind ?? ''] ?? '').toLowerCase()}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={m.isPending} disabled={!reason.trim()} onClick={() => m.mutate({ holdId: hold.id!, reason: reason.trim() }, { onSuccess: (a) => (toast(a, 'Release'), onClose()) })}>
+            Submit for approval
+          </Button>
+        </>
+      }
+    >
+      <Textarea label="Reason" required rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Problems error={m.error} title="The hold cannot be released:" />
+    </Dialog>
+  );
+}
+
+function BankAccountFields({ value, onChange, legend }: { value: BankAccountInput; onChange: (b: BankAccountInput) => void; legend: string }) {
+  return (
+    <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0 }}>
+      <legend className="field__label">{legend}</legend>
+      <div className="form-grid">
+        <Input label="Account holder" required maxLength={100} value={value.holderName} onChange={(e) => onChange({ ...value, holderName: e.target.value })} />
+        <Input label="Account number" required value={value.accountNumber} onChange={(e) => onChange({ ...value, accountNumber: e.target.value })} />
+        <Input label="IFSC" required maxLength={11} value={value.ifsc} onChange={(e) => onChange({ ...value, ifsc: e.target.value.toUpperCase() })} />
+      </div>
+      <span className="field__hint">The account number is stored encrypted and shown with its last four digits only.</span>
+    </fieldset>
+  );
+}
+
+const emptyBank = (): BankAccountInput => ({ holderName: '', accountNumber: '', ifsc: '' });
+const bankGiven = (b: BankAccountInput) => !!(b.holderName.trim() || b.accountNumber.trim() || b.ifsc.trim());
+
+/** Cash in or out, or a bank transfer in or out recorded with the bank's reference (UTR). */
+export function TransactionDialog({ account, type: initial, onClose }: { account: DepositAccount; type: string; onClose: () => void }) {
+  const [type, setType] = useState(initial);
+  const [amount, setAmount] = useState('');
+  const [reference, setReference] = useState('');
+  const [narration, setNarration] = useState('');
+  const [bank, setBank] = useState(emptyBank());
+  const m = useCasaTransaction(account.id!);
+  const toast = useMoneyToast();
+  const isBank = type.startsWith('BANK_');
+  const submit = () =>
+    m.mutate(
+      {
+        type: type as 'CASH_DEPOSIT',
+        amount: Number(amount),
+        reference: reference.trim() || null,
+        narration: narration.trim() || null,
+        ...(isBank && bankGiven(bank) ? { bankAccount: { ...bank, accountNumber: bank.accountNumber.replace(/ /g, '') } } : {}),
+      },
+      { onSuccess: (a) => (toast(a, KIND_LABEL[type]), onClose()) },
+    );
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      wide
+      title={`Account ${account.accountNo}: money in or out`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={m.isPending} disabled={!amount} onClick={submit}>
+            Submit
+          </Button>
+        </>
+      }
+    >
+      <div className="form-grid">
+        <Select label="Transaction" value={type} onChange={(e) => setType(e.target.value)} options={['CASH_DEPOSIT', 'CASH_WITHDRAWAL', 'BANK_TRANSFER_IN', 'BANK_TRANSFER_OUT'].map((t) => ({ value: t, label: KIND_LABEL[t] }))} />
+        <Input label="Amount" required numeric inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} hint={`Available: ${account.availableBalance ?? '0'}`} />
+        <Input label={isBank ? 'UTR (the bank’s reference)' : 'Slip number'} required={isBank} maxLength={60} value={reference} onChange={(e) => setReference(e.target.value)} />
+        <Input label="Narration" maxLength={200} value={narration} onChange={(e) => setNarration(e.target.value)} />
+      </div>
+      {isBank && <BankAccountFields value={bank} onChange={setBank} legend={type === 'BANK_TRANSFER_OUT' ? 'Paid to (required)' : 'Received from (optional)'} />}
+      {isBank && <p className="muted">The transfer is recorded here once the bank has made it; sending it through the payment gateway comes later.</p>}
+      <p className="muted">Below ₹2,00,000 it is posted at once (the tenant's starting rule); from that amount a checker approves it first.</p>
+      <Problems error={m.error} title="The transaction cannot be made:" />
+    </Dialog>
+  );
+}
+
+/** A transfer from this account to another savings or current account here. */
+export function TransferDialog({ account, onClose }: { account: DepositAccount; onClose: () => void }) {
+  const accounts = useDepositAccounts('CASA', { status: 'ACTIVE' });
+  const [to, setTo] = useState('');
+  const [amount, setAmount] = useState('');
+  const [narration, setNarration] = useState('');
+  const m = useCasaTransfer();
+  const toast = useMoneyToast();
+  const options = (accounts.data ?? []).filter((x) => x.id !== account.id).map((x) => ({ value: x.id!, label: `${x.accountNo} — ${x.customerName} (${x.productCode})` }));
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Transfer from ${account.accountNo}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={m.isPending} disabled={!to || !amount} onClick={() => m.mutate({ fromAccountId: account.id!, toAccountId: to, amount: Number(amount), narration: narration.trim() || null }, { onSuccess: (a) => (toast(a, 'Transfer'), onClose()) })}>
+            Submit
+          </Button>
+        </>
+      }
+    >
+      <Select label="To account" required placeholder="Choose an account" value={to} onChange={(e) => setTo(e.target.value)} options={options} />
+      <Input label="Amount" required numeric inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} hint={`Available: ${account.availableBalance ?? '0'}`} />
+      <Input label="Narration" maxLength={200} value={narration} onChange={(e) => setNarration(e.target.value)} />
+      <Problems error={m.error} title="The transfer cannot be made:" />
+    </Dialog>
+  );
+}
+
+/** A freeze (savings and current accounts) or a lien. */
+export function HoldDialog({ family, account, onClose }: { family: DepositFamily; account: DepositAccount; onClose: () => void }) {
+  const kinds = family === 'CASA' ? ['DEBIT_FREEZE', 'CREDIT_FREEZE', 'TOTAL_FREEZE', 'LIEN'] : ['LIEN'];
+  const [kind, setKind] = useState(kinds[0]);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [reference, setReference] = useState('');
+  const m = usePlaceHold(family, account.id!);
+  const toast = useMoneyToast();
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={family === 'CASA' ? `Freeze or lien on ${account.accountNo}` : `Lien on deposit ${account.accountNo}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            loading={m.isPending}
+            disabled={!reason.trim() || (kind === 'LIEN' && !amount)}
+            onClick={() => m.mutate({ kind: kind as 'LIEN', amount: kind === 'LIEN' ? Number(amount) : null, reason: reason.trim(), reference: reference.trim() || null }, { onSuccess: (a) => (toast(a, HOLD_LABEL[kind]), onClose()) })}
+          >
+            Submit for approval
+          </Button>
+        </>
+      }
+    >
+      {family === 'CASA' && <Select label="Hold" value={kind} onChange={(e) => setKind(e.target.value)} options={kinds.map((k) => ({ value: k, label: HOLD_LABEL[k] }))} />}
+      {kind === 'LIEN' ? (
+        <Input label="Amount held" required numeric inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} hint={`Available: ${account.availableBalance ?? '0'}`} />
+      ) : (
+        <p className="muted">{kind === 'DEBIT_FREEZE' ? 'No money goes out; money still comes in.' : kind === 'CREDIT_FREEZE' ? 'No money comes in; money still goes out.' : 'No money comes in or goes out.'} Reversals (corrections) are not stopped.</p>
+      )}
+      <Textarea label="Reason" required rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Input label="Reference" hint="The order, or the loan the lien secures" maxLength={100} value={reference} onChange={(e) => setReference(e.target.value)} />
+      <Problems error={m.error} title="The hold cannot be placed:" />
+    </Dialog>
+  );
+}
+
+/** Funding a booked term deposit with its principal. */
+export function FundingDialog({ account, casaEnabled, onClose }: { account: DepositAccount; casaEnabled: boolean; onClose: () => void }) {
+  const t = account.termDeposit!;
+  const depositor = account.holders?.[0]?.customerId;
+  const own = useDepositAccounts('CASA', { customerId: depositor, status: 'ACTIVE' }, casaEnabled && !!depositor);
+  const sources = casaEnabled ? ['ACCOUNT', 'CASH', 'BANK_TRANSFER'] : ['CASH', 'BANK_TRANSFER'];
+  const [source, setSource] = useState(sources[0]);
+  const [from, setFrom] = useState('');
+  const [reference, setReference] = useState('');
+  const [bank, setBank] = useState(emptyBank());
+  const m = useFundTermDeposit(account.id!);
+  const toast = useMoneyToast();
+  const toBank = t.payoutTo === 'BANK_ACCOUNT';
+  const SOURCE_LABEL: Record<string, string> = { ACCOUNT: 'From a savings or current account', CASH: 'Cash', BANK_TRANSFER: 'Bank transfer' };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      wide
+      title={`Fund deposit ${account.accountNo}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            loading={m.isPending}
+            onClick={() =>
+              m.mutate(
+                {
+                  source: source as 'CASH',
+                  fromAccountId: source === 'ACCOUNT' ? from || null : null,
+                  reference: reference.trim() || null,
+                  ...(toBank ? { payoutBankAccount: { ...bank, accountNumber: bank.accountNumber.replace(/ /g, '') } } : {}),
+                },
+                { onSuccess: (a) => (toast(a, 'Funding'), onClose()) },
+              )
+            }
+          >
+            Submit
+          </Button>
+        </>
+      }
+    >
+      <p style={{ marginTop: 0 }}>
+        The principal of <strong><MoneyText value={t.principal} /></strong> is received today; interest starts today and the deposit matures {t.tenureMonths ? `${t.tenureMonths} months` : ''}
+        {t.tenureDays ? ` ${t.tenureDays} days` : ''} later.
+      </p>
+      <div className="form-grid">
+        <Select label="Funded" value={source} onChange={(e) => setSource(e.target.value)} options={sources.map((s) => ({ value: s, label: SOURCE_LABEL[s] }))} />
+        {source === 'ACCOUNT' && (
+          <Select
+            label="Paying account"
+            required
+            placeholder={own.isLoading ? 'Loading…' : 'Choose an account of the depositor'}
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            options={(own.data ?? []).map((x) => ({ value: x.id!, label: `${x.accountNo} (${x.productCode}), balance ${x.balance ?? '0'}` }))}
+          />
+        )}
+        <Input label={source === 'BANK_TRANSFER' ? 'UTR (the bank’s reference)' : 'Receipt or slip number'} required={source === 'BANK_TRANSFER'} maxLength={60} value={reference} onChange={(e) => setReference(e.target.value)} />
+      </div>
+      {toBank && <BankAccountFields value={bank} onChange={setBank} legend="The depositor’s bank account (interest and maturity proceeds are paid to it)" />}
+      <Problems error={m.error} title="The deposit cannot be funded:" />
+    </Dialog>
+  );
+}
+
+export function ReverseFundingDialog({ account, onClose }: { account: DepositAccount; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const m = useReverseFunding(account.id!);
+  const toast = useMoneyToast();
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Reverse the funding of deposit ${account.accountNo}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="danger" loading={m.isPending} disabled={!reason.trim()} onClick={() => m.mutate(reason.trim(), { onSuccess: (a) => (toast(a, 'Reversal of the funding'), onClose()) })}>
+            Submit for approval
+          </Button>
+        </>
+      }
+    >
+      <Banner tone="warn">The money goes back where it came from and the deposit is booked again, waiting for its funds.</Banner>
+      <Textarea label="Reason" required rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Problems error={m.error} title="The funding cannot be reversed:" />
+    </Dialog>
+  );
+}
+
+export const kindLabel = (k: string | undefined) => KIND_LABEL[k ?? ''] ?? humanize(k ?? '');

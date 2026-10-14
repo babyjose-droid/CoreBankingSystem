@@ -105,7 +105,7 @@ public class DepositProductService {
                      (SELECT coalesce(jsonb_agg(jsonb_build_object('code', a->>'code', 'percent', a->>'percent') ORDER BY a->>'code'), '[]'::jsonb)
                         FROM jsonb_array_elements(add_ons) a)::text END AS add_ons,
                    premature_allowed, premature_penalty_percent::text AS premature_penalty_percent, premature_min_days,
-                   auto_renewal_allowed, gl_liability, gl_interest_expense, updated_by, updated_at::text AS updated_at
+                   auto_renewal_allowed, gl_liability, gl_interest_expense, updated_by, to_json(updated_at)#>>'{}' AS updated_at
               FROM deposits.product
             """;
 
@@ -145,7 +145,7 @@ public class DepositProductService {
     public List<Map<String, Object>> history(String family, String code) {
         get(family, code);
         return jdbc.query("""
-                SELECT version, changed_by, changed_at::text, approval_id::text, snapshot->>'name', snapshot->>'status'
+                SELECT version, changed_by, to_json(changed_at)#>>'{}', approval_id::text, snapshot->>'name', snapshot->>'status'
                   FROM deposits.product_history WHERE product_code = ? ORDER BY version DESC
                 """, (rs, i) -> {
                     Map<String, Object> m = new LinkedHashMap<>();

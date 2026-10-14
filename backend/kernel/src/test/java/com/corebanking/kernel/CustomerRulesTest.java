@@ -135,7 +135,7 @@ class CustomerRulesTest {
     }
 
     @Test void limit_types_cover_the_story() {
-        assertEquals(Set.of("LOAN_DISBURSEMENT", "LOAN_REPAYMENT", "LOAN_WAIVER", "VOUCHER", "LOAN_PRECLOSURE", "FEE_WAIVER"),
+        assertEquals(Set.of("LOAN_DISBURSEMENT", "LOAN_REPAYMENT", "LOAN_WAIVER", "VOUCHER", "LOAN_PRECLOSURE", "FEE_WAIVER", "DEPOSIT_CREDIT", "DEPOSIT_DEBIT"),
                 AmountLimits.TYPES);
     }
 

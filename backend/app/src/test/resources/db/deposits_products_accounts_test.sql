@@ -379,9 +379,9 @@ SELECT pg_temp.expect_fail($q$ UPDATE deposits.term_deposit SET rate_percent = 8
 SELECT pg_temp.expect_fail($q$ UPDATE deposits.term_deposit SET principal = 300000 WHERE principal = 250000 $q$, '42501', 'T18 nor its amount');
 SELECT pg_temp.expect_fail($q$ UPDATE deposits.term_deposit SET start_date = '2026-07-01', maturity_date = '2027-09-30' WHERE principal = 250000 $q$, '23514',
                            'T19 the maturity date is the start date plus the tenure');
-UPDATE deposits.term_deposit SET start_date = '2026-07-01', maturity_date = '2027-10-01', maturity_instruction = 'PAY_OUT' WHERE principal = 250000;
-SELECT pg_temp.check((SELECT maturity_date = '2027-10-01' AND maturity_instruction = 'PAY_OUT' FROM deposits.term_deposit WHERE principal = 250000),
-                     'T20 the funding dates and the maturity instruction can be set later');
+UPDATE deposits.term_deposit SET maturity_instruction = 'PAY_OUT' WHERE principal = 250000;
+SELECT pg_temp.check((SELECT start_date IS NULL AND maturity_instruction = 'PAY_OUT' FROM deposits.term_deposit WHERE principal = 250000),
+                     'T20 the maturity instruction can be changed later (the funding dates are set by the funding, P4-2)');
 SELECT pg_temp.expect_fail($q$ DELETE FROM deposits.term_deposit $q$, '42501', 'T21 a term deposit is not deleted');
 UPDATE deposits.product SET status = 'WITHDRAWN', updated_by = 'maker' WHERE code = 'FDP1';
 SELECT pg_temp.expect_fail($q$ SELECT pg_temp.open('TERM_DEPOSIT', 'FDP1', 'SINGLE', 'NONE', ARRAY[1], '[]') $q$, '23514', 'T22 a withdrawn product takes no new deposit');

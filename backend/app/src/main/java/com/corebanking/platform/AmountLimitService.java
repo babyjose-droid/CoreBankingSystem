@@ -72,6 +72,8 @@ public class AmountLimitService {
             case "LOAN_DISBURSEMENT" -> "LOAN_DISBURSEMENT";
             case "LOAN_WAIVER" -> "FEE_WAIVER".equals(r.payload().get("limitType")) ? "FEE_WAIVER" : "LOAN_WAIVER";
             case "VOUCHER" -> "VOUCHER";
+            // deposit money in and out, and the funding of a term deposit (P4-2): the type the request was made under
+            case "DEPOSIT_TXN", "TERM_DEPOSIT" -> r.payload().get("limitType") instanceof String t ? t : null;
             default -> null;
         };
     }

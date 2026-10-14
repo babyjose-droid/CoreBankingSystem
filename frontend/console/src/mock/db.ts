@@ -1,3 +1,4 @@
+import type { MockFunding, MockHoldRequest, MockTxn } from './depositMoney';
 import type { DepositsDb, MockOpening } from './deposits';
 import type { DepositProduct } from '../api/types';
 import type {
@@ -128,7 +129,10 @@ export type ApprovalPayload =
   | { kind: 'EXPOSURE_LIMIT'; customerId: string; limit: number | null; reason: string }
   | { kind: 'DEPOSIT_PRODUCT'; product: DepositProduct }
   | { kind: 'DEPOSIT_PRODUCT_WITHDRAW'; code: string }
-  | { kind: 'DEPOSIT_ACCOUNT'; opening: MockOpening };
+  | { kind: 'DEPOSIT_ACCOUNT'; opening: MockOpening }
+  | { kind: 'DEPOSIT_TXN'; txn: MockTxn }
+  | { kind: 'DEPOSIT_HOLD'; hold: MockHoldRequest }
+  | { kind: 'DEPOSIT_FUNDING'; funding: MockFunding };
 
 export type StoredStaff = Required<Omit<Staff, 'userId'>> & { userId: string };
 

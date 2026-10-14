@@ -1,8 +1,15 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useDepositAccount, useDepositRules } from '../../api/depositHooks';
+import { useMe } from '../../api/hooks';
 import type { DepositFamily } from '../../api/types';
-import { Banner, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
-import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText } from './common';
+import { P, hasPermission } from '../../auth/permissions';
+import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
+import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
+import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, MovementsCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
+
+type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | null;
+const SOURCE: Record<string, string> = { ACCOUNT: 'From account', CASH: 'In cash', BANK_TRANSFER: 'By bank transfer' };
 
 const INSTRUCTION: Record<string, string> = { PAY_OUT: 'Pay out', RENEW_PRINCIPAL: 'Renew the principal, pay out the interest', RENEW_WITH_INTEREST: 'Renew the principal with the interest' };
 
@@ -10,21 +17,44 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
   const { id } = useParams();
   const q = useDepositAccount(family, id);
   const rules = useDepositRules(family);
+  const me = useMe().data!;
+  const modules = useDepositModules();
+  const [action, setAction] = useState<Action>(null);
   if (q.isLoading) return <Spinner />;
   if (q.error || !q.data) return <ErrorBanner error={q.error ?? new Error('Not found')} />;
   const a = q.data;
   const t = a.termDeposit;
   const term = family === 'TERM_DEPOSIT';
+  const can = (p: string) => hasPermission(me.permissions, p);
+  const active = a.status === 'ACTIVE';
+  const actions = (
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+      {!term && active && can(P.casaTransact) && (
+        <>
+          <Button variant="primary" onClick={() => setAction('IN')}>Money in</Button>
+          <Button onClick={() => setAction('OUT')}>Money out</Button>
+          <Button onClick={() => setAction('TRANSFER')}>Transfer</Button>
+        </>
+      )}
+      {!term && active && can(P.casaHold) && <Button onClick={() => setAction('HOLD')}>Freeze or lien</Button>}
+      {term && a.status === 'BOOKED' && can(P.depositFund) && <Button variant="primary" onClick={() => setAction('FUND')}>Fund the deposit</Button>}
+      {term && active && can(P.depositHold) && <Button onClick={() => setAction('HOLD')}>Lien</Button>}
+      {term && active && can(P.depositFund) && <Button variant="ghost" onClick={() => setAction('UNFUND')}>Reverse the funding</Button>}
+      <Link to={`/deposits/${familyPath(family)}`}>Back to the list</Link>
+    </div>
+  );
   return (
     <div className="stack">
       <PageHeader
         title={`${term ? 'Term deposit' : TYPE_LABEL[a.productType ?? ''] + ' account'} ${a.accountNo}`}
         subtitle={<span>{a.holders?.[0]?.name} · <span className="mono">{a.productCode}</span> {a.productName} (version {a.productVersion})</span>}
-        actions={<Link to={`/deposits/${familyPath(family)}`}>Back to the list</Link>}
+        actions={actions}
       />
-      {term && a.status === 'BOOKED' && <Banner tone="info">This deposit is booked and waits for its funds. Interest starts on the funding date; the dates and figures below are for funding on {t?.figuresFrom}.</Banner>}
+      {term && a.status === 'BOOKED' && <Banner tone="info">This deposit is booked and waits for its funds. Interest starts on the funding date; the dates and figures below are for funding on <DateText value={t?.figuresFrom} />.</Banner>}
       {term && <NotInsured rules={rules.data} />}
+      {(a.freezes ?? []).length > 0 && <Banner tone="warn">This account is under a {(a.freezes ?? []).map((f) => humanize(f).toLowerCase()).join(' and a ')}.</Banner>}
       <div className="grid-cards">
+        {(!term || a.status !== 'BOOKED') && <BalanceCard a={a} />}
         <Card title={term ? 'Deposit' : 'Account'}>
           <dl className="kv">
             <dt>Status</dt>
@@ -78,13 +108,33 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
               <dt>Premature withdrawal</dt>
               <dd>{!t.prematureAllowed ? 'Not allowed' : t.prematurePenaltyPercent == null ? 'As the rule set fixes it' : `Rate for the period run less ${t.prematurePenaltyPercent} point(s); no interest under ${t.prematureMinDays} days`}</dd>
               <dt>Proceeds go to</dt>
-              <dd>{t.payoutTo === 'CASA' ? <span>Account <span className="mono">{t.payoutAccountNo}</span></span> : 'The depositor’s bank account'}</dd>
+              <dd>
+                {t.payoutTo === 'CASA' ? (
+                  <span>Account <span className="mono">{t.payoutAccountNo}</span></span>
+                ) : t.payoutBankAccountMasked ? (
+                  <span>The depositor’s bank account {t.payoutBankAccountMasked}, IFSC {t.payoutBankIfsc}</span>
+                ) : (
+                  'The depositor’s bank account (recorded when the deposit is funded)'
+                )}
+              </dd>
+              {t.funded && (
+                <>
+                  <dt>Funded</dt>
+                  <dd data-testid="funding">
+                    {SOURCE[t.fundingSource ?? ''] ?? t.fundingSource}
+                    {t.fundingAccountNo && <span> <span className="mono">{t.fundingAccountNo}</span></span>}
+                    {t.fundingReference && <span className="muted"> · {t.fundingReference}</span>}
+                  </dd>
+                </>
+              )}
               <dt>At maturity</dt>
               <dd>{INSTRUCTION[t.maturityInstruction ?? 'PAY_OUT']}</dd>
             </dl>
           </Card>
         )}
       </div>
+      {(!term || a.status !== 'BOOKED') && <MovementsCard family={family} accountId={a.id!} canReverse={can(P.casaTransact)} />}
+      <HoldsCard family={family} accountId={a.id!} canRelease={can(term ? P.depositHold : P.casaHold)} />
       <Card title="Holders" flush>
         <Table
           caption="Holders"
@@ -115,6 +165,11 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
           />
         )}
       </Card>
+      {(action === 'IN' || action === 'OUT') && <TransactionDialog account={a} type={action === 'IN' ? 'CASH_DEPOSIT' : 'CASH_WITHDRAWAL'} onClose={() => setAction(null)} />}
+      {action === 'TRANSFER' && <TransferDialog account={a} onClose={() => setAction(null)} />}
+      {action === 'HOLD' && <HoldDialog family={family} account={a} onClose={() => setAction(null)} />}
+      {action === 'FUND' && <FundingDialog account={a} casaEnabled={modules.casa} onClose={() => setAction(null)} />}
+      {action === 'UNFUND' && <ReverseFundingDialog account={a} onClose={() => setAction(null)} />}
     </div>
   );
 }
