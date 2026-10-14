@@ -222,6 +222,16 @@ VALUES ('MAKER', 'DEPOSIT_DEBIT', 50000, '2026-04-01', 'admin'), ('MAKER', 'DEPO
 SELECT pg_temp.check((SELECT count(*) = 2 FROM platform.amount_limit WHERE txn_type LIKE 'DEPOSIT_%'),
                      'S3 role amount limits take the two deposit types');
 
+-- a request a rule applies at once (no checker) is recorded with the rule as its checker: the maker may not be its checker
+INSERT INTO platform.approval_request (id, entity_type, action, payload, maker, status)
+VALUES ('00000000-0000-0000-0000-00000000a001', 'DEPOSIT_TXN', 'CASH_DEPOSIT', '{}', 'maker', 'PENDING');
+SELECT pg_temp.expect_fail($q$ UPDATE platform.approval_request SET status = 'APPROVED', checker = 'maker', checked_at = now()
+                             WHERE id = '00000000-0000-0000-0000-00000000a001' $q$, '23514', 'S4 an auto-applied request cannot name its maker as checker');
+UPDATE platform.approval_request SET status = 'APPROVED', checker = 'rule:auto', checked_at = now(), checker_note = 'auto-approved by rule'
+ WHERE id = '00000000-0000-0000-0000-00000000a001';
+SELECT pg_temp.check((SELECT status = 'APPROVED' FROM platform.approval_request WHERE id = '00000000-0000-0000-0000-00000000a001'),
+                     'S5 it is recorded with the rule (rule:auto) as its checker');
+
 -- movements and balances -------------------------------------------------------------------------------------
 CREATE TEMP TABLE mv (name text PRIMARY KEY, id uuid);
 INSERT INTO mv VALUES ('dep1', pg_temp.move(pg_temp.a('sb'), 'CASH_DEPOSIT', 10000));

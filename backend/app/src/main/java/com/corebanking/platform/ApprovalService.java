@@ -28,6 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ApprovalService {
 
+    /** The checker an approval rule that needs no checker is recorded under. */
+    public static final String AUTO_CHECKER = "rule:auto";
+
     private final JdbcTemplate jdbc;
     private final Json json;
     private final AuditLog audit;
@@ -72,7 +75,9 @@ public class ApprovalService {
         audit.record(maker, "PROPOSE", entityType, entityId == null ? id.toString() : entityId,
                 Map.of("approvalId", id.toString(), "action", action));
         ApprovalRequest request = get(id);
-        if (checkers == 0) return applyNow(request, maker, "auto-approved by rule");
+        // No checker needed by rule: applied at once. The request records the rule as its checker (the database refuses
+        // a request whose checker is its maker, and an approved request without a checker).
+        if (checkers == 0) return applyNow(request, AUTO_CHECKER, "auto-approved by rule");
         return request;
     }
 

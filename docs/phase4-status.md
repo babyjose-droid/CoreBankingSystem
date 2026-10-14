@@ -6,7 +6,7 @@ Updated 14-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 |-----------|-------|
 | P4-0 deposit core | Built, pushed (`9cb5f8e`, `3851a93`), live-tested on the local stack on 10-Oct-2026 |
 | P4-1 products and opening | Built, pushed (`586b8e8`), live-tested on the local stack on 11-Oct-2026 |
-| P4-2 money movement | Built on 14-Oct-2026; not yet pushed or run on the local stack (see "Not verified here" under P4-2) |
+| P4-2 money movement | Built and pushed (`cdbe397`) on 14-Oct-2026; first live test found one defect (auto-applied requests), fixed in the next commit |
 | P4-2b gateway for deposits | Not started: bank transfers and gateway funding through the payout and collection pipeline |
 | P4-3 to P4-7 | Not started |
 
@@ -225,6 +225,11 @@ Money now moves on deposit accounts. Bank transfers are recorded by staff with t
 - **Gradle and Spring:** as before, the build sandbox cannot reach Maven Central. The module was type-checked against stand-ins and its SQL run through `psql` with JDBC-typed parameters. CI runs the real build.
 - **No automated service test in the repository** (open item P4-08): a Testcontainers test that boots the services was not written, because it could not be run here and would first be run by CI.
 - **Live stack:** nothing in P4-2 has run there yet.
+
+### Verified after the push (14-Oct-2026)
+- **Local stack.** The Docker build compiled `cdbe397` with Gradle; V30 applied to `demo-bank`, `demo-nbfc` and `demo-nbfc-d` and the backend registered all three.
+- **First live test** (a script run by the product owner on the Mac, through the console's proxy): 20 checks passed, 10 failed. Passed: a request above the threshold waits for a checker and posts when approved; refusals with every reason (balance, missing UTR and payee); debit freeze stops a withdrawal and is released; a lien shows on the account; funding refused without the payout bank account; both trial balances balance; `demo-nbfc` still refused deposits, its loans load. **Failed, one cause:** every request that a rule applies at once (no checker: money below 2,00,000, funding) was refused with 409 `maker_is_not_checker`. `ApprovalService` recorded the maker as the checker of an auto-applied request, which the database forbids; no approval rule had needed zero checkers before, so the path had never run. The stand-in for `ApprovalService` in the build sandbox always leaves a request pending, so the service checks did not reach it.
+- **Fix:** an auto-applied request is recorded with the rule (`rule:auto`) as its checker (`ApprovalService.AUTO_CHECKER`). Two checks added to `deposits_money_movement_test.sql` (S4, S5). The live test is to be run again.
 
 ### Not yet built
 - Bank transfers and gateway funding through the payout and collection pipeline (P4-2b).

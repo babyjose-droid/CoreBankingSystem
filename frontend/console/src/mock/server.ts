@@ -158,7 +158,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         throw e;
       }
       if (!approval.appliedRef) approval.appliedRef = approval.entityId ?? null;
-      Object.assign(approval, { status: 'APPROVED', checker: user.username, checkedAt: nowIso(), note: 'auto-approved by rule' });
+      Object.assign(approval, { status: 'APPROVED', checker: 'rule:auto', checkedAt: nowIso(), note: 'auto-approved by rule' });
     }
     return accepted(approvalView(stored));
   }
