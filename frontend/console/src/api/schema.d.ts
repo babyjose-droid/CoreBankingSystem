@@ -3594,6 +3594,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/accounts/{id}/interest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the interest of a savings or current account stands
+         * @description Module CASA. Permission casa:view. 404 outside the caller's branch scope.
+         */
+        get: operations["getCasaInterest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/casa/accounts/{id}/holds": {
         parameters: {
             query?: never;
@@ -3918,6 +3938,26 @@ export interface paths {
          * @description Module TD. Permission deposit:view.
          */
         get: operations["listTermDepositMovements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/interest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the interest of a term deposit stands
+         * @description Module TD. Permission deposit:view. 404 outside the caller's branch scope.
+         */
+        get: operations["getTermDepositInterest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6432,8 +6472,11 @@ export interface components {
             businessDate?: string;
             /** Format: date */
             valueDate?: string;
-            /** @enum {string} */
-            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL";
+            /**
+             * @description INTEREST_CREDIT and INTEREST_PAYOUT are made by the day-end (P4-3)
+             * @enum {string}
+             */
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT";
             /** @enum {string} */
             direction?: "DEBIT" | "CREDIT";
             amount?: components["schemas"]["Money"];
@@ -6462,6 +6505,51 @@ export interface components {
             gatewayStatus?: "SENT" | "PAID" | "RETURNED" | null;
             /** @description The bank's UTR once the gateway transfer is paid */
             gatewayUtr?: string | null;
+        };
+        /** @description Where an account's interest stands (P4-3). The day-end accrues interest every calendar day and credits it on the account's credit dates; nothing here changes it. */
+        DepositInterest: {
+            /**
+             * Format: date
+             * @description The last day accrued; null before the first day-end
+             */
+            accruedThrough?: string | null;
+            /** @description Accrued and not yet credited */
+            accrued?: components["schemas"]["Money"];
+            /** @description Credited to the account so far */
+            credited?: components["schemas"]["Money"];
+            /** Format: date */
+            lastCreditOn?: string | null;
+            /** Format: date */
+            nextCreditDate?: string | null;
+            /** @description A term deposit's interest periods; empty for a savings or current account */
+            schedule?: {
+                number?: number;
+                /** Format: date */
+                from?: string;
+                /** Format: date */
+                creditOn?: string;
+                balance?: components["schemas"]["Money"];
+                interest?: components["schemas"]["Money"];
+                /** @enum {string} */
+                status?: "CREDITED" | "DUE";
+            }[];
+            /** @description The day-end's accruals, credits and payouts, newest first (at most 200) */
+            events?: {
+                id?: number;
+                /** @enum {string} */
+                kind?: "ACCRUAL" | "CREDIT" | "PAYOUT" | "PAYOUT_HELD" | "REVERSAL";
+                /** Format: date */
+                periodFrom?: string | null;
+                /** Format: date */
+                periodTo?: string | null;
+                periodNo?: number | null;
+                amount?: components["schemas"]["Money"];
+                /** Format: date */
+                businessDate?: string;
+                note?: string | null;
+                /** Format: uuid */
+                movementId?: string | null;
+            }[];
         };
         DepositHold: {
             /** Format: uuid */
@@ -11847,6 +11935,29 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    getCasaInterest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositInterest"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     listCasaHolds: {
         parameters: {
             query?: never;
@@ -12253,6 +12364,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DepositMovement"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTermDepositInterest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositInterest"];
                 };
             };
             default: components["responses"]["Problem"];

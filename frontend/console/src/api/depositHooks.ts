@@ -7,6 +7,7 @@ import type {
   DepositAccount,
   DepositHold,
   DepositHoldInput,
+  DepositInterest,
   DepositMovement,
   DepositTransactionInput,
   DepositTransferInput,
@@ -300,5 +301,22 @@ export function useCreateDepositCollectionOrder(family: DepositFamily, id: strin
       qc.invalidateQueries({ queryKey: ['deposit-orders'] });
       done();
     },
+  });
+}
+
+// ---- interest (P4-3) ---------------------------------------------------------------------------------------------
+
+/** Where an account's interest stands: the day-end accrues and credits it; this only reads. */
+export function useDepositInterest(family: DepositFamily, id: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['deposit-interest', family, id],
+    queryFn: () =>
+      unwrap<DepositInterest>(
+        (family === 'CASA'
+          ? api.GET('/api/v1/casa/accounts/{id}/interest', { params: { path: { id: id! } } })
+          : api.GET('/api/v1/deposits/accounts/{id}/interest', { params: { path: { id: id! } } })) as never,
+      ),
+    enabled: !!id && enabled,
   });
 }

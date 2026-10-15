@@ -6,7 +6,7 @@ import type { DepositFamily } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
-import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
+import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, InterestCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
 
 type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | null;
 const SOURCE: Record<string, string> = { ACCOUNT: 'From account', CASH: 'In cash', BANK_TRANSFER: 'By bank transfer', GATEWAY: 'Through a payment link' };
@@ -135,6 +135,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
           </Card>
         )}
       </div>
+      {((!term && a.nextInterestDate) || (term && t?.funded)) && <InterestCard family={family} accountId={a.id!} />}
       {(!term || a.status !== 'BOOKED') && <MovementsCard family={family} accountId={a.id!} canReverse={can(P.casaTransact)} />}
       <PaymentLinksCard family={family} accountId={a.id!} />
       <HoldsCard family={family} accountId={a.id!} canRelease={can(term ? P.depositHold : P.casaHold)} />

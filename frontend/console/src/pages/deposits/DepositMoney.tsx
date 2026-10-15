@@ -6,6 +6,7 @@ import {
   useDepositAccounts,
   useDepositCollectionOrders,
   useDepositHolds,
+  useDepositInterest,
   useDepositMovements,
   useFundTermDeposit,
   usePlaceHold,
@@ -33,6 +34,8 @@ const KIND_LABEL: Record<string, string> = {
   FUNDING: 'Funding',
   FUNDING_PAID: 'Paid to a term deposit',
   REVERSAL: 'Reversal',
+  INTEREST_CREDIT: 'Interest',
+  INTEREST_PAYOUT: 'Interest paid out',
 };
 const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
 const GATEWAY: Record<string, { label: string; tone: 'info' | 'ok' | 'warn' }> = {
@@ -72,7 +75,7 @@ export function MovementsCard({ family, accountId, canReverse }: { family: Depos
   const q = useDepositMovements(family, accountId);
   const [reversing, setReversing] = useState<DepositMovement | null>(null);
   const reversible = (m: DepositMovement) =>
-    canReverse && family === 'CASA' && m.kind !== 'REVERSAL' && !m.reversedBy && m.kind !== 'FUNDING' && m.kind !== 'FUNDING_PAID' && !m.gatewayStatus;
+    canReverse && family === 'CASA' && !['REVERSAL', 'FUNDING', 'FUNDING_PAID', 'INTEREST_CREDIT', 'INTEREST_PAYOUT'].includes(m.kind ?? '') && !m.reversedBy && !m.gatewayStatus;
   return (
     <Card title="Statement" flush>
       {q.isLoading ? (
@@ -554,5 +557,68 @@ export function PaymentLinkDialog({ family, account, onClose }: { family: Deposi
       <p className="muted">A payment the account cannot take (a freeze, a deposit funded another way) goes to the unmatched receipts queue under Collections.</p>
       <Problems error={m.error} title="The payment link cannot be created:" />
     </Dialog>
+  );
+}
+
+const EVENT_LABEL: Record<string, string> = {
+  ACCRUAL: 'Accrued',
+  CREDIT: 'Credited',
+  PAYOUT: 'Paid out',
+  PAYOUT_HELD: 'Kept on the deposit',
+  REVERSAL: 'Accrual taken back',
+};
+
+/** Interest (P4-3): what the day-end has accrued and credited, the next credit date and, for a term deposit, its periods. */
+export function InterestCard({ family, accountId }: { family: DepositFamily; accountId: string }) {
+  const q = useDepositInterest(family, accountId);
+  const i = q.data;
+  const credits = (i?.events ?? []).filter((e) => e.kind !== 'ACCRUAL').slice(0, 10);
+  return (
+    <Card title="Interest" flush>
+      {q.isLoading || !i ? (
+        <Spinner />
+      ) : (
+        <div className="stack" style={{ padding: 16 }}>
+          <dl className="kv">
+            <dt>Accrued, not yet credited</dt>
+            <dd data-testid="interest-accrued"><MoneyText value={i.accrued} /></dd>
+            <dt>Accrued through</dt>
+            <dd>{i.accruedThrough ? <DateText value={i.accruedThrough} /> : <span className="muted">The first day-end has not run yet</span>}</dd>
+            <dt>Credited so far</dt>
+            <dd data-testid="interest-credited"><MoneyText value={i.credited} />{i.lastCreditOn && <span className="muted"> · last for the period to <DateText value={i.lastCreditOn} /></span>}</dd>
+            <dt>Next credit</dt>
+            <dd data-testid="interest-next">{i.nextCreditDate ? <DateText value={i.nextCreditDate} /> : '—'}</dd>
+          </dl>
+          {(i.schedule ?? []).length > 0 && (
+            <Table
+              caption="Interest periods"
+              columns={[
+                { key: 'n', header: 'Period', render: (p) => p.number },
+                { key: 'from', header: 'From', render: (p) => <DateText value={p.from} /> },
+                { key: 'on', header: 'Credited on', render: (p) => <DateText value={p.creditOn} /> },
+                { key: 'int', header: 'Interest', numeric: true, render: (p) => <MoneyText value={p.interest} /> },
+                { key: 'st', header: 'Status', render: (p) => (p.status === 'CREDITED' ? <Badge tone="ok">Credited</Badge> : <span className="muted">Due</span>) },
+              ]}
+              rows={i.schedule ?? []}
+              rowKey={(p) => String(p.number)}
+            />
+          )}
+          {credits.length > 0 && (
+            <Table
+              caption="Credits and payouts"
+              columns={[
+                { key: 'd', header: 'Business date', render: (e) => <DateText value={e.businessDate} /> },
+                { key: 'k', header: 'What', render: (e) => <span>{EVENT_LABEL[e.kind ?? ''] ?? e.kind}{e.note && <span className="muted"> · {e.note}</span>}</span> },
+                { key: 'p', header: 'Period', render: (e) => (e.periodFrom ? <span><DateText value={e.periodFrom} /> – <DateText value={e.periodTo} /></span> : '—') },
+                { key: 'a', header: 'Amount', numeric: true, render: (e) => <MoneyText value={e.amount} /> },
+              ]}
+              rows={credits}
+              rowKey={(e) => String(e.id)}
+            />
+          )}
+          <p className="muted" style={{ margin: 0 }}>The day-end accrues interest every calendar day and credits it on the credit dates. Tax deducted at source is not deducted yet.</p>
+        </div>
+      )}
+    </Card>
   );
 }

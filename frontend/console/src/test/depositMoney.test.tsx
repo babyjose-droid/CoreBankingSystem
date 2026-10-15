@@ -260,3 +260,39 @@ describe('the payment gateway (P4-2b)', () => {
     });
   });
 });
+
+describe('interest (P4-3)', () => {
+  it('a savings account shows its interest and the next credit date', async () => {
+    const server = bank();
+    const sb = await openSavings(server, 'Anu');
+    const res = await mockCall(server, 'auditor', 'GET', `/api/v1/casa/accounts/${sb.id}/interest`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ accrued: '0', credited: '0', schedule: [], events: [] });
+    expect(res.body.nextCreditDate).toBe(sb.nextInterestDate);
+    renderApp({ user: 'maker', route: `/deposits/casa/${sb.id}`, server });
+    expect(await screen.findByTestId('interest-accrued')).toHaveTextContent('0.00');
+    expect(screen.getByText('The first day-end has not run yet')).toBeInTheDocument();
+  });
+
+  it('a funded deposit lists its interest periods; a booked one shows no interest yet', async () => {
+    const server = bank();
+    const sb = await openSavings(server, 'Anu');
+    await txn(server, sb.id!, 'CASH_DEPOSIT', 150000);
+    await mockCall(server, 'maker', 'POST', '/api/v1/deposits/accounts', { productCode: 'FDC01', customerId: customer(server, 'Anu').id, branchCode: 'HO', amount: 100000, tenureMonths: 12, payoutTo: 'CASA', payoutAccountId: sb.id });
+    await approveLast(server, 'TERM_DEPOSIT');
+    const fd = server.db.deposits.accounts[0];
+    const booked = renderApp({ user: 'maker', route: `/deposits/term/${fd.id}`, server });
+    expect(await screen.findByRole('button', { name: 'Fund the deposit' })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Interest periods' })).not.toBeInTheDocument();
+    booked.unmount();
+    await mockCall(server, 'maker', 'POST', `/api/v1/deposits/accounts/${fd.id}/fund`, { source: 'ACCOUNT', fromAccountId: sb.id });
+    const interest = (await mockCall(server, 'maker', 'GET', `/api/v1/deposits/accounts/${fd.id}/interest`)).body;
+    expect(interest.schedule).toHaveLength(4);
+    expect(interest.schedule[0]).toMatchObject({ number: 1, from: '2026-06-30', creditOn: '2026-09-30', status: 'DUE' });
+    expect(interest.nextCreditDate).toBe('2026-09-30');
+    renderApp({ user: 'maker', route: `/deposits/term/${fd.id}`, server });
+    const table = await screen.findByRole('table', { name: 'Interest periods' });
+    expect(within(table).getAllByRole('row')).toHaveLength(5);
+    expect(screen.getByTestId('interest-next')).toHaveTextContent(/30.*Sep.*2026/);
+  });
+});

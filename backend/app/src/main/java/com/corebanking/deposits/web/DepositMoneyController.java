@@ -23,7 +23,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Money on deposit accounts (P4-2): transactions, transfers, reversals, freezes and liens on savings and current
  * accounts (CASA module); funding, liens and the movements of term deposits (TD module). Every change answers 202 with
- * the approval request, which is already APPROVED when the tenant's rules let it post at once.
+ * the approval request, which is already APPROVED when the tenant's rules let it post at once. Interest (P4-3) is read-only here:
+ * the day-end accrues and credits it.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -69,6 +70,18 @@ class DepositMoneyController {
                                             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         return money.movements(CASA, id, from, to);
+    }
+
+    @GetMapping("/casa/accounts/{id}/interest")
+    @PreAuthorize("hasAuthority('casa:view')")
+    Map<String, Object> casaInterest(@PathVariable UUID id) {
+        return money.interestView(CASA, id);
+    }
+
+    @GetMapping("/deposits/accounts/{id}/interest")
+    @PreAuthorize("hasAuthority('deposit:view')")
+    Map<String, Object> depositInterest(@PathVariable UUID id) {
+        return money.interestView(TD, id);
     }
 
     @GetMapping("/casa/accounts/{id}/holds")

@@ -9,6 +9,7 @@ import com.corebanking.deposits.DepositOperations;
 import com.corebanking.deposits.DepositPostings;
 import com.corebanking.deposits.DepositPostings.FundingSource;
 import com.corebanking.deposits.DepositPostings.Leg;
+import com.corebanking.deposits.TermDeposit;
 import com.corebanking.deposits.Tenure;
 import com.corebanking.kernel.PiiCipher;
 import com.corebanking.ledger.LedgerSettings;
@@ -450,6 +451,7 @@ public class DepositMoneyService implements DepositOperations {
             DepositAccountService.refuseIfAny("the funding cannot be reversed", fundingReversalProblems(d, td));
             Movement m = movement((UUID) td.get("funding_movement_id"));
             reverseLot(m, f.reason(), r.id(), r.maker());
+            reverseAccruedInterest(d, f.reason());
             jdbc.update("""
                     UPDATE deposits.term_deposit SET start_date = NULL, maturity_date = NULL, funding_source = NULL, funding_account_id = NULL,
                            funding_movement_id = NULL, funding_reference = NULL, payout_bank_name_cipher = NULL, payout_bank_account_cipher = NULL,
@@ -636,6 +638,89 @@ public class DepositMoneyService implements DepositOperations {
         return rows.get(0);
     }
 
+    /**
+     * Interest the day-end accrued on a deposit whose funding is being reversed, and that was never credited (anything
+     * credited would have stopped the reversal): booked back to the expense head; the deposit starts afresh if funded
+     * again.
+     */
+    private void reverseAccruedInterest(Account d, String reason) {
+        List<Map<String, Object>> st = jdbc.queryForList("SELECT accrued::numeric AS accrued FROM deposits.interest_state WHERE account_id = ?", d.id());
+        if (st.isEmpty()) return;
+        BigDecimal accrued = (BigDecimal) st.get(0).get("accrued");
+        if (accrued.signum() > 0) {
+            String expense = jdbc.queryForObject("SELECT p.gl_interest_expense FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code WHERE a.id = ?",
+                    String.class, d.id());
+            LocalDate today = days.requireOpen();
+            TransactionLot lot = new DepositPostings(heads(), today).interestAccrual(d.branch(), expense, DepositEod.payableGl(jdbc), d.accountNo(),
+                    accrued.negate(), d.accountNo());
+            postings.post(lot, CurrentUser.username());
+            jdbc.update("""
+                    INSERT INTO deposits.interest_event (account_id, kind, amount, lot_id, business_date, note, created_by)
+                    VALUES (?, 'REVERSAL', ?, ?, ?, ?, ?)
+                    """, d.id(), accrued.negate(), lot.id(), today, "funding reversed: " + reason, CurrentUser.username());
+        }
+        jdbc.update("DELETE FROM deposits.interest_state WHERE account_id = ?", d.id());
+    }
+
+    /**
+     * Where an account's interest stands: accrued through which day, accrued and not yet credited, credited so far,
+     * the next credit date, the day-end's events (newest first) and, for a term deposit, its interest periods.
+     */
+    public Map<String, Object> interestView(String family, UUID accountId) {
+        Account a = account(accountId, family, true);
+        Map<String, Object> m = new LinkedHashMap<>();
+        List<Map<String, Object>> st = jdbc.queryForList("""
+                SELECT accrued_through::text AS through, accrued::numeric AS accrued, credited::numeric AS credited, periods_credited,
+                       last_credit_on::text AS last_credit FROM deposits.interest_state WHERE account_id = ?
+                """, accountId);
+        Map<String, Object> s = st.isEmpty() ? null : st.get(0);
+        m.put("accruedThrough", s == null ? null : s.get("through"));
+        m.put("accrued", DepositRuleSets.plain(s == null ? BigDecimal.ZERO : (BigDecimal) s.get("accrued")));
+        m.put("credited", DepositRuleSets.plain(s == null ? BigDecimal.ZERO : (BigDecimal) s.get("credited")));
+        m.put("lastCreditOn", s == null ? null : s.get("last_credit"));
+        if (DepositProductService.CASA.equals(a.family())) {
+            m.put("nextCreditDate", jdbc.queryForObject("SELECT next_interest_date::text FROM deposits.casa_account WHERE account_id = ?", String.class, accountId));
+            m.put("schedule", List.of());
+        } else {
+            Map<String, Object> t = jdbc.queryForMap(DepositEod.TERMS, accountId);
+            List<Map<String, Object>> schedule = new ArrayList<>();
+            String next = null;
+            if (t.get("start_date") != null) {
+                int credited = s == null ? 0 : ((Number) s.get("periods_credited")).intValue();
+                for (TermDeposit.Period p : TermDeposit.periods(DepositEod.terms(t))) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("number", p.number());
+                    row.put("from", p.from().toString());
+                    row.put("creditOn", p.to().toString());
+                    row.put("balance", DepositRuleSets.plain(p.balance()));
+                    row.put("interest", DepositRuleSets.plain(p.interest()));
+                    row.put("status", p.number() <= credited ? "CREDITED" : "DUE");
+                    if (next == null && p.number() > credited) next = p.to().toString();
+                    schedule.add(row);
+                }
+            }
+            m.put("nextCreditDate", next);
+            m.put("schedule", schedule);
+        }
+        m.put("events", jdbc.query("""
+                SELECT id, kind, period_from::text, period_to::text, period_no, amount::numeric, business_date::text, note, movement_id::text
+                  FROM deposits.interest_event WHERE account_id = ? ORDER BY id DESC LIMIT 200
+                """, (rs, i) -> {
+                    Map<String, Object> e = new LinkedHashMap<>();
+                    e.put("id", rs.getLong(1));
+                    e.put("kind", rs.getString(2));
+                    e.put("periodFrom", rs.getString(3));
+                    e.put("periodTo", rs.getString(4));
+                    e.put("periodNo", rs.getObject(5) == null ? null : rs.getInt(5));
+                    e.put("amount", DepositRuleSets.plain(rs.getBigDecimal(6)));
+                    e.put("businessDate", rs.getString(7));
+                    e.put("note", rs.getString(8));
+                    e.put("movementId", rs.getString(9));
+                    return e;
+                }, accountId));
+        return m;
+    }
+
     // ================================================================================================ reading
 
     /** The movements of an account, newest first, with the balance after each; optionally between two business dates. */
@@ -740,7 +825,12 @@ public class DepositMoneyService implements DepositOperations {
             out.add("this transfer was sent through the payment gateway: the money comes back only when the bank fails or returns it");
         }
         if (!out.isEmpty()) return out;
-        for (Movement each : lotMovements(m.lotId())) {
+        List<Movement> lot = lotMovements(m.lotId());
+        if (lot.stream().anyMatch(x -> "INTEREST_CREDIT".equals(x.kind()) || "INTEREST_PAYOUT".equals(x.kind()))) {
+            out.add("interest credited or paid out by the day-end is not reversed by hand");
+            return out;
+        }
+        for (Movement each : lot) {
             Account a = account(each.accountId(), null, false);
             Direction back = "DEBIT".equals(each.direction()) ? Direction.CREDIT : Direction.DEBIT;
             for (String p : movementProblems(a, back, each.amount(), true)) out.add("account " + a.accountNo() + ": " + p);
@@ -867,12 +957,17 @@ public class DepositMoneyService implements DepositOperations {
 
     /** The settlement heads from the tenant's settings (tenant V30), with the starter chart's as defaults. */
     private DepositPostings.Heads heads() {
+        return headsOf(jdbc);
+    }
+
+    /** The same through any JdbcTemplate (the day-end's is bound to the tenant's own data source). */
+    static DepositPostings.Heads headsOf(JdbcTemplate jdbc) {
         DepositPostings.Heads d = DepositPostings.Heads.starter();
         Map<String, String> p = new LinkedHashMap<>();
         jdbc.query("SELECT key, value FROM platform.system_property WHERE key IN ('deposits.gl.cash','deposits.gl.bank-in','deposits.gl.bank-out','deposits.gl.in-transit')",
                 rs -> { p.put(rs.getString(1), rs.getString(2).trim()); });
         return new DepositPostings.Heads(p.getOrDefault("deposits.gl.cash", d.cash()), p.getOrDefault("deposits.gl.bank-in", d.bankIn()),
-                p.getOrDefault("deposits.gl.bank-out", d.bankOut()), ledger.interBranchGl(), p.getOrDefault("deposits.gl.in-transit", d.inTransit()));
+                p.getOrDefault("deposits.gl.bank-out", d.bankOut()), new LedgerSettings(jdbc).interBranchGl(), p.getOrDefault("deposits.gl.in-transit", d.inTransit()));
     }
 
     /** A date column read through queryForMap: java.sql.Date from the JDBC driver. */

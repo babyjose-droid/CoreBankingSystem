@@ -134,6 +134,7 @@ export type DepositTransferInput = S['DepositTransferInput'];
 export type DepositHoldInput = S['DepositHoldInput'];
 export type TermDepositFundingInput = S['TermDepositFundingInput'];
 export type DepositCollectionOrderInput = S['DepositCollectionOrderInput'];
+export type DepositInterest = S['DepositInterest'];
 export type Consent = S['Consent'];
 export type KycDocument = S['KycDocument'];
 export type ReportDefinition = S['ReportDefinition'];

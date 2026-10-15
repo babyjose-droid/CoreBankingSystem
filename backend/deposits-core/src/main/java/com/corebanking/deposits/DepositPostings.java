@@ -20,6 +20,10 @@ import java.util.Objects;
  *     sent                Dr deposit account         Cr payout in transit
  *     paid                Dr payout in transit       Cr bank (disbursement)
  *     failed or returned  the reversal of what was posted (the paid lot first, then the sent one)
+ *   interest (P4-3):
+ *     accrual             Dr interest expense (the product's head)   Cr interest payable
+ *     credit              Dr interest payable                        Cr the account
+ *     payout              Dr the term deposit                        Cr the savings or current account it is paid to
  * </pre>
  * The reversal of any of them is the mirror lot ({@link TransactionLot#reversal}).
  */
@@ -34,6 +38,9 @@ public final class DepositPostings {
     public static final String FUNDING = "DEPOSIT_FUNDING";
     public static final String GATEWAY_TRANSFER_OUT = "DEPOSIT_GATEWAY_OUT";
     public static final String GATEWAY_PAID = "DEPOSIT_GATEWAY_PAID";
+    public static final String INTEREST_ACCRUAL = "DEPOSIT_INTEREST_ACCRUAL";
+    public static final String INTEREST_CREDIT = "DEPOSIT_INTEREST_CREDIT";
+    public static final String INTEREST_PAYOUT = "DEPOSIT_INTEREST_PAYOUT";
 
     /**
      * The cash and bank heads a deposit movement settles against, the inter-branch head a transfer between branches uses,
@@ -168,6 +175,41 @@ public final class DepositPostings {
         return lot(GATEWAY_PAID, reference)
                 .debit(branch, heads.inTransit(), heads.inTransit(), amount, "Gateway transfer paid, from " + accountNo)
                 .credit(branch, heads.bankOut(), heads.bankOut(), amount, "Gateway transfer paid, from " + accountNo)
+                .build();
+    }
+
+    /**
+     * Interest accrued on an account: Dr the product's interest expense head, Cr interest payable, both in the
+     * account's branch. A negative amount is the reverse (a rounding true-up, or accrual taken back).
+     */
+    public TransactionLot interestAccrual(String branch, String expenseGl, String payableGl, String accountNo, BigDecimal amount, String reference) {
+        if (amount == null || amount.signum() == 0) throw new IllegalArgumentException("the amount must not be zero");
+        BigDecimal abs = amount.abs();
+        String narration = (amount.signum() > 0 ? "Interest accrued on " : "Interest accrual taken back on ") + accountNo;
+        TransactionLot.Builder b = lot(INTEREST_ACCRUAL, reference);
+        if (amount.signum() > 0) {
+            b.debit(branch, expenseGl, expenseGl, abs, narration).credit(branch, payableGl, payableGl, abs, narration);
+        } else {
+            b.debit(branch, payableGl, payableGl, abs, narration).credit(branch, expenseGl, expenseGl, abs, narration);
+        }
+        return b.build();
+    }
+
+    /** Interest credited to the account from interest payable. */
+    public TransactionLot interestCredit(Leg account, String payableGl, BigDecimal amount, String reference, String narration) {
+        positive(amount);
+        return lot(INTEREST_CREDIT, reference)
+                .debit(account.branch(), payableGl, payableGl, amount, "Interest credited to " + account.accountNo())
+                .credit(account.branch(), account.gl(), account.accountNo(), amount, text(narration, "Interest"))
+                .build();
+    }
+
+    /** A term deposit's interest paid to a savings or current account; inter-branch legs when the branches differ. */
+    public TransactionLot interestPayout(Leg deposit, Leg to, BigDecimal amount, String reference) {
+        positive(amount);
+        return lot(INTEREST_PAYOUT, reference)
+                .debit(deposit.branch(), deposit.gl(), deposit.accountNo(), amount, "Interest paid to " + to.accountNo())
+                .credit(to.branch(), to.gl(), to.accountNo(), amount, "Interest on deposit " + deposit.accountNo())
                 .build();
     }
 }

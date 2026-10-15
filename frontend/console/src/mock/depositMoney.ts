@@ -25,6 +25,7 @@ import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
+import { periods } from './deposits';
 import { assertWithinLimit } from './limits';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
@@ -485,6 +486,20 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       require(user, view);
       findAccount(db, params.id, family);
       return ok(db.deposits.holds.filter((h) => h.accountId === params.id).sort((x, y) => (x.status === y.status ? 0 : x.status === 'ACTIVE' ? -1 : 1)).map(({ accountId: _a, ...h }) => h));
+    });
+    // P4-3: there is no deposit day-end in mock mode, so nothing is accrued; a term deposit shows its interest periods
+    on('GET', `/api/v1/${base}/accounts/{id}/interest`, ({ user, params }) => {
+      module(mod);
+      require(user, view);
+      const a = findAccount(db, params.id, family);
+      const t = a.termDeposit;
+      const schedule = t?.funded && t.startDate && t.maturityDate
+        ? periods({ principal: t.principal!, ratePercent: t.ratePercent!, start: t.startDate, maturity: t.maturityDate, periodMonths: t.interestPeriodMonths ?? 0,
+            cumulative: !!t.cumulative, dayCount: t.dayCount ?? 'ACTUAL_365', rounding: t.rounding ?? 'PAISE_HALF_UP' })
+            .map((p) => ({ number: p.number, from: p.from, creditOn: p.to, balance: plain(p.balance), interest: plain(p.interest), status: 'DUE' as const }))
+        : [];
+      return ok({ accruedThrough: null, accrued: '0', credited: '0', lastCreditOn: null,
+        nextCreditDate: family === 'CASA' ? a.nextInterestDate ?? null : schedule[0]?.creditOn ?? null, schedule, events: [] });
     });
     on('GET', `/api/v1/${base}/accounts/{id}/collection-orders`, ({ user, params }) => {
       module(mod);

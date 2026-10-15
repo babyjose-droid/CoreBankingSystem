@@ -7,8 +7,9 @@ Updated 15-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | P4-0 deposit core | Built, pushed (`9cb5f8e`, `3851a93`), live-tested on the local stack on 10-Oct-2026 |
 | P4-1 products and opening | Built, pushed (`586b8e8`), live-tested on the local stack on 11-Oct-2026 |
 | P4-2 money movement | Built and pushed (`cdbe397`, fix `fa9482d`); live-tested on the local stack on 14-Oct-2026 (32 of 32 after the fix) |
-| P4-2b gateway for deposits | Built on 15-Oct-2026: transfers out through the payout gateway, payment links that credit an account or fund a deposit; not yet pushed or live-tested |
-| P4-3 to P4-7 | Not started |
+| P4-2b gateway for deposits | Built, pushed (`a004bdf`), live-tested on the local stack on 15-Oct-2026 (40 of 40) |
+| P4-3 day-end interest | Interest built on 15-Oct-2026 (accrual, credit, payout, compounding); not yet pushed or live-tested. Tax deducted at source follows as P4-3b |
+| P4-4 to P4-7 | Not started |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -282,7 +283,51 @@ The payout and collection pipeline built for loans in P2-2 now also serves depos
 ### Not verified here
 - **Gradle and Spring:** as before; the integration module was compiled against the real sources with stand-ins for Spring.
 - **The outbox relay and the scheduled worker** were played by the test, not run.
-- **Live stack:** not yet run. The smoke script for P4-2b exercises the simulator's amounts (.01 fails, .02 is paid on the next poll, .03 is paid then returned) and waits for the worker.
 
-### Next: P4-3
-P4-3 is the day-end interest: savings accrual and credit, term deposit accrual, payout and compounding, the TDS ledger. Next tenant migration: V32; next control migration: V5.
+### Verified after the push (15-Oct-2026)
+- **Local stack.** `a004bdf` built; V31 applied to the three tenants.
+- **Live test** (`p4-2b-smoke.py`): 40 of 40. Transfers of 1000.00 (paid and settled), 1000.01 (failed, returned at once), 1000.02 (paid on the poll two minutes later) and 1000.03 (paid, then returned on refresh and reversed, payment first); the statement showed the UTR and the returns; a staff reversal was refused. A payment link credited 2,500 to the savings account; new deposits 30010000000029 on demo-bank and demo-nbfc-d were funded through their links with the payout bank account recorded; a part-principal link and a second link were refused. Trial balances balanced (bank 8,00,500.18; NBFC 70,000); reconciliation listed the deposit payment.
+
+## Increment P4-3: day-end interest
+
+Interest on deposits now accrues and is credited at end of day. P4-3 is delivered in two parts: this one (interest) and P4-3b (tax deducted at source: the ledger per depositor and tax year, thresholds, Form 121), so interest is credited gross for now.
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `InterestDayEnd`: what a day-end does with an account's interest, for the calendar days since the last one accrued. Savings: each day's closing balance earns a day's interest (`SavingsInterest`, 8 places); on the last day of the interest period (quarterly by default, counted from the financial year) the period's interest is credited, rounded as the product says, and earns from the next day. Term deposits: interest accrues every day from the start date to the day before maturity (`TermDeposit.earnedBefore`); each period is credited on its credit date, the last on the maturity date. Accrual is booked as the change in interest earned so far, rounded to the paisa, so rounding never builds up; a credit rounded to the rupee is trued up first. A re-run of a day produces nothing.
+- `DepositPostings`: accrual (Dr the product's interest expense head / Cr interest payable 2404), credit (Dr interest payable / Cr the account), payout of a deposit's interest to a savings or current account (with inter-branch legs).
+
+**Tenant database** (`V32__deposit_interest.sql`)
+- Setting `deposits.gl.interest-payable` (2404).
+- Movements `INTEREST_CREDIT` (on a savings or current account or a funded deposit) and `INTEREST_PAYOUT` (a deposit's interest to the account named at booking); a deposit also sends its interest to a bank account as a gateway transfer (P4-2b). A freeze does not stop the bank crediting interest. A funded deposit holds at least its principal (a cumulative deposit grows).
+- `deposits.interest_state` (accrued through which day, accrued and not credited, credited, periods credited) and `deposits.interest_event` (every accrual, credit, payout, payout kept on the deposit, accrual taken back; never changed). `deposits.interest_problems()` lists branches whose interest-payable head differs from what their accounts have accrued and not been credited.
+
+**Application**
+- `DepositEod` (day-end steps after lending, order 200): "Savings interest (accrual and credit)" and "Term deposit interest (accrual, credit, payout)". Per account in its own transaction; a failing account is an exception, above 5% the step fails. The days up to the next working day are closed with the business date. A payout deposit pays each credit at once: to the savings or current account named at booking, or through the payment gateway to the bank account recorded; when the account cannot take it (no longer active, frozen for credits) or no bank account is recorded, the interest stays on the deposit, to be paid with the proceeds (P4-4).
+- The reversal of a funding takes back interest accrued and not credited (to the expense head); once interest has been credited the funding cannot be reversed. A staff reversal of interest is refused.
+- `GET /api/v1/casa/accounts/{id}/interest` and `GET /api/v1/deposits/accounts/{id}/interest` (permissions `casa:view`, `deposit:view`): accrued, accrued through, credited, next credit date, the day-end's events and a deposit's interest periods.
+
+**Console**
+- An Interest card on an interest-bearing savings account and on a funded deposit: accrued, credited, next credit, the deposit's periods (credited or due) and the latest credits and payouts. The statement names interest credits and payouts, without a Reverse action.
+- Mock mode has no deposit day-end: it shows the periods and nothing accrued.
+
+### Choices made in this increment (to confirm)
+- **Savings rates** are the product's bands on the day the day-end runs; days caught up after a missed day-end use the same bands. A rate change takes effect from the next day-end.
+- **Savings interest is credited on the last day of the period** (30 June, 30 September …), for the period including that day; a deposit's interest is credited on its credit date (the monthly or quarterly anniversary of the start date), for the days before it.
+- **A freeze does not stop interest being credited** to the frozen account; a payout to an account frozen for credits is kept on the deposit instead.
+- **Interest is credited gross** until P4-3b deducts tax.
+- **No accrual on a savings account before money is first paid in**; a zero balance earns nothing.
+
+### Tests
+- **Engine:** 81 tests in `deposits-core` (8 new in `InterestDayEndTest`, with figures worked out independently).
+- **Tenant database:** 19 checks in the new `deposits_interest_test.sql`; all 24 suites pass.
+- **Application services:** 20 checks in the build sandbox playing the day-end on a migrated bank database from 30 June to 31 July (stand-ins for Spring): the 30 June quarter-end credit, the first day's accrual of a cumulative deposit, a re-run posting nothing, a funding reversal taking back accrued interest, monthly payouts to a savings account, to a frozen account (kept) and through the gateway, the deposit's booked interest equal to what it has earned, the interest view, and every invariant after each stage. The P4-1, P4-2 and P4-2b checks still pass.
+- **Console:** 2 new tests; the whole suite, typecheck and build pass.
+- **API contract:** 2 new operations; lint clean; every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring**, the real EOD engine and its scheduling: the steps were called by the test as the engine calls them.
+- **Live stack:** not yet run. `p4-3-smoke.py` runs one end of day on demo-bank and demo-nbfc-d (the business date moves on and cannot be moved back) and checks the figures.
+
+### Next: P4-3b
+Tax deducted at source on deposit interest: the depositor's interest per tax year across deposits, thresholds by payer type and age, Form 121 declarations, deduction on credit or payout (2205), tax certificate data. Next tenant migration: V33; next control migration: V5.
