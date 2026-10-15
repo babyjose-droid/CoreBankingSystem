@@ -41,9 +41,9 @@ class PayoutController {
     @GetMapping("/payouts")
     @PreAuthorize("hasAuthority('payout:view')")
     List<Map<String, Object>> search(@RequestParam(required = false) String status, @RequestParam(required = false) Boolean needsAction,
-                                     @RequestParam(required = false) UUID loanId, @RequestParam(required = false) LocalDate from,
-                                     @RequestParam(required = false) LocalDate to) {
-        return payouts.search(status, needsAction, loanId, from, to);
+                                     @RequestParam(required = false) UUID loanId, @RequestParam(required = false) UUID accountId,
+                                     @RequestParam(required = false) LocalDate from, @RequestParam(required = false) LocalDate to) {
+        return payouts.search(status, needsAction, loanId, accountId, from, to);
     }
 
     @GetMapping("/payouts/{id}")

@@ -150,7 +150,18 @@ function Reconciliation() {
             columns={[
               { key: 'cat', header: 'Finding', render: (r) => (<span><Badge tone={RECON[r.category!]?.tone}>{RECON[r.category!]?.label ?? r.category}</Badge><br /><span className="muted" style={{ fontSize: 12 }}>{RECON[r.category!]?.meaning}</span></span>) },
               { key: 'id', header: 'Gateway payment', render: (r) => (<span><span className="mono">{r.providerPaymentId}</span>{r.lastError && (<><br /><span className="muted" style={{ fontSize: 12 }}>{r.lastError}</span></>)}</span>) },
-              { key: 'loan', header: 'Loan', render: (r) => (r.loanId ? <Link to={`/loans/${r.loanId}`} className="mono">{r.loanNo}</Link> : <span className="muted">None</span>) },
+              {
+                key: 'loan',
+                header: 'Loan or account',
+                render: (r) =>
+                  r.loanId ? (
+                    <Link to={`/loans/${r.loanId}`} className="mono">{r.loanNo}</Link>
+                  ) : r.accountNo ? (
+                    <span className="mono" title="Deposit account">{r.accountNo}</span>
+                  ) : (
+                    <span className="muted">None</span>
+                  ),
+              },
               { key: 'rcv', header: 'Received', numeric: true, render: (r) => (r.paymentAmount ? (<span><MoneyText value={r.paymentAmount} /><br /><span className="muted" style={{ fontSize: 12 }}><DateTimeText value={r.paidAt} /></span></span>) : <span className="muted">Nothing received</span>) },
               { key: 'set', header: 'Settled', numeric: true, render: (r) => (r.settledAmount ? (<span><MoneyText value={r.settledAmount} /><br /><span className="muted" style={{ fontSize: 12 }}><DateText value={r.settledOn} /> · {r.settlementUtr}</span></span>) : <span className="muted">Not settled</span>) },
               { key: 'note', header: 'Note', render: (r) => r.review ?? '' },

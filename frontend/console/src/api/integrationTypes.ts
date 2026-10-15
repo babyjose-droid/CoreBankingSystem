@@ -52,8 +52,12 @@ export interface Beneficiary {
 export interface Payout {
   id?: string;
   reference?: string;
-  loanId?: string;
-  loanNo?: string;
+  loanId?: string | null;
+  loanNo?: string | null;
+  /** P4-2b: a transfer out of a savings or current account instead of a loan disbursement. */
+  depositAccountId?: string | null;
+  accountNo?: string | null;
+  depositSettledAt?: string | null;
   branch?: string;
   attemptNo?: number;
   amount?: Money;
@@ -84,8 +88,12 @@ export type CollectionOrderInput = S['CollectionOrderInput'];
 export interface CollectionOrder {
   id?: string;
   reference?: string;
-  loanId?: string;
-  loanNo?: string;
+  loanId?: string | null;
+  loanNo?: string | null;
+  /** P4-2b: a payment link for a deposit account instead of a loan. */
+  depositAccountId?: string | null;
+  accountNo?: string | null;
+  purpose?: 'REPAYMENT' | 'CREDIT' | 'FUNDING';
   amount?: Money;
   methods?: string[];
   provider?: string;
@@ -114,6 +122,9 @@ export interface ReconRow {
   settlementFee?: Money | null;
   settledOn?: string | null;
   settlementUtr?: string | null;
+  depositAccountId?: string | null;
+  accountNo?: string | null;
+  depositMovementId?: string | null;
 }
 export type PaymentResolution = S['PaymentResolution'];
 export interface SettlementUploadResult {

@@ -26,7 +26,7 @@ export function ReversalNote({ payout }: { payout: Payout }) {
 }
 
 const retryLabel = (p: Payout): string | null =>
-  p.status === 'ON_HOLD' ? 'Resume' : p.status === 'INITIATED' ? 'Send again' : ['FAILED', 'RETURNED'].includes(p.status ?? '') && p.failureAction === 'PARKED' ? 'New attempt' : null;
+  p.status === 'ON_HOLD' ? 'Resume' : p.status === 'INITIATED' ? 'Send again' : ['FAILED', 'RETURNED'].includes(p.status ?? '') && p.failureAction === 'PARKED' ? (p.loanId ? 'New attempt' : 'Return to the account') : null;
 
 export function PayoutsPage() {
   const me = useMe().data!;
@@ -59,7 +59,7 @@ export function PayoutsPage() {
             caption="Payouts"
             captionHidden
             columns={[
-              { key: 'ref', header: 'Payout', render: (p) => (<span><button type="button" className="link-button mono" onClick={() => setOpen(p.id!)} aria-label={`Open payout ${p.reference}`}>{p.reference}</button><br /><Link to={`/loans/${p.loanId}`} className="mono muted" style={{ fontSize: 12 }}>{p.loanNo}</Link></span>) },
+              { key: 'ref', header: 'Payout', render: (p) => (<span><button type="button" className="link-button mono" onClick={() => setOpen(p.id!)} aria-label={`Open payout ${p.reference}`}>{p.reference}</button><br />{p.loanId ? <Link to={`/loans/${p.loanId}`} className="mono muted" style={{ fontSize: 12 }}>{p.loanNo}</Link> : <Link to={`/deposits/casa/${p.depositAccountId}`} className="mono muted" style={{ fontSize: 12 }}>A/c {p.accountNo}</Link>}</span>) },
               { key: 'amt', header: 'Amount', numeric: true, render: (p) => <MoneyText value={p.amount} /> },
               { key: 'ben', header: 'Beneficiary', render: (p) => (p.beneficiaryAccountMasked ? (<span><Masked value={p.beneficiaryAccountMasked} kind="account" /><br /><span className="muted mono" style={{ fontSize: 12 }}>{p.beneficiaryIfsc}</span></span>) : <span className="muted">None recorded</span>) },
               { key: 'status', header: 'Status', render: (p) => (<span><StatusBadge status={p.status} /> {p.needsAction && <Badge tone="warn">Needs action</Badge>}{p.failureReason && (<><br /><span className="muted" style={{ fontSize: 12 }}>{p.failureReason}</span></>)}</span>) },
@@ -71,7 +71,7 @@ export function PayoutsPage() {
                 header: <span className="sr-only">Actions</span>,
                 render: (p) => (
                   <span className="row" style={{ gap: 6 }}>
-                    {canBeneficiary && ['ON_HOLD', 'INITIATED', 'FAILED', 'RETURNED'].includes(p.status ?? '') && (
+                    {canBeneficiary && p.loanId && ['ON_HOLD', 'INITIATED', 'FAILED', 'RETURNED'].includes(p.status ?? '') && (
                       <Button size="sm" aria-label={`Set beneficiary for ${p.loanNo}`} onClick={() => setBeneficiaryFor(p)}>Set beneficiary</Button>
                     )}
                     {canAdmin && retryLabel(p) && (
@@ -119,8 +119,14 @@ function PayoutDialog({ id, onClose }: { id: string; onClose: () => void }) {
         {p && (
           <>
             <dl className="kv">
-              <dt>Loan</dt>
-              <dd><Link to={`/loans/${p.loanId}`} className="mono">{p.loanNo}</Link></dd>
+              <dt>{p.loanId ? 'Loan' : 'Deposit account'}</dt>
+              <dd>
+                {p.loanId ? (
+                  <Link to={`/loans/${p.loanId}`} className="mono">{p.loanNo}</Link>
+                ) : (
+                  <Link to={`/deposits/casa/${p.depositAccountId}`} className="mono">{p.accountNo}</Link>
+                )}
+              </dd>
               <dt>Amount</dt>
               <dd><MoneyText value={p.amount} /> {p.mode && <span className="muted">via {p.mode}</span>}</dd>
               <dt>Status</dt>

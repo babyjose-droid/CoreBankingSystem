@@ -4,6 +4,8 @@ import com.corebanking.customer.PiiKeys;
 import com.corebanking.deposits.AccountHolds;
 import com.corebanking.deposits.AccountHolds.Direction;
 import com.corebanking.deposits.AccountHolds.Hold;
+import com.corebanking.deposits.DepositEvents;
+import com.corebanking.deposits.DepositOperations;
 import com.corebanking.deposits.DepositPostings;
 import com.corebanking.deposits.DepositPostings.FundingSource;
 import com.corebanking.deposits.DepositPostings.Leg;
@@ -21,6 +23,7 @@ import com.corebanking.platform.BranchScope;
 import com.corebanking.platform.BusinessDays;
 import com.corebanking.platform.CurrentUser;
 import com.corebanking.platform.Json;
+import com.corebanking.platform.Outbox;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -47,11 +50,14 @@ import org.springframework.transaction.annotation.Transactional;
  * engine plus one {@code deposits.movement} row per account; the database refuses a movement that disagrees with its lot,
  * takes a balance below zero or below the liens, or ignores a freeze (tenant V30).
  * <p>
- * Bank transfers are recorded by staff with the UTR; sending and receiving them through the payment gateway comes with
- * P4-2b. Bank account numbers are sealed with the tenant's data key and shown masked.
+ * Bank transfers are recorded by staff with the UTR, or (P4-2b) a transfer out is sent through the payment gateway:
+ * it posts at once to the in-transit head and the integration module sends it ({@link DepositEvents#TRANSFER_OUT});
+ * when the bank pays, the in-transit head is cleared, and when it fails or comes back the money returns to the account.
+ * Money received through a gateway payment link credits the account, or funds a booked term deposit. Those calls come
+ * through {@link DepositOperations}. Bank account numbers are sealed with the tenant's data key and shown masked.
  */
 @Service
-public class DepositMoneyService {
+public class DepositMoneyService implements DepositOperations {
 
     static final String TXN_ENTITY = "DEPOSIT_TXN";
     static final String HOLD_ENTITY = "DEPOSIT_HOLD";
@@ -71,8 +77,12 @@ public class DepositMoneyService {
     /** openapi.yaml#/components/schemas/BankAccountInput: an account at another bank. */
     public record BankAccountInput(String holderName, String accountNumber, String ifsc) {}
 
-    /** openapi.yaml#/components/schemas/DepositTransactionInput. {@code bankAccount}: the other bank's account. */
-    public record TransactionInput(String type, BigDecimal amount, String reference, String narration, BankAccountInput bankAccount) {}
+    /**
+     * openapi.yaml#/components/schemas/DepositTransactionInput. {@code bankAccount}: the other bank's account.
+     * {@code viaGateway}: a bank transfer out sent through the payment gateway (no UTR yet: the bank gives it when it pays).
+     */
+    public record TransactionInput(String type, BigDecimal amount, String reference, String narration, BankAccountInput bankAccount,
+                                   Boolean viaGateway) {}
 
     /** openapi.yaml#/components/schemas/DepositTransferInput. */
     public record TransferInput(UUID fromAccountId, UUID toAccountId, BigDecimal amount, String narration) {}
@@ -95,7 +105,7 @@ public class DepositMoneyService {
      */
     public record Txn(String type, String accountId, String accountNo, String toAccountId, String toAccountNo, String amount,
                       String reference, String narration, SealedBankAccount bankAccount, String movementId, String reason,
-                      String limitType) {}
+                      String limitType, Boolean viaGateway) {}
 
     /** What a hold request carries. */
     public record HoldRequest(String accountId, String accountNo, String kind, String amount, String reason, String reference,
@@ -121,9 +131,10 @@ public class DepositMoneyService {
     private final BranchScope scope;
     private final PiiKeys keys;
     private final Json json;
+    private final Outbox outbox;
 
     DepositMoneyService(JdbcTemplate jdbc, ApprovalService approvals, AmountLimitService limits, PostingService postings, LedgerSettings ledger,
-                        BusinessDays days, BranchScope scope, PiiKeys keys, Json json) {
+                        BusinessDays days, BranchScope scope, PiiKeys keys, Json json, Outbox outbox) {
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.limits = limits;
@@ -133,6 +144,7 @@ public class DepositMoneyService {
         this.scope = scope;
         this.keys = keys;
         this.json = json;
+        this.outbox = outbox;
     }
 
     // ================================================================================================ money in and out
@@ -146,10 +158,12 @@ public class DepositMoneyService {
         Account a = account(accountId, DepositProductService.CASA, true);
         boolean credit = CASH_DEPOSIT.equals(in.type()) || BANK_TRANSFER_IN.equals(in.type());
         boolean bank = in.type().startsWith("BANK_");
+        boolean gateway = Boolean.TRUE.equals(in.viaGateway());
         List<String> problems = new ArrayList<>();
         String reference = text(in.reference(), 60, "reference", problems);
         String narration = text(in.narration(), 200, "narration", problems);
-        if (bank && reference == null) problems.add("the bank's reference (UTR) is required for a bank transfer");
+        if (gateway && !BANK_TRANSFER_OUT.equals(in.type())) problems.add("only a bank transfer out is sent through the payment gateway");
+        if (bank && !gateway && reference == null) problems.add("the bank's reference (UTR) is required for a bank transfer");
         SealedBankAccount party = null;
         if (BANK_TRANSFER_OUT.equals(in.type()) && in.bankAccount() == null) problems.add("name the bank account the money is sent to");
         if (in.bankAccount() != null) {
@@ -161,7 +175,7 @@ public class DepositMoneyService {
         String limitType = credit ? "DEPOSIT_CREDIT" : "DEPOSIT_DEBIT";
         limits.require(limitType, AmountLimitService.MAKE, in.amount(), a.accountNo());
         Txn t = new Txn(in.type(), a.id().toString(), a.accountNo(), null, null, in.amount().toPlainString(), reference, narration, party,
-                null, null, limitType);
+                null, null, limitType, gateway ? Boolean.TRUE : null);
         return approvals.propose(TXN_ENTITY, in.type(), a.id().toString(), toMap(t), null, in.amount(), a.branch(), idempotencyKey);
     }
 
@@ -181,7 +195,7 @@ public class DepositMoneyService {
         DepositAccountService.refuseIfAny("the transfer cannot be made", problems);
         limits.require("DEPOSIT_DEBIT", AmountLimitService.MAKE, in.amount(), from.accountNo());
         Txn t = new Txn(TRANSFER, from.id().toString(), from.accountNo(), to.id().toString(), to.accountNo(), in.amount().toPlainString(), null,
-                narration, null, null, null, "DEPOSIT_DEBIT");
+                narration, null, null, null, "DEPOSIT_DEBIT", null);
         return approvals.propose(TXN_ENTITY, TRANSFER, from.id().toString(), toMap(t), null, in.amount(), from.branch(), idempotencyKey);
     }
 
@@ -199,7 +213,7 @@ public class DepositMoneyService {
         problems.addAll(reversalProblems(m));
         DepositAccountService.refuseIfAny("the movement cannot be reversed", problems);
         Txn t = new Txn(REVERSE, a.id().toString(), a.accountNo(), null, null, m.amount().toPlainString(), null, null, null,
-                m.id().toString(), reason, null);
+                m.id().toString(), reason, null, null);
         return approvals.propose(TXN_ENTITY, REVERSE, m.id().toString(), toMap(t), null, m.amount(), a.branch(), idempotencyKey);
     }
 
@@ -222,16 +236,30 @@ public class DepositMoneyService {
         LocalDate today = days.requireOpen();
         DepositPostings post = new DepositPostings(heads(), today);
         String ref = t.reference() == null ? a.accountNo() : t.reference();
+        boolean gateway = Boolean.TRUE.equals(t.viaGateway()) && BANK_TRANSFER_OUT.equals(t.type());
         TransactionLot lot = switch (t.type()) {
             case CASH_DEPOSIT -> post.cashDeposit(a.leg(), amount, ref, t.narration());
             case CASH_WITHDRAWAL -> post.cashWithdrawal(a.leg(), amount, ref, t.narration());
             case BANK_TRANSFER_IN -> post.bankTransferIn(a.leg(), amount, ref, t.narration());
-            case BANK_TRANSFER_OUT -> post.bankTransferOut(a.leg(), amount, ref, t.narration());
+            case BANK_TRANSFER_OUT -> gateway ? post.gatewayTransferOut(a.leg(), amount, ref, t.narration())
+                                              : post.bankTransferOut(a.leg(), amount, ref, t.narration());
             default -> throw new IllegalStateException("unknown transaction type " + t.type());
         };
         postings.post(lot, CurrentUser.username());
         UUID id = insertMovement(a.id(), t.type(), credit ? "CREDIT" : "DEBIT", amount, lot.id(), t.reference(), t.narration(), null,
-                t.bankAccount(), r);
+                t.bankAccount(), r.id(), r.maker());
+        if (gateway) {
+            jdbc.update("INSERT INTO deposits.gateway_transfer (movement_id, status) VALUES (?, 'SENT')", id);
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("movementId", id.toString());
+            e.put("accountId", a.id().toString());
+            e.put("accountNo", a.accountNo());
+            e.put("customerId", a.customerId().toString());
+            e.put("branch", a.branch());
+            e.put("amount", DepositRuleSets.plain(amount));
+            e.put("businessDate", today.toString());
+            outbox.publish(jdbc, DepositEvents.TRANSFER_OUT, a.accountNo(), e);
+        }
         checkNow();
         return id.toString();
     }
@@ -245,8 +273,8 @@ public class DepositMoneyService {
         DepositAccountService.refuseIfAny("the transfer cannot be made", problems);
         TransactionLot lot = new DepositPostings(heads(), days.requireOpen()).transfer(from.leg(), to.leg(), amount, from.accountNo(), t.narration());
         postings.post(lot, CurrentUser.username());
-        UUID out = insertMovement(from.id(), "TRANSFER_OUT", "DEBIT", amount, lot.id(), null, t.narration(), to.id(), null, r);
-        insertMovement(to.id(), "TRANSFER_IN", "CREDIT", amount, lot.id(), null, t.narration(), from.id(), null, r);
+        UUID out = insertMovement(from.id(), "TRANSFER_OUT", "DEBIT", amount, lot.id(), null, t.narration(), to.id(), null, r.id(), r.maker());
+        insertMovement(to.id(), "TRANSFER_IN", "CREDIT", amount, lot.id(), null, t.narration(), from.id(), null, r.id(), r.maker());
         checkNow();
         return out.toString();
     }
@@ -254,11 +282,14 @@ public class DepositMoneyService {
     private String reverse(Txn t, ApprovalRequest r) {
         Movement m = movement(UUID.fromString(t.movementId()));
         DepositAccountService.refuseIfAny("the movement cannot be reversed", reversalProblems(m));
-        return reverseLot(m, t.reason(), r).toString();
+        return reverseLot(m, t.reason(), r.id(), r.maker()).toString();
     }
 
-    /** Reverses every movement of the movement's lot with the mirror lot; returns the id of the reversal of {@code m}. */
-    private UUID reverseLot(Movement m, String reason, ApprovalRequest r) {
+    /**
+     * Reverses every movement of the movement's lot with the mirror lot; returns the id of the reversal of {@code m}.
+     * {@code approvalId} is null for a reversal the system makes (a gateway transfer that failed).
+     */
+    private UUID reverseLot(Movement m, String reason, UUID approvalId, String maker) {
         LocalDate today = days.requireOpen();
         TransactionLot lot = TransactionLot.reversal(postings.load(m.lotId()), today, reason);
         postings.post(lot, CurrentUser.username());
@@ -270,7 +301,7 @@ public class DepositMoneyService {
                                                    reverses, reversal_reason, approval_id, created_by)
                     VALUES (?, ?, 'REVERSAL', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
                     """, id, each.accountId(), "DEBIT".equals(each.direction()) ? "CREDIT" : "DEBIT", each.amount(), today, today, lot.id(),
-                    each.id(), reason, r.id(), r.maker());
+                    each.id(), reason, approvalId, maker);
             jdbc.update("UPDATE deposits.movement SET reversed_by = ? WHERE id = ?", id, each.id());
             if (each.id().equals(m.id())) mine = id;
         }
@@ -377,7 +408,8 @@ public class DepositMoneyService {
         }
         SealedBankAccount bank = null;
         boolean toBank = "BANK_ACCOUNT".equals(td.get("payout_to"));
-        if (toBank && in.payoutBankAccount() == null) {
+        boolean recorded = Boolean.TRUE.equals(td.get("payout_bank_recorded"));       // recorded for a payment link (P4-2b)
+        if (toBank && in.payoutBankAccount() == null && !recorded) {
             problems.add("the deposit is paid out to a bank account: record that account now");
         } else if (!toBank && in.payoutBankAccount() != null) {
             problems.add("the deposit is paid out to account " + td.get("payout_account_no") + " here; it takes no bank account");
@@ -417,7 +449,7 @@ public class DepositMoneyService {
         if (REVERSE_FUNDING.equals(r.action())) {
             DepositAccountService.refuseIfAny("the funding cannot be reversed", fundingReversalProblems(d, td));
             Movement m = movement((UUID) td.get("funding_movement_id"));
-            reverseLot(m, f.reason(), r);
+            reverseLot(m, f.reason(), r.id(), r.maker());
             jdbc.update("""
                     UPDATE deposits.term_deposit SET start_date = NULL, maturity_date = NULL, funding_source = NULL, funding_account_id = NULL,
                            funding_movement_id = NULL, funding_reference = NULL, payout_bank_name_cipher = NULL, payout_bank_account_cipher = NULL,
@@ -443,14 +475,16 @@ public class DepositMoneyService {
         TransactionLot lot = new DepositPostings(heads(), today).funding(d.leg(), principal, source, from == null ? null : from.leg(),
                 f.reference() == null ? d.accountNo() : f.reference());
         postings.post(lot, CurrentUser.username());
-        UUID funding = insertMovement(d.id(), "FUNDING", "CREDIT", principal, lot.id(), f.reference(), null, from == null ? null : from.id(), null, r);
-        if (from != null) insertMovement(from.id(), "FUNDING_PAID", "DEBIT", principal, lot.id(), f.reference(), null, d.id(), null, r);
+        UUID funding = insertMovement(d.id(), "FUNDING", "CREDIT", principal, lot.id(), f.reference(), null, from == null ? null : from.id(), null,
+                r.id(), r.maker());
+        if (from != null) insertMovement(from.id(), "FUNDING_PAID", "DEBIT", principal, lot.id(), f.reference(), null, d.id(), null, r.id(), r.maker());
         Tenure tenure = new Tenure((Integer) td.get("tenure_months"), (Integer) td.get("tenure_days"));
         SealedBankAccount bank = f.payoutBankAccount();
         jdbc.update("""
                 UPDATE deposits.term_deposit SET start_date = ?, maturity_date = ?, funding_source = ?, funding_account_id = ?, funding_movement_id = ?,
-                       funding_reference = ?, payout_bank_name_cipher = ?, payout_bank_account_cipher = ?, payout_bank_account_last4 = ?,
-                       payout_bank_ifsc = ?
+                       funding_reference = ?, payout_bank_name_cipher = coalesce(?, payout_bank_name_cipher),
+                       payout_bank_account_cipher = coalesce(?, payout_bank_account_cipher),
+                       payout_bank_account_last4 = coalesce(?, payout_bank_account_last4), payout_bank_ifsc = coalesce(?, payout_bank_ifsc)
                  WHERE account_id = ?
                 """, today, tenure.addTo(today), f.source(), from == null ? null : from.id(), funding, f.reference(),
                 bank == null ? null : Base64.getDecoder().decode(bank.holderNameSealed()),
@@ -461,6 +495,147 @@ public class DepositMoneyService {
         return d.accountNo();
     }
 
+    // ================================================================================================ the gateway (DepositOperations)
+
+    @Override
+    public AccountRef find(UUID accountId) {
+        Account a = account(accountId, null, false);
+        BigDecimal principal = null;
+        String payoutTo = null;
+        boolean bankRecorded = false;
+        if (DepositProductService.TERM_DEPOSIT.equals(a.family())) {
+            Map<String, Object> td = jdbc.queryForMap("""
+                    SELECT principal::numeric AS principal, payout_to, payout_bank_ifsc IS NOT NULL AS recorded FROM deposits.term_deposit WHERE account_id = ?
+                    """, accountId);
+            principal = ((BigDecimal) td.get("principal")).stripTrailingZeros();
+            payoutTo = (String) td.get("payout_to");
+            bankRecorded = Boolean.TRUE.equals(td.get("recorded"));
+        }
+        return new AccountRef(a.id(), a.accountNo(), a.family(), a.status(), a.branch(), a.customerId(), principal, payoutTo, bankRecorded);
+    }
+
+    @Override
+    public TransferOut transferOut(UUID movementId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT m.account_id, a.account_no, a.customer_id, a.branch_code, m.amount::numeric AS amount, m.party_name_cipher, m.party_account_cipher,
+                       m.party_ifsc, g.status
+                  FROM deposits.gateway_transfer g JOIN deposits.movement m ON m.id = g.movement_id JOIN deposits.account a ON a.id = m.account_id
+                 WHERE g.movement_id = ?
+                """, movementId);
+        if (rows.isEmpty()) throw ApiException.notFound("gateway transfer " + movementId);
+        Map<String, Object> r = rows.get(0);
+        PiiCipher cipher = keys.forTenant(CurrentUser.requireTenant());
+        Payee payee = new Payee(cipher.decrypt((byte[]) r.get("party_name_cipher"), NAME_AAD), cipher.decrypt((byte[]) r.get("party_account_cipher"), ACCOUNT_AAD),
+                (String) r.get("party_ifsc"));
+        return new TransferOut(movementId, (UUID) r.get("account_id"), (String) r.get("account_no"), (UUID) r.get("customer_id"),
+                (String) r.get("branch_code"), ((BigDecimal) r.get("amount")).stripTrailingZeros(), payee, (String) r.get("status"));
+    }
+
+    @Override
+    @Transactional
+    public void settleTransferOut(UUID movementId, String utr) {
+        Map<String, Object> g = gatewayTransfer(movementId);
+        String status = (String) g.get("status");
+        if ("PAID".equals(status)) return;
+        if ("RETURNED".equals(status)) throw ApiException.conflict("the transfer has already come back to the account");
+        Movement m = movement(movementId);
+        Account a = account(m.accountId(), null, false);
+        String ref = utr == null || utr.isBlank() ? a.accountNo() : utr.trim();
+        TransactionLot lot = new DepositPostings(heads(), days.requireOpen()).gatewayPaid(a.branch(), a.accountNo(), m.amount(), ref);
+        postings.post(lot, CurrentUser.username());
+        jdbc.update("UPDATE deposits.gateway_transfer SET status = 'PAID', paid_lot_id = ?, utr = ? WHERE movement_id = ?", lot.id(),
+                utr == null || utr.isBlank() ? null : utr.trim(), movementId);
+    }
+
+    @Override
+    @Transactional
+    public void returnTransferOut(UUID movementId, String reason) {
+        Map<String, Object> g = gatewayTransfer(movementId);
+        String status = (String) g.get("status");
+        if ("RETURNED".equals(status)) return;
+        String why = reason == null || reason.isBlank() ? "the gateway transfer did not reach the payee" : reason.trim();
+        if (why.length() > 500) why = why.substring(0, 500);
+        Movement m = movement(movementId);
+        DepositAccountService.refuseIfAny("the transfer cannot be taken back", reversalProblems(m, true));
+        LocalDate today = days.requireOpen();
+        UUID paidReversal = null;
+        if ("PAID".equals(status)) {
+            // the bank sent it back: the paid posting is reversed first, then the money returns to the account
+            TransactionLot back = TransactionLot.reversal(postings.load((UUID) g.get("paid_lot_id")), today, why);
+            postings.post(back, CurrentUser.username());
+            paidReversal = back.id();
+        }
+        reverseLot(m, why, null, CurrentUser.username());
+        jdbc.update("UPDATE deposits.gateway_transfer SET status = 'RETURNED', return_lot_id = ?, return_reason = ? WHERE movement_id = ?",
+                paidReversal, why, movementId);
+        checkNow();
+    }
+
+    @Override
+    @Transactional
+    public UUID receiveFromGateway(UUID accountId, BigDecimal amount, String reference) {
+        Account a = account(accountId, null, false);
+        String ref = reference == null || reference.isBlank() ? null : reference.trim();
+        if (ref != null && ref.length() > 60) ref = ref.substring(0, 60);
+        if (amount == null || amount.signum() <= 0) throw ApiException.invalid("the amount is required");
+        LocalDate today = days.requireOpen();
+        DepositPostings post = new DepositPostings(heads(), today);
+        if (DepositProductService.CASA.equals(a.family())) {
+            DepositAccountService.refuseIfAny("the money cannot be credited", movementProblems(a, Direction.CREDIT, amount, false));
+            TransactionLot lot = post.bankTransferIn(a.leg(), amount, ref == null ? a.accountNo() : ref, "Payment link");
+            postings.post(lot, CurrentUser.username());
+            UUID id = insertMovement(a.id(), BANK_TRANSFER_IN, "CREDIT", amount, lot.id(), ref, "Payment link", null, null, null, CurrentUser.username());
+            checkNow();
+            return id;
+        }
+        Map<String, Object> td = termDeposit(a.id());
+        BigDecimal principal = ((BigDecimal) td.get("principal")).stripTrailingZeros();
+        List<String> problems = new ArrayList<>(fundingProblems(a, td));
+        if (principal.compareTo(amount) != 0) {
+            problems.add("deposit " + a.accountNo() + " is funded with its principal of " + principal.toPlainString() + ", not " + amount.stripTrailingZeros().toPlainString());
+        }
+        if ("BANK_ACCOUNT".equals(td.get("payout_to")) && !Boolean.TRUE.equals(td.get("payout_bank_recorded"))) {
+            problems.add("the deposit is paid out to a bank account that is not recorded");
+        }
+        DepositAccountService.refuseIfAny("the deposit cannot be funded", problems);
+        TransactionLot lot = post.funding(a.leg(), principal, FundingSource.GATEWAY, null, ref == null ? a.accountNo() : ref);
+        postings.post(lot, CurrentUser.username());
+        UUID funding = insertMovement(a.id(), "FUNDING", "CREDIT", principal, lot.id(), ref, "Payment link", null, null, null, CurrentUser.username());
+        Tenure tenure = new Tenure((Integer) td.get("tenure_months"), (Integer) td.get("tenure_days"));
+        jdbc.update("""
+                UPDATE deposits.term_deposit SET start_date = ?, maturity_date = ?, funding_source = 'GATEWAY', funding_account_id = NULL,
+                       funding_movement_id = ?, funding_reference = ?
+                 WHERE account_id = ?
+                """, today, tenure.addTo(today), funding, ref, a.id());
+        jdbc.update("UPDATE deposits.account SET status = 'ACTIVE' WHERE id = ?", a.id());
+        checkNow();
+        return funding;
+    }
+
+    @Override
+    @Transactional
+    public void recordPayoutBankAccount(UUID depositId, Payee in) {
+        Account d = account(depositId, DepositProductService.TERM_DEPOSIT, false);
+        Map<String, Object> td = termDeposit(depositId);
+        List<String> problems = new ArrayList<>();
+        if (!"BOOKED".equals(d.status())) problems.add("deposit " + d.accountNo() + " is " + d.status() + "; its payout account is recorded before it is funded");
+        if (!"BANK_ACCOUNT".equals(td.get("payout_to"))) problems.add("the deposit is paid out to account " + td.get("payout_account_no") + " here; it takes no bank account");
+        SealedBankAccount bank = in == null ? null : seal(new BankAccountInput(in.holderName(), in.accountNumber(), in.ifsc()), problems);
+        if (in == null) problems.add("the bank account is required");
+        DepositAccountService.refuseIfAny("the payout account cannot be recorded", problems);
+        jdbc.update("""
+                UPDATE deposits.term_deposit SET payout_bank_name_cipher = ?, payout_bank_account_cipher = ?, payout_bank_account_last4 = ?, payout_bank_ifsc = ?
+                 WHERE account_id = ?
+                """, Base64.getDecoder().decode(bank.holderNameSealed()), Base64.getDecoder().decode(bank.accountNumberSealed()), bank.last4(), bank.ifsc(),
+                depositId);
+    }
+
+    private Map<String, Object> gatewayTransfer(UUID movementId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT status, paid_lot_id FROM deposits.gateway_transfer WHERE movement_id = ? FOR UPDATE", movementId);
+        if (rows.isEmpty()) throw ApiException.notFound("gateway transfer " + movementId);
+        return rows.get(0);
+    }
+
     // ================================================================================================ reading
 
     /** The movements of an account, newest first, with the balance after each; optionally between two business dates. */
@@ -469,8 +644,9 @@ public class DepositMoneyService {
         return jdbc.query("""
                 SELECT m.id, m.seq, m.business_date, m.value_date, m.kind, m.direction, m.amount, m.balance_after, m.reference, m.narration,
                        c.account_no, m.party_account_last4, m.party_ifsc, m.reverses, m.reversed_by, m.reversal_reason, m.created_by, m.approval_id,
-                       m.created_at
+                       m.created_at, g.status, g.utr
                   FROM deposits.movement m LEFT JOIN deposits.account c ON c.id = m.counterparty_id
+                  LEFT JOIN deposits.gateway_transfer g ON g.movement_id = m.id
                  WHERE m.account_id = ? AND (?::date IS NULL OR m.business_date >= ?::date) AND (?::date IS NULL OR m.business_date <= ?::date)
                  ORDER BY m.seq DESC LIMIT 1000
                 """, (rs, i) -> {
@@ -494,6 +670,8 @@ public class DepositMoneyService {
                     m.put("createdBy", rs.getString(17));
                     m.put("approvalId", rs.getString(18));
                     m.put("createdAt", rs.getObject(19, java.time.OffsetDateTime.class));
+                    m.put("gatewayStatus", rs.getString(20));
+                    m.put("gatewayUtr", rs.getString(21));
                     return m;
                 }, accountId, from, from, to, to);
     }
@@ -548,11 +726,18 @@ public class DepositMoneyService {
     }
 
     private List<String> reversalProblems(Movement m) {
+        return reversalProblems(m, false);
+    }
+
+    /** @param gateway the system takes back a gateway transfer that failed or came back */
+    private List<String> reversalProblems(Movement m, boolean gateway) {
         List<String> out = new ArrayList<>();
         if ("REVERSAL".equals(m.kind())) out.add("a reversal is not reversed");
         else if (m.reversedBy() != null) out.add("the movement is already reversed");
         else if ("FUNDING".equals(m.kind()) || "FUNDING_PAID".equals(m.kind())) {
             out.add("this movement funded a term deposit: reverse the funding of the deposit instead");
+        } else if (!gateway && !jdbc.queryForList("SELECT 1 FROM deposits.gateway_transfer WHERE movement_id = ?", m.id()).isEmpty()) {
+            out.add("this transfer was sent through the payment gateway: the money comes back only when the bank fails or returns it");
         }
         if (!out.isEmpty()) return out;
         for (Movement each : lotMovements(m.lotId())) {
@@ -659,13 +844,13 @@ public class DepositMoneyService {
     private Map<String, Object> termDeposit(UUID depositId) {
         return jdbc.queryForMap("""
                 SELECT t.principal::numeric AS principal, t.tenure_months, t.tenure_days, t.booked_on, t.payout_to, pay.account_no AS payout_account_no, t.funding_source,
-                       t.funding_movement_id
+                       t.funding_movement_id, t.payout_bank_ifsc IS NOT NULL AS payout_bank_recorded
                   FROM deposits.term_deposit t LEFT JOIN deposits.account pay ON pay.id = t.payout_account_id WHERE t.account_id = ?
                 """, depositId);
     }
 
     private UUID insertMovement(UUID accountId, String kind, String direction, BigDecimal amount, UUID lotId, String reference, String narration,
-                                UUID counterparty, SealedBankAccount party, ApprovalRequest r) {
+                                UUID counterparty, SealedBankAccount party, UUID approvalId, String maker) {
         UUID id = UUID.randomUUID();
         LocalDate today = days.requireOpen();
         jdbc.update("""
@@ -676,7 +861,7 @@ public class DepositMoneyService {
                 """, id, accountId, kind, direction, amount, today, today, lotId, reference, narration, counterparty,
                 party == null ? null : Base64.getDecoder().decode(party.holderNameSealed()),
                 party == null ? null : Base64.getDecoder().decode(party.accountNumberSealed()), party == null ? null : party.last4(),
-                party == null ? null : party.ifsc(), r.id(), r.maker());
+                party == null ? null : party.ifsc(), approvalId, maker);
         return id;
     }
 
@@ -684,10 +869,10 @@ public class DepositMoneyService {
     private DepositPostings.Heads heads() {
         DepositPostings.Heads d = DepositPostings.Heads.starter();
         Map<String, String> p = new LinkedHashMap<>();
-        jdbc.query("SELECT key, value FROM platform.system_property WHERE key IN ('deposits.gl.cash','deposits.gl.bank-in','deposits.gl.bank-out')",
+        jdbc.query("SELECT key, value FROM platform.system_property WHERE key IN ('deposits.gl.cash','deposits.gl.bank-in','deposits.gl.bank-out','deposits.gl.in-transit')",
                 rs -> { p.put(rs.getString(1), rs.getString(2).trim()); });
         return new DepositPostings.Heads(p.getOrDefault("deposits.gl.cash", d.cash()), p.getOrDefault("deposits.gl.bank-in", d.bankIn()),
-                p.getOrDefault("deposits.gl.bank-out", d.bankOut()), ledger.interBranchGl());
+                p.getOrDefault("deposits.gl.bank-out", d.bankOut()), ledger.interBranchGl(), p.getOrDefault("deposits.gl.in-transit", d.inTransit()));
     }
 
     /** A date column read through queryForMap: java.sql.Date from the JDBC driver. */

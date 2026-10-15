@@ -3570,6 +3570,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/accounts/{id}/collection-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The payment links of a savings or current account
+         * @description Module CASA. Permission casa:view.
+         */
+        get: operations["listCasaCollectionOrders"];
+        put?: never;
+        /**
+         * Create a payment link for a savings or current account
+         * @description Module CASA. Permission casa:transact. Needs an active collection provider. The payment credits the account when it arrives (value on the business date it is posted). A payment the account cannot take goes to the unmatched receipts queue.
+         */
+        post: operations["createCasaCollectionOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/casa/accounts/{id}/holds": {
         parameters: {
             query?: never;
@@ -3896,6 +3920,30 @@ export interface paths {
         get: operations["listTermDepositMovements"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/collection-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The payment links of a booked term deposit
+         * @description Module TD. Permission deposit:view.
+         */
+        get: operations["listTermDepositCollectionOrders"];
+        put?: never;
+        /**
+         * Create a payment link for a booked term deposit
+         * @description Module TD. Permission deposit:fund. Needs an active collection provider. The payment of the principal funds the booked deposit; interest starts on the business date it is posted. One link waits at a time. A payment the account cannot take goes to the unmatched receipts queue.
+         */
+        post: operations["createTermDepositCollectionOrder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5662,11 +5710,25 @@ export interface components {
             /** Format: uri */
             returnUrl?: string;
         };
+        /** @description Assign the payment to a loan or to a deposit account (a savings or current account is credited, a booked term deposit funded), or mark it for refund. */
         PaymentResolution: {
             /** Format: uuid */
             loanId?: string;
+            /**
+             * Format: uuid
+             * @description A deposit account (P4-2b)
+             */
+            accountId?: string;
             refund?: boolean;
             note: string;
+        };
+        /** @description A payment link for a deposit account (P4-2b). For a savings or current account the amount is required and the payment credits the account. For a booked term deposit the amount is its principal (it may be left out) and the payment funds the deposit; a deposit paid out to a bank account names that account here unless it is recorded already. */
+        DepositCollectionOrderInput: {
+            amount?: components["schemas"]["Money"];
+            methods?: ("UPI" | "CARD" | "NETBANKING")[];
+            /** Format: uri */
+            returnUrl?: string;
+            payoutBankAccount?: components["schemas"]["BankAccountInput"];
         };
         MandateInput: {
             holderName: string;
@@ -6320,11 +6382,13 @@ export interface components {
             /** @enum {string} */
             type: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT";
             amount: number;
-            /** @description The bank's UTR (required for a bank transfer), or a slip number */
+            /** @description The bank's UTR (required for a bank transfer recorded by staff), or a slip number */
             reference?: string | null;
             narration?: string | null;
             /** @description The payee (required for BANK_TRANSFER_OUT) or the remitter (optional for BANK_TRANSFER_IN) */
             bankAccount?: components["schemas"]["BankAccountInput"];
+            /** @description BANK_TRANSFER_OUT only (P4-2b): send it through the payment gateway. No UTR is needed: the bank gives it when it pays. The money leaves the account when the request is applied and waits in transit; if the payout fails or comes back, it returns to the account. */
+            viaGateway?: boolean | null;
         };
         DepositTransferInput: {
             /** Format: uuid */
@@ -6387,9 +6451,17 @@ export interface components {
             reversalReason?: string | null;
             /** @description The maker */
             createdBy?: string;
+            /** @description null for a movement the system made (a gateway transfer returned, a payment link) */
             approvalId?: string | null;
             /** Format: date-time */
             createdAt?: string;
+            /**
+             * @description A transfer out sent through the payment gateway (P4-2b)
+             * @enum {string|null}
+             */
+            gatewayStatus?: "SENT" | "PAID" | "RETURNED" | null;
+            /** @description The bank's UTR once the gateway transfer is paid */
+            gatewayUtr?: string | null;
         };
         DepositHold: {
             /** Format: uuid */
@@ -6525,8 +6597,11 @@ export interface components {
             payoutAccountNo?: string | null;
             /** @enum {string} */
             maturityInstruction?: "PAY_OUT" | "RENEW_PRINCIPAL" | "RENEW_WITH_INTEREST";
-            /** @enum {string|null} */
-            fundingSource?: "ACCOUNT" | "CASH" | "BANK_TRANSFER" | null;
+            /**
+             * @description GATEWAY - paid through a payment link (P4-2b)
+             * @enum {string|null}
+             */
+            fundingSource?: "ACCOUNT" | "CASH" | "BANK_TRANSFER" | "GATEWAY" | null;
             fundingAccountNo?: string | null;
             fundingReference?: string | null;
             /** @description Recorded at funding */
@@ -9698,6 +9773,8 @@ export interface operations {
                 status?: string;
                 needsAction?: boolean;
                 loanId?: string;
+                /** @description A savings or current account: its transfers sent through the gateway (P4-2b) */
+                accountId?: string;
                 from?: string;
                 to?: string;
             };
@@ -11718,6 +11795,58 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    listCasaCollectionOrders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    createCasaCollectionOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositCollectionOrderInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     listCasaHolds: {
         parameters: {
             query?: never;
@@ -12124,6 +12253,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DepositMovement"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTermDepositCollectionOrders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    createTermDepositCollectionOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositCollectionOrderInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationRecord"];
                 };
             };
             default: components["responses"]["Problem"];

@@ -174,3 +174,89 @@ describe('funding a term deposit', () => {
     expect(screen.getByTestId('balance')).toHaveTextContent('50,000.00');
   });
 });
+
+describe('the payment gateway (P4-2b)', () => {
+  const payee = { holderName: 'CLAUDE-TEST Landlord', accountNumber: '50100123456789', ifsc: 'HDFC0001234' };
+
+  it('sends a transfer out through the gateway without a UTR; the simulator pays it, or it fails and comes back', async () => {
+    const server = bank();
+    const sb = await openSavings(server, 'Anu');
+    await txn(server, sb.id!, 'CASH_DEPOSIT', 10000);
+    expect((await txn(server, sb.id!, 'CASH_DEPOSIT', 10, { viaGateway: true })).body.problems).toEqual(['only a bank transfer out is sent through the payment gateway']);
+    expect((await txn(server, sb.id!, 'BANK_TRANSFER_OUT', 2500, { viaGateway: true, bankAccount: payee })).body.status).toBe('APPROVED');
+    expect((await txn(server, sb.id!, 'BANK_TRANSFER_OUT', 100.01, { viaGateway: true, bankAccount: payee })).body.status).toBe('APPROVED');
+    const moves = (await mockCall(server, 'maker', 'GET', `/api/v1/casa/accounts/${sb.id}/movements`)).body;
+    const paid = moves.find((m: { amount: string; kind: string }) => m.kind === 'BANK_TRANSFER_OUT' && m.amount === '2500');
+    const failed = moves.find((m: { amount: string; kind: string }) => m.kind === 'BANK_TRANSFER_OUT' && m.amount === '100.01');
+    expect(paid).toMatchObject({ gatewayStatus: 'PAID', reference: null });
+    expect(paid.gatewayUtr).toMatch(/^SIMUTR/);
+    expect(failed).toMatchObject({ gatewayStatus: 'RETURNED' });
+    expect(failed.reversedBy).toBeTruthy();
+    expect((await mockCall(server, 'maker', 'GET', `/api/v1/casa/accounts/${sb.id}`)).body.balance).toBe('7500');
+    expect((await mockCall(server, 'maker', 'POST', `/api/v1/casa/movements/${paid.id}/reverse`, { reason: 'x' })).body.problems).toEqual([
+      'this transfer was sent through the payment gateway: the money comes back only when the bank fails or returns it',
+    ]);
+  });
+
+  it('the money-out dialog offers the gateway, and then asks for no UTR', async () => {
+    const user = userEvent.setup();
+    const server = bank();
+    const sb = await openSavings(server, 'Anu');
+    await txn(server, sb.id!, 'CASH_DEPOSIT', 10000);
+    renderApp({ user: 'maker', route: `/deposits/casa/${sb.id}`, server });
+    await user.click(await screen.findByRole('button', { name: 'Money out' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByLabelText('Send it through the payment gateway')).not.toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText('Transaction'), 'BANK_TRANSFER_OUT');
+    await user.click(within(dialog).getByLabelText('Send it through the payment gateway'));
+    expect(within(dialog).queryByLabelText(/^UTR/)).not.toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/^Amount/), '1200');
+    await user.type(within(dialog).getByLabelText(/^Account holder/), payee.holderName);
+    await user.type(within(dialog).getByLabelText(/^Account number/), payee.accountNumber);
+    await user.type(within(dialog).getByLabelText(/^IFSC/), payee.ifsc);
+    await user.click(within(dialog).getByRole('button', { name: 'Submit' }));
+    expect(await screen.findByText('Bank transfer out: done.')).toBeInTheDocument();
+    expect(await screen.findByText('Paid by the bank')).toBeInTheDocument();
+    expect(screen.getByTestId('balance')).toHaveTextContent('8,800.00');
+  });
+
+  it('a payment link credits a savings account when it is paid', async () => {
+    const user = userEvent.setup();
+    const server = bank();
+    const sb = await openSavings(server, 'Anu');
+    renderApp({ user: 'maker', route: `/deposits/casa/${sb.id}`, server });
+    await user.click(await screen.findByRole('button', { name: 'Payment link' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/^Amount/), '2500');
+    await user.click(within(dialog).getByRole('button', { name: 'Create payment link' }));
+    expect(await screen.findByText(`Payment link CO${sb.accountNo}N1 created.`)).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'Payment links' })).toBeInTheDocument();
+    const orders = (await mockCall(server, 'maker', 'GET', `/api/v1/casa/accounts/${sb.id}/collection-orders`)).body;
+    expect(orders[0]).toMatchObject({ purpose: 'CREDIT', accountNo: sb.accountNo, status: 'PAID', amount: '2500.00' });
+    expect((await mockCall(server, 'maker', 'GET', `/api/v1/casa/accounts/${sb.id}`)).body.balance).toBe('2500');
+  });
+
+  it('a payment link funds a booked deposit for its principal, recording the payout bank account', async () => {
+    const user = userEvent.setup();
+    const server = nbfc();
+    await mockCall(server, 'maker', 'POST', '/api/v1/deposits/accounts', { productCode: 'FD01', customerId: customer(server, 'Anu').id, branchCode: 'HO', amount: 50000, tenureMonths: 24, payoutTo: 'BANK_ACCOUNT', maturityInstruction: 'PAY_OUT' });
+    await approveLast(server, 'TERM_DEPOSIT');
+    const fd = server.db.deposits.accounts[0];
+    expect((await mockCall(server, 'maker', 'POST', `/api/v1/deposits/accounts/${fd.id}/collection-orders`, { amount: '100' })).body.detail).toContain('principal of 50000');
+    expect((await mockCall(server, 'maker', 'POST', `/api/v1/deposits/accounts/${fd.id}/collection-orders`, {})).body.detail).toContain('give payoutBankAccount');
+    renderApp({ user: 'maker', route: `/deposits/term/${fd.id}`, server });
+    await user.click(await screen.findByRole('button', { name: 'Payment link' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByLabelText(/^Amount/)).not.toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/^Account holder/), 'CLAUDE-TEST Anu');
+    await user.type(within(dialog).getByLabelText(/^Account number/), '99887766554433');
+    await user.type(within(dialog).getByLabelText(/^IFSC/), 'icic0004321');
+    await user.click(within(dialog).getByRole('button', { name: 'Create payment link' }));
+    expect(await screen.findByText(`Payment link CO${fd.accountNo}N1 created.`)).toBeInTheDocument();
+    const orders = (await mockCall(server, 'maker', 'GET', `/api/v1/deposits/accounts/${fd.id}/collection-orders`)).body;
+    expect(orders[0]).toMatchObject({ purpose: 'FUNDING', status: 'PAID', amount: '50000.00' });
+    expect((await mockCall(server, 'maker', 'GET', `/api/v1/deposits/accounts/${fd.id}`)).body).toMatchObject({
+      status: 'ACTIVE', balance: '50000', termDeposit: { funded: true, fundingSource: 'GATEWAY', payoutBankAccountMasked: 'XXXXXXXX4433', payoutBankIfsc: 'ICIC0004321' },
+    });
+  });
+});

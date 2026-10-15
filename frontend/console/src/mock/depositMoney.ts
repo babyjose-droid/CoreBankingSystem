@@ -4,6 +4,11 @@
  * engine (AccountHolds) closely enough to try the screens; the backend is the truth. Money in and out and a funding
  * post at once below 2,00,000 (as the tenant's starting approval rules); from it upward, and for every reversal, hold and
  * funding reversal, a checker is needed. No ledger is kept here: the balances are the movements.
+ *
+ * P4-2b: a bank transfer out can be sent through the payment gateway, and a payment link can be made for a savings or
+ * current account or a booked term deposit. There is no worker here: the simulator acts when the statement or the links
+ * are next read. A transfer is paid (with a UTR) unless its amount ends in .01, when it fails and the money comes back;
+ * a link is paid unless its amount ends in .01.
  */
 import type {
   BankAccountInput,
@@ -15,6 +20,7 @@ import type {
   DepositTransferInput,
   TermDepositFundingInput,
 } from '../api/types';
+import type { CollectionOrder } from '../api/integrationTypes';
 import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { fromUnits, toUnits } from '../lib/money';
@@ -27,6 +33,7 @@ export const DEPOSIT_CHECKER_FROM = '200000';
 
 export type MockMovement = DepositMovement & { accountId: string; lotId: string };
 export type MockHold = DepositHold & { accountId: string };
+export type MockDepositOrder = CollectionOrder & { depositAccountId: string; accountNo: string; purpose: 'CREDIT' | 'FUNDING' };
 
 export interface MockBankAccount {
   last4: string;
@@ -45,6 +52,8 @@ export interface MockTxn {
   bankAccount: MockBankAccount | null;
   movementId: string | null;
   reason: string | null;
+  /** P4-2b: a bank transfer out sent through the payment gateway. */
+  viaGateway?: boolean;
 }
 
 export interface MockHoldRequest {
@@ -213,6 +222,7 @@ function reversalProblems(db: MockDb, m: MockMovement): string[] {
   if (m.kind === 'REVERSAL') return ['a reversal is not reversed'];
   if (m.reversedBy) return ['the movement is already reversed'];
   if (m.kind === 'FUNDING' || m.kind === 'FUNDING_PAID') return ['this movement funded a term deposit: reverse the funding of the deposit instead'];
+  if (m.gatewayStatus) return ['this transfer was sent through the payment gateway: the money comes back only when the bank fails or returns it'];
   const out: string[] = [];
   for (const each of db.deposits.movements.filter((x) => x.lotId === m.lotId)) {
     const a = findAccount(db, each.accountId, null);
@@ -274,6 +284,7 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
       refuseIfAny('the transaction cannot be made', movementProblems(db, a, credit ? 'CREDIT' : 'DEBIT', t.amount, false));
       approval.appliedRef = move(db, a, t.type, credit ? 'CREDIT' : 'DEBIT', t.amount, uuid(), {
         reference: t.reference, narration: t.narration, bankAccountMasked: t.bankAccount ? `XXXXXXXX${t.bankAccount.last4}` : null, bankIfsc: t.bankAccount?.ifsc ?? null,
+        ...(t.viaGateway && t.type === 'BANK_TRANSFER_OUT' ? { gatewayStatus: 'SENT' as const, gatewayUtr: null } : {}),
       }, maker, id).id!;
     }
     appendAudit(db, at, checker, 'DEPOSIT_MONEY_POSTED', 'DEPOSIT_TXN', t.accountNo, { type: t.type, amount: t.amount });
@@ -347,6 +358,46 @@ function newHoldProblems(db: MockDb, a: DepositAccount, kind: string, amount: st
   return out;
 }
 
+// ---------- the gateway simulator (P4-2b) ----------
+
+const endsInOnePaisa = (amount: string | undefined | null) => /\.01$/.test(fromUnits(toUnits(amount ?? '0'), 2));
+
+/** Transfers waiting at the gateway are paid, or fail and come back (amount ending in .01). */
+function settleTransfers(db: MockDb, accountId: string): void {
+  for (const m of db.deposits.movements.filter((x) => x.accountId === accountId && x.gatewayStatus === 'SENT')) {
+    if (endsInOnePaisa(m.amount)) {
+      reverseLot(db, m, 'payout FAILED: payout failed (simulated)', 'system', null);
+      m.gatewayStatus = 'RETURNED';
+    } else {
+      m.gatewayStatus = 'PAID';
+      m.gatewayUtr = `SIMUTR${String(m.seq).padStart(8, '0')}`;
+    }
+  }
+}
+
+/** Links waiting to be paid are paid: a savings or current account is credited, a booked deposit funded; else unmatched. */
+function payOrders(db: MockDb, accountId: string): void {
+  for (const o of db.deposits.orders.filter((x) => x.depositAccountId === accountId && x.status === 'CREATED')) {
+    if (endsInOnePaisa(o.amount)) {
+      o.status = 'FAILED';
+      continue;
+    }
+    o.status = 'PAID';
+    const a = findAccount(db, accountId, null);
+    const ref = `SIMPAY${o.reference}`.slice(0, 60);
+    if (o.purpose === 'CREDIT') {
+      if (movementProblems(db, a, 'CREDIT', o.amount, false).length === 0) move(db, a, 'BANK_TRANSFER_IN', 'CREDIT', o.amount!, uuid(), { reference: ref, narration: 'Payment link' }, 'system', null);
+    } else if (a.status === 'BOOKED' && a.termDeposit) {
+      const t = a.termDeposit;
+      move(db, a, 'FUNDING', 'CREDIT', t.principal!, uuid(), { reference: ref, narration: 'Payment link' }, 'system', null);
+      const maturity = addDays(addMonths(db.businessDate, t.tenureMonths!), t.tenureDays!);
+      Object.assign(t, { startDate: db.businessDate, maturityDate: maturity, funded: true, figuresFrom: db.businessDate, figuresMaturityDate: maturity, fundingSource: 'GATEWAY' as const,
+        fundingAccountNo: null, fundingReference: ref });
+      a.status = 'ACTIVE';
+    }
+  }
+}
+
 // ---------- routes ----------
 
 export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (name: 'CASA' | 'TD') => void): void {
@@ -362,10 +413,12 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
     const a = findAccount(db, params.id, 'CASA');
     const credit = b.type === 'CASH_DEPOSIT' || b.type === 'BANK_TRANSFER_IN';
     const bank = b.type.startsWith('BANK_');
+    const gateway = b.viaGateway === true;
     const problems: string[] = [];
     const reference = text(b.reference, 60, 'reference', problems);
     const narration = text(b.narration, 200, 'narration', problems);
-    if (bank && !reference) problems.push("the bank's reference (UTR) is required for a bank transfer");
+    if (gateway && b.type !== 'BANK_TRANSFER_OUT') problems.push('only a bank transfer out is sent through the payment gateway');
+    if (bank && !gateway && !reference) problems.push("the bank's reference (UTR) is required for a bank transfer");
     if (b.type === 'BANK_TRANSFER_OUT' && !b.bankAccount) problems.push('name the bank account the money is sent to');
     let party: MockBankAccount | null = null;
     if (b.bankAccount) {
@@ -376,7 +429,8 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
     problems.push(...movementProblems(db, a, credit ? 'CREDIT' : 'DEBIT', amount, false));
     refuseIfAny('the transaction cannot be made', problems);
     assertWithinLimit(db, user, credit ? 'DEPOSIT_CREDIT' : 'DEPOSIT_DEBIT', amount!, { record: true });
-    const txn: MockTxn = { type: b.type, accountId: a.id!, accountNo: a.accountNo!, toAccountId: null, toAccountNo: null, amount: amount!, reference, narration, bankAccount: party, movementId: null, reason: null };
+    const txn: MockTxn = { type: b.type, accountId: a.id!, accountNo: a.accountNo!, toAccountId: null, toAccountNo: null, amount: amount!, reference, narration, bankAccount: party, movementId: null, reason: null,
+      ...(gateway ? { viaGateway: true } : {}) };
     return propose(user, 'DEPOSIT_TXN', b.type, { kind: 'DEPOSIT_TXN', txn }, { ...txn }, null, a.id!, amount);
   });
 
@@ -419,6 +473,8 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       module(mod);
       require(user, view);
       findAccount(db, params.id, family);
+      settleTransfers(db, params.id);
+      payOrders(db, params.id);
       const from = url.searchParams.get('from');
       const to = url.searchParams.get('to');
       return ok(db.deposits.movements.filter((m) => m.accountId === params.id && (!from || m.businessDate! >= from) && (!to || m.businessDate! <= to))
@@ -429,6 +485,49 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       require(user, view);
       findAccount(db, params.id, family);
       return ok(db.deposits.holds.filter((h) => h.accountId === params.id).sort((x, y) => (x.status === y.status ? 0 : x.status === 'ACTIVE' ? -1 : 1)).map(({ accountId: _a, ...h }) => h));
+    });
+    on('GET', `/api/v1/${base}/accounts/{id}/collection-orders`, ({ user, params }) => {
+      module(mod);
+      require(user, view);
+      findAccount(db, params.id, family);
+      payOrders(db, params.id);
+      return ok(db.deposits.orders.filter((o) => o.depositAccountId === params.id).sort((x, y) => (y.createdAt ?? '').localeCompare(x.createdAt ?? '')));
+    });
+    on('POST', `/api/v1/${base}/accounts/{id}/collection-orders`, ({ user, params, body }) => {
+      module(mod);
+      require(user, family === 'CASA' ? P.casaTransact : P.depositFund);
+      const a = findAccount(db, params.id, family);
+      const b = (body ?? {}) as { amount?: string | number | null; methods?: string[]; returnUrl?: string | null; payoutBankAccount?: BankAccountInput | null };
+      let amount = money(b.amount);
+      if ((b.methods ?? []).some((m) => !['UPI', 'CARD', 'NETBANKING'].includes(m))) throw invalid('methods may contain UPI, CARD and NETBANKING');
+      if (family === 'TERM_DEPOSIT') {
+        const t = a.termDeposit!;
+        if (a.status !== 'BOOKED') throw conflict('Conflict', `deposit ${a.accountNo} is ${a.status}: only a booked deposit is funded`);
+        if (amount === null) amount = t.principal!;
+        else if (toUnits(amount) !== toUnits(t.principal!)) throw invalid(`a term deposit is funded with its principal of ${t.principal}`);
+        if (db.deposits.orders.some((o) => o.depositAccountId === a.id && o.status === 'CREATED')) throw conflict('Conflict', `deposit ${a.accountNo} already has a payment link waiting to be paid`);
+        if (t.payoutTo === 'BANK_ACCOUNT') {
+          if (!b.payoutBankAccount && !t.payoutBankAccountMasked) throw invalid('the deposit is paid out to a bank account: give payoutBankAccount');
+          if (b.payoutBankAccount) {
+            const problems: string[] = [];
+            const bank = sealBank(b.payoutBankAccount, problems);
+            refuseIfAny('the payout account cannot be recorded', problems);
+            Object.assign(t, { payoutBankAccountMasked: `XXXXXXXX${bank!.last4}`, payoutBankIfsc: bank!.ifsc });
+          }
+        } else if (b.payoutBankAccount) throw invalid('the deposit is paid out to an account here; it takes no bank account');
+      } else {
+        if (a.status !== 'ACTIVE') throw conflict('Conflict', `account ${a.accountNo} is ${a.status}: it cannot take a payment`);
+        if (!amount || !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) throw invalid('amount must be positive with at most two decimals');
+        if (b.payoutBankAccount) throw invalid('only a term deposit paid out to a bank account names one');
+      }
+      const at = new Date().toISOString();
+      const reference = `CO${a.accountNo}N${db.deposits.orders.filter((o) => o.depositAccountId === a.id).length + 1}`;
+      const o: MockDepositOrder = { id: uuid(), reference, depositAccountId: a.id!, accountNo: a.accountNo!, purpose: family === 'CASA' ? 'CREDIT' : 'FUNDING', amount: fromUnits(toUnits(amount), 2),
+        methods: b.methods ?? [], provider: 'SIMULATOR', paymentUrl: `https://pay.simulator.example/l/${reference}`, status: 'CREATED',
+        expiresAt: new Date(Date.parse(at) + 72 * 3600_000).toISOString(), createdBy: user.username, createdAt: at };
+      db.deposits.orders.push(o);
+      appendAudit(db, at, user.username, 'COLLECTION_ORDER', family === 'CASA' ? 'DEPOSIT_ACCOUNT' : 'TERM_DEPOSIT', a.accountNo!, { reference, amount: o.amount });
+      return { status: 201, body: o };
     });
     on('POST', `/api/v1/${base}/accounts/{id}/holds`, ({ user, params, body }) => {
       module(mod);

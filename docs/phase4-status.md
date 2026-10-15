@@ -1,13 +1,13 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 14-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 15-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
 
 | Increment | State |
 |-----------|-------|
 | P4-0 deposit core | Built, pushed (`9cb5f8e`, `3851a93`), live-tested on the local stack on 10-Oct-2026 |
 | P4-1 products and opening | Built, pushed (`586b8e8`), live-tested on the local stack on 11-Oct-2026 |
-| P4-2 money movement | Built and pushed (`cdbe397`) on 14-Oct-2026; first live test found one defect (auto-applied requests), fixed in the next commit |
-| P4-2b gateway for deposits | Not started: bank transfers and gateway funding through the payout and collection pipeline |
+| P4-2 money movement | Built and pushed (`cdbe397`, fix `fa9482d`); live-tested on the local stack on 14-Oct-2026 (32 of 32 after the fix) |
+| P4-2b gateway for deposits | Built on 15-Oct-2026: transfers out through the payout gateway, payment links that credit an account or fund a deposit; not yet pushed or live-tested |
 | P4-3 to P4-7 | Not started |
 
 ## Decisions taken on 10-Oct-2026
@@ -229,13 +229,60 @@ Money now moves on deposit accounts. Bank transfers are recorded by staff with t
 ### Verified after the push (14-Oct-2026)
 - **Local stack.** The Docker build compiled `cdbe397` with Gradle; V30 applied to `demo-bank`, `demo-nbfc` and `demo-nbfc-d` and the backend registered all three.
 - **First live test** (a script run by the product owner on the Mac, through the console's proxy): 20 checks passed, 10 failed. Passed: a request above the threshold waits for a checker and posts when approved; refusals with every reason (balance, missing UTR and payee); debit freeze stops a withdrawal and is released; a lien shows on the account; funding refused without the payout bank account; both trial balances balance; `demo-nbfc` still refused deposits, its loans load. **Failed, one cause:** every request that a rule applies at once (no checker: money below 2,00,000, funding) was refused with 409 `maker_is_not_checker`. `ApprovalService` recorded the maker as the checker of an auto-applied request, which the database forbids; no approval rule had needed zero checkers before, so the path had never run. The stand-in for `ApprovalService` in the build sandbox always leaves a request pending, so the service checks did not reach it.
-- **Fix:** an auto-applied request is recorded with the rule (`rule:auto`) as its checker (`ApprovalService.AUTO_CHECKER`). Two checks added to `deposits_money_movement_test.sql` (S4, S5). The live test is to be run again.
+- **Fix:** an auto-applied request is recorded with the rule (`rule:auto`) as its checker (`ApprovalService.AUTO_CHECKER`). Two checks added to `deposits_money_movement_test.sql` (S4, S5).
+- **Second live test** (after `fa9482d`): 32 of 32 passed. Money below the threshold posts at once with `rule:auto` as checker; a bank and an NBFC term deposit were funded (the bank's from a savings account, the NBFC's in cash with the payout bank account `XXXXXXXX4433`, ICIC0004321); both trial balances balance (bank 7,63,000 on each side, NBFC 50,000).
 
 ### Not yet built
-- Bank transfers and gateway funding through the payout and collection pipeline (P4-2b).
 - Interest, tax, charges, minimum balance, closure (P4-3, P4-4).
 - Cheques, standing instructions, dormancy (P4-5, P4-6).
 - Cash drawer and teller limits beyond the role amount limits.
 
-### Next: P4-2b or P4-3
-P4-2b extends the payout and collection pipeline to deposit accounts (bank transfers out sent through the gateway, money in and term deposit funding through collection orders). P4-3 is the day-end interest: savings accrual and credit, term deposit accrual, payout and compounding, the TDS ledger. Next tenant migration: V31; next control migration: V5.
+## Increment P4-2b: the payment gateway for deposits
+
+The payout and collection pipeline built for loans in P2-2 now also serves deposit accounts (open item P4-10 closed). A bank transfer out of a savings or current account can be sent through the payout gateway instead of being recorded with a UTR, and a payment link can be made for a savings or current account (the payment credits it) or for a booked term deposit (the payment of its principal funds it).
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `DepositPostings`: a transfer through the gateway posts Dr the account / Cr payout in transit (2408, a new setting head); when the bank pays, Dr payout in transit / Cr the disbursement bank (no account leg); when it fails or comes back, the reversal of what was posted (the payment first). Funding source `GATEWAY` (Dr the collection bank).
+
+**Tenant database** (`V31__deposit_gateway.sql`)
+- Setting `deposits.gl.in-transit` (2408).
+- `deposits.gateway_transfer`: one row per transfer sent through the gateway, SENT → PAID (with the payment lot and the UTR) → RETURNED, or SENT → RETURNED. Only a bank transfer out to a named account; returned only once its movement is reversed; never deleted; a returned one never changes.
+- Funding source `GATEWAY` on term deposits.
+- The integration tables take a deposit account instead of a loan, exactly one of the two: `integration.beneficiary`, `integration.payout_instruction` (with the transfer's movement, one payout per transfer, and when the in-transit head was cleared), `integration.collection_order` (purpose `REPAYMENT`, `CREDIT` or `FUNDING`; one live link per term deposit), `integration.collection_payment` (posted as a loan transaction or a deposit movement, never both). `integration.collection_reconciliation` shows the deposit account (new columns at the end).
+
+**Application**
+- Port `com.corebanking.deposits.DepositOperations` (implemented by `DepositMoneyService`), called by the integration module as lending's `LoanOperations` is: read an account, read a transfer's payee in clear, settle a transfer, return a transfer, receive money from the gateway, record a term deposit's payout bank account. Topic `deposit.transfer_out` (`DepositEvents`), with no personal data.
+- `POST /api/v1/casa/accounts/{id}/transactions` takes `viaGateway: true` on a bank transfer out: no UTR is needed; the request goes through maker-checker and the amount limits as any debit; when applied, the money leaves the account and waits in transit, and the transfer is written to the outbox. A staff reversal of such a transfer is refused (its money comes back only through the gateway's outcome).
+- `PayoutService`: the relay makes one INITIATED payout per transfer, with the payee sealed again under the integration key (reference `PO<account no>T<n>`); the worker sends and polls it as a loan payout; SUCCESS is settled (in-transit cleared) by the failure task while the books are open; FAILED or RETURNED puts the money back in the account at once (it is the customer's money: nothing is proposed). A return that cannot be made (the account no longer active) is parked; "Return to the account" on the Payouts page tries again. Search by `accountId`.
+- `CollectionService`: `POST`/`GET /api/v1/casa/accounts/{id}/collection-orders` (permissions `casa:transact` / `casa:view`) and `/api/v1/deposits/accounts/{id}/collection-orders` (`deposit:fund` / `deposit:view`). A term deposit's link is for its principal (the amount may be left out); one paid out to a bank account records that account when the link is made, unless it is recorded already. A payment is posted on the open business date (a deposit movement takes value that day); a payment the account cannot take (a freeze, a deposit funded another way) goes to the unmatched receipts queue, which can now assign it to a deposit account (`accountId`).
+- No new permissions; the realms are unchanged.
+
+**Console**
+- Money out: "Send it through the payment gateway" on a bank transfer out; then no UTR is asked for.
+- Statement: a gateway transfer shows "With the gateway", "Paid by the bank" (with the UTR) or "Came back"; it has no Reverse action.
+- "Payment link" on an active savings or current account and on a booked term deposit (asking for the payout bank account when needed), and a Payment links card.
+- Payouts page and reconciliation show the deposit account where there is no loan.
+- Mock mode: the simulator acts when the statement or the links are next read (a transfer or link whose amount ends in .01 fails).
+
+### Choices made in this increment (to confirm)
+- **The money leaves the account when the transfer is approved**, not when the bank pays; it waits on payout in transit (2408). If the payout fails or comes back, it returns at once, without a checker.
+- **The payee of a gateway transfer is not validated by penny drop** (the beneficiary is recorded as `PENDING`): the maker entered the account and a checker approved it above the threshold. See open item P4-14.
+- **Money received through a payment link** is credited without maker-checker, on the business date it is posted (not the payment date).
+- **A term deposit funded through a payment link** starts on the business date the payment is posted; a second payment for it goes to the unmatched queue.
+- **The reversal of a funding through a payment link** (by maker-checker) puts the principal back on the collection bank head; refunding the payer is outside the system for now.
+
+### Tests
+- **Engine:** 73 tests in `deposits-core` (1 new).
+- **Tenant database:** 36 checks in the new `deposits_gateway_test.sql`; all 23 tenant and control suites pass, including the P2-2 integration suites.
+- **Application services:** in the build sandbox (stand-ins for Spring, not in the repository): 32 checks of the deposits side (transfer, settle, return after payment, failure, freezes, payment-link credit and funding, funding reversal); and 30 checks end to end with the real `PayoutService` and `CollectionService`, the simulator as provider and the real deposits service on a migrated bank database (relay, send, poll, failure, return after payment, settlement, links for an account and a deposit, unmatched receipt assigned to another account, reconciliation); the P4-1 (46) and P4-2 (67) checks still pass.
+- **Console:** 4 new tests in `depositMoney.test.tsx` (13 in all); the whole suite (303), typecheck and build pass.
+- **API contract:** 4 new operations; `docs/api/openapi.yaml` lints clean and every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring:** as before; the integration module was compiled against the real sources with stand-ins for Spring.
+- **The outbox relay and the scheduled worker** were played by the test, not run.
+- **Live stack:** not yet run. The smoke script for P4-2b exercises the simulator's amounts (.01 fails, .02 is paid on the next poll, .03 is paid then returned) and waits for the worker.
+
+### Next: P4-3
+P4-3 is the day-end interest: savings accrual and credit, term deposit accrual, payout and compounding, the TDS ledger. Next tenant migration: V32; next control migration: V5.

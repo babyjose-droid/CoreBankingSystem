@@ -7,6 +7,8 @@ import com.corebanking.integration.core.WebhookEvents;
 import com.corebanking.integration.core.provider.InboundEvent;
 import com.corebanking.integration.core.provider.PayoutGateway;
 import com.corebanking.integration.core.provider.ProviderException;
+import com.corebanking.deposits.DepositEvents;
+import com.corebanking.deposits.DepositOperations;
 import com.corebanking.lending.LoanEvents;
 import com.corebanking.lending.LoanOperations;
 import com.corebanking.platform.ApiException;
@@ -48,6 +50,11 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       once; a staff-approved one gets a reversal proposed for a checker (or is only parked, by tenant property
  *       {@code payout.failure-action}). Either way the instruction is flagged, and a new attempt can be made.</li>
  * </ol>
+ * Transfers out of savings and current accounts sent through the gateway (P4-2b) take the same path: the transfer's own
+ * transaction writes {@code deposit.transfer_out}, the relay makes an instruction with the payee read back from the
+ * deposits module, and the outcome goes back to it: SUCCESS clears the in-transit head, FAILED or RETURNED puts the money
+ * back in the account at once (it was the customer's money, and nothing is proposed).
+ * <p>
  * Beneficiary account numbers are stored encrypted and leave only masked.
  */
 @Service
@@ -67,6 +74,7 @@ class PayoutService implements OutboxConsumer {
     private final Secrets secrets;
     private final ProviderConfigService providers;
     private final LoanOperations loans;
+    private final DepositOperations deposits;
     private final ApprovalService approvals;
     private final Outbox outbox;
     private final AuditLog audit;
@@ -76,13 +84,14 @@ class PayoutService implements OutboxConsumer {
     private final Json json;
     private final TransactionTemplate tx;
 
-    PayoutService(JdbcTemplate jdbc, Secrets secrets, ProviderConfigService providers, LoanOperations loans, ApprovalService approvals,
-                  Outbox outbox, AuditLog audit, BranchScope scope, BusinessDays days, TenantProps props, Json json,
+    PayoutService(JdbcTemplate jdbc, Secrets secrets, ProviderConfigService providers, LoanOperations loans, DepositOperations deposits,
+                  ApprovalService approvals, Outbox outbox, AuditLog audit, BranchScope scope, BusinessDays days, TenantProps props, Json json,
                   PlatformTransactionManager manager) {
         this.jdbc = jdbc;
         this.secrets = secrets;
         this.providers = providers;
         this.loans = loans;
+        this.deposits = deposits;
         this.approvals = approvals;
         this.outbox = outbox;
         this.audit = audit;
@@ -152,6 +161,10 @@ class PayoutService implements OutboxConsumer {
     // ------------------------------------------------------------------------------------------------ instruction
     @Override
     public void on(long outboxId, String topic, String aggregateId, Map<String, Object> payload, OffsetDateTime at) {
+        if (DepositEvents.TRANSFER_OUT.equals(topic)) {
+            createForDeposit(UUID.fromString(String.valueOf(payload.get("movementId"))));
+            return;
+        }
         if (!LoanEvents.DISBURSED.equals(topic)) return;
         UUID loanId = UUID.fromString(String.valueOf(payload.get("loanId")));
         UUID txn = UUID.fromString(String.valueOf(payload.get("transactionId")));
@@ -179,6 +192,30 @@ class PayoutService implements OutboxConsumer {
                 usable ? null : "no validated beneficiary account: record one and retry", usable);
         event(id, null, status, source, Map.of("note", note));
         return id;
+    }
+
+    /** One instruction per deposit transfer, paying the payee the maker entered (sealed again with the integration key). */
+    private void createForDeposit(UUID movementId) {
+        if (!jdbc.queryForList("SELECT 1 FROM integration.payout_instruction WHERE deposit_movement_id = ?", movementId).isEmpty()) return;
+        DepositOperations.TransferOut t = deposits.transferOut(movementId);
+        if (!"SENT".equals(t.status())) return;
+        DepositOperations.Payee payee = t.payee();
+        UUID beneficiary = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO integration.beneficiary (id, deposit_account_id, customer_id, holder_name_cipher, account_cipher, account_last4, account_hash,
+                                                     ifsc, validation, validation_note, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'a deposit transfer is sent to the account the maker entered', ?)
+                """, beneficiary, t.accountId(), t.customerId(), secrets.seal(payee.holderName(), NAME_AAD), secrets.seal(payee.accountNumber(), ACCOUNT_AAD),
+                Secrets.last4(payee.accountNumber()), secrets.hash("BANK_ACCOUNT", payee.ifsc() + ":" + payee.accountNumber()), payee.ifsc(),
+                CurrentUser.username());
+        Integer n = jdbc.queryForObject("SELECT count(*) + 1 FROM integration.payout_instruction WHERE deposit_account_id = ?", Integer.class, t.accountId());
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO integration.payout_instruction (id, reference, deposit_account_id, deposit_movement_id, account_no, customer_id, branch_code,
+                    attempt_no, amount, beneficiary_id, status, stp, next_attempt_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'INITIATED', false, now())
+                """, id, "PO" + t.accountNo() + "T" + n, t.accountId(), movementId, t.accountNo(), t.customerId(), t.branch(), t.amount(), beneficiary);
+        event(id, null, "INITIATED", "SYSTEM", Map.of("note", "deposit transfer posted"));
     }
 
     private void event(UUID payoutId, String from, String to, String source, Map<String, ?> detail) {
@@ -211,6 +248,7 @@ class PayoutService implements OutboxConsumer {
             }
             Lifecycle.Payout to = news.status();
             boolean bad = to == Lifecycle.Payout.FAILED || to == Lifecycle.Payout.RETURNED;
+            boolean deposit = p.get("deposit_account_id") != null;
             boolean pending = to == Lifecycle.Payout.SENT;
             jdbc.update("""
                     UPDATE integration.payout_instruction
@@ -221,7 +259,8 @@ class PayoutService implements OutboxConsumer {
                            needs_action = ?, action_note = ?, last_error = NULL, updated_at = now()
                      WHERE id = ?
                     """, to.name(), news.providerRef(), news.utr(), news.failureCode(), news.failureReason(), pending, pending, pending,
-                    bad, bad ? "payout " + to + ": the disbursement is being reversed or proposed for reversal" : null, payoutId);
+                    bad, !bad ? null : deposit ? "payout " + to + ": the money is being returned to account " + p.get("account_no")
+                            : "payout " + to + ": the disbursement is being reversed or proposed for reversal", payoutId);
             event(payoutId, from.name(), to.name(), source, Map.of("utr", String.valueOf(news.utr()), "failureCode", String.valueOf(news.failureCode())));
             publish(payoutId, from.name(), null);
             return d;
@@ -231,13 +270,13 @@ class PayoutService implements OutboxConsumer {
     private void publish(UUID payoutId, String previous, String action) {
         Map<String, Object> p = jdbc.queryForMap("""
                 SELECT i.reference, i.loan_id, i.loan_no, i.customer_id, i.status, i.amount, i.utr, i.failure_code, i.failure_reason,
-                       b.account_last4, l.external_ref
-                  FROM integration.payout_instruction i JOIN lending.loan_account l ON l.id = i.loan_id
+                       b.account_last4, l.external_ref, i.account_no
+                  FROM integration.payout_instruction i LEFT JOIN lending.loan_account l ON l.id = i.loan_id
                   LEFT JOIN integration.beneficiary b ON b.id = i.beneficiary_id WHERE i.id = ?
                 """, payoutId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("payoutRef", p.get("reference"));
-        m.put("loanId", String.valueOf(p.get("loan_id")));
+        m.put("loanId", p.get("loan_id") == null ? null : String.valueOf(p.get("loan_id")));
         m.put("loanNo", p.get("loan_no"));
         m.put("customerId", String.valueOf(p.get("customer_id")));
         m.put("externalRef", p.get("external_ref"));
@@ -249,6 +288,7 @@ class PayoutService implements OutboxConsumer {
         m.put("failureReason", p.get("failure_reason"));
         m.put("beneficiaryAccountMasked", p.get("account_last4") == null ? null : "XXXXXXXX" + p.get("account_last4"));
         m.put("action", action);
+        m.put("accountNo", p.get("account_no"));
         outbox.publish(jdbc, WebhookEvents.PAYOUT_STATUS, (String) p.get("reference"), m);
     }
 
@@ -268,7 +308,12 @@ class PayoutService implements OutboxConsumer {
 
     // ------------------------------------------------------------------------------------------------ worker
     private record Claim(UUID id, String reference, String status, String providerRef, BigDecimal amount, String mode, UUID beneficiaryId,
-                         String loanNo, int attempts) {}
+                         String loanNo, int attempts, String accountNo) {
+        /** What the payee's bank shows: the loan, or the last four digits of the paying account. */
+        String narration() {
+            return loanNo != null ? "Loan " + loanNo : "Transfer from A/c XX" + accountNo.substring(Math.max(0, accountNo.length() - 4));
+        }
+    }
 
     private List<Claim> claim() {
         // the lease keeps another instance (or the next tick) away while the provider is being called
@@ -277,9 +322,9 @@ class PayoutService implements OutboxConsumer {
                  WHERE id IN (SELECT id FROM integration.payout_instruction
                                WHERE next_attempt_at <= now() AND status IN ('INITIATED','SENT')
                                ORDER BY next_attempt_at LIMIT 20 FOR UPDATE SKIP LOCKED)
-                RETURNING id, reference, status, provider_ref, amount, mode, beneficiary_id, loan_no, attempts
+                RETURNING id, reference, status, provider_ref, amount, mode, beneficiary_id, loan_no, attempts, account_no
                 """, (rs, i) -> new Claim(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4), rs.getBigDecimal(5),
-                        rs.getString(6), rs.getObject(7, UUID.class), rs.getString(8), rs.getInt(9)));
+                        rs.getString(6), rs.getObject(7, UUID.class), rs.getString(8), rs.getInt(9), rs.getString(10)));
     }
 
     /** Sends INITIATED payouts and polls SENT ones. */
@@ -301,7 +346,7 @@ class PayoutService implements OutboxConsumer {
                     r = gateway.port().send(new PayoutGateway.Request(c.reference(), c.amount().setScale(2, java.math.RoundingMode.HALF_UP),
                             new PayoutGateway.Beneficiary(secrets.open((byte[]) b.get("holder_name_cipher"), NAME_AAD),
                                     secrets.open((byte[]) b.get("account_cipher"), ACCOUNT_AAD), (String) b.get("ifsc")),
-                            c.mode(), "Loan " + c.loanNo()));
+                            c.mode(), c.narration()));
                 }
                 Lifecycle.Decision d = apply(c.id(), new News(r.status(), r.providerRef(), r.utr(), r.failureCode(), r.failureReason()),
                         "SENT".equals(c.status()) ? "POLL" : "API");
@@ -340,7 +385,7 @@ class PayoutService implements OutboxConsumer {
     void handleFailures() {
         if (!"OPEN".equals(days.current() == null ? null : days.current().status())) return;       // reversals post: wait for the books
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT id, reference, loan_id, loan_no, branch_code, amount, stp, status, failure_reason
+                SELECT id, reference, loan_id, loan_no, branch_code, amount, stp, status, failure_reason, deposit_movement_id, account_no
                   FROM integration.payout_instruction
                  WHERE status IN ('FAILED','RETURNED') AND failure_action IS NULL ORDER BY updated_at LIMIT 20
                 """);
@@ -350,7 +395,11 @@ class PayoutService implements OutboxConsumer {
             String mode = Boolean.TRUE.equals(p.get("stp")) ? "REVERSE" : props.text("payout.failure-action", "PROPOSE");
             try {
                 tx.executeWithoutResult(s -> {
-                    if ("REVERSE".equals(mode)) {
+                    if (p.get("deposit_movement_id") != null) {
+                        // the customer's own money: it goes back to the account at once
+                        deposits.returnTransferOut((UUID) p.get("deposit_movement_id"), reason);
+                        settle(id, "REVERSED", null, "the money is back in account " + p.get("account_no"), true);
+                    } else if ("REVERSE".equals(mode)) {
                         loans.reverseDisbursement((UUID) p.get("loan_id"), reason, CurrentUser.username());
                         settle(id, "REVERSED", null, "disbursement reversed; the loan is SANCTIONED again", true);
                     } else if ("PARK".equalsIgnoreCase(mode)) {
@@ -369,6 +418,29 @@ class PayoutService implements OutboxConsumer {
             } catch (RuntimeException e) {
                 String why = e instanceof ApiException ? e.getMessage() : "the reversal could not be made";
                 tx.executeWithoutResult(s -> settle(id, "PARKED", null, "not reversed automatically: " + why, false));
+            }
+        }
+    }
+
+    /** Paid deposit transfers whose in-transit head is not cleared yet. */
+    void settleDeposits() {
+        if (!"OPEN".equals(days.current() == null ? null : days.current().status())) return;       // the clearing posts: wait for the books
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT id, deposit_movement_id, utr FROM integration.payout_instruction
+                 WHERE status = 'SUCCESS' AND deposit_movement_id IS NOT NULL AND deposit_settled_at IS NULL ORDER BY updated_at LIMIT 20
+                """);
+        for (Map<String, Object> p : rows) {
+            UUID id = (UUID) p.get("id");
+            try {
+                tx.executeWithoutResult(s -> {
+                    deposits.settleTransferOut((UUID) p.get("deposit_movement_id"), (String) p.get("utr"));
+                    jdbc.update("UPDATE integration.payout_instruction SET deposit_settled_at = now(), last_error = NULL, updated_at = now() WHERE id = ?", id);
+                });
+            } catch (RuntimeException e) {
+                String why = e instanceof ApiException ? e.getMessage() : e.getClass().getSimpleName();
+                tx.executeWithoutResult(s -> jdbc.update("""
+                        UPDATE integration.payout_instruction SET needs_action = true, action_note = ?, last_error = ?, updated_at = now() WHERE id = ?
+                        """, "paid, but the in-transit head could not be cleared: " + why, why, id));
             }
         }
     }
@@ -402,6 +474,19 @@ class PayoutService implements OutboxConsumer {
         Map<String, Object> p = one(payoutId);
         String status = (String) p.get("status");
         UUID loanId = (UUID) p.get("loanId");
+        if (loanId == null && !"INITIATED".equals(status)) {
+            // a deposit transfer: its return to the account is tried again (a resend of an INITIATED one is below)
+            if (!("FAILED".equals(status) || "RETURNED".equals(status)) || !"PARKED".equals(p.get("failureAction"))) {
+                throw ApiException.conflict("a deposit transfer that is " + status + " cannot be retried");
+            }
+            jdbc.update("""
+                    UPDATE integration.payout_instruction SET failure_action = NULL, needs_action = false, action_note = 'the return to the account is tried again',
+                           updated_at = now() WHERE id = ?
+                    """, payoutId);
+            event(payoutId, status, status, "OPERATOR", Map.of("note", "return to the account tried again"));
+            audit.record(CurrentUser.username(), "PAYOUT_RETRY", "PAYOUT", (String) p.get("reference"), Map.of("from", status));
+            return one(payoutId);
+        }
         if ("ON_HOLD".equals(status)) {
             List<Map<String, Object>> b = jdbc.queryForList(
                     "SELECT id FROM integration.beneficiary WHERE loan_id = ? AND status = 'ACTIVE' AND validation <> 'INVALID'", loanId);
@@ -448,7 +533,8 @@ class PayoutService implements OutboxConsumer {
     }
 
     private static final String SELECT = """
-            SELECT i.id, i.reference, i.loan_id AS "loanId", i.loan_no AS "loanNo", i.branch_code AS branch, i.attempt_no AS "attemptNo",
+            SELECT i.id, i.reference, i.loan_id AS "loanId", i.loan_no AS "loanNo", i.deposit_account_id AS "depositAccountId",
+                   i.account_no AS "accountNo", i.deposit_settled_at AS "depositSettledAt", i.branch_code AS branch, i.attempt_no AS "attemptNo",
                    i.amount::text AS amount, i.mode, i.provider, i.status, i.provider_ref AS "providerRef", i.utr,
                    i.failure_code AS "failureCode", i.failure_reason AS "failureReason", i.stp, i.needs_action AS "needsAction",
                    i.action_note AS "actionNote", i.failure_action AS "failureAction", i.reversal_approval_id AS "reversalApprovalId",
@@ -467,13 +553,14 @@ class PayoutService implements OutboxConsumer {
         return m;
     }
 
-    /** Reconciliation query: payouts by status, attention flag, loan and creation date. */
-    List<Map<String, Object>> search(String status, Boolean needsAction, UUID loanId, java.time.LocalDate from, java.time.LocalDate to) {
+    /** Reconciliation query: payouts by status, attention flag, loan or deposit account, and creation date. */
+    List<Map<String, Object>> search(String status, Boolean needsAction, UUID loanId, UUID accountId, java.time.LocalDate from, java.time.LocalDate to) {
         return jdbc.queryForList(SELECT + """
                  AND (?::text IS NULL OR i.status = ?) AND (?::boolean IS NULL OR i.needs_action = ?) AND (?::uuid IS NULL OR i.loan_id = ?)
+                 AND (?::uuid IS NULL OR i.deposit_account_id = ?)
                  AND (?::date IS NULL OR i.created_at >= ?::date) AND (?::date IS NULL OR i.created_at < ?::date + 1)
                  ORDER BY i.created_at DESC LIMIT 500
-                """, scope.user(), status, status, needsAction, needsAction, loanId, loanId, from, from, to, to);
+                """, scope.user(), status, status, needsAction, needsAction, loanId, loanId, accountId, accountId, from, from, to, to);
     }
 
     @Component
@@ -499,7 +586,11 @@ class PayoutService implements OutboxConsumer {
 
         @Override public String name() { return "payout-failures"; }
 
-        @Override public void run() { payouts.handleFailures(); }
+        @Override
+        public void run() {
+            payouts.handleFailures();
+            payouts.settleDeposits();
+        }
     }
 
     @Component

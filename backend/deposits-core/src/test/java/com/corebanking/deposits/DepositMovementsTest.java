@@ -98,6 +98,24 @@ class DepositMovementsTest {
     }
 
     @Test
+    void aGatewayTransferWaitsInTransitUntilTheBankPaysIt() {
+        TransactionLot sent = POST.gatewayTransferOut(SB, bd("3000"), "POSB1M1", null);
+        assertEquals(DepositPostings.GATEWAY_TRANSFER_OUT, sent.type());
+        leg(sent, SB.accountNo(), "2401", PostingLine.Side.DR, "3000");
+        leg(sent, "2408", "2408", PostingLine.Side.CR, "3000");
+        TransactionLot paid = POST.gatewayPaid("HO", SB.accountNo(), bd("3000"), "UTR77");
+        assertEquals(2, paid.lines().size());
+        leg(paid, "2408", "2408", PostingLine.Side.DR, "3000");
+        leg(paid, "1202", "1202", PostingLine.Side.CR, "3000");
+        // returned after it was paid: both lots are reversed, which puts the money back on the account
+        TransactionLot unpaid = TransactionLot.reversal(paid, DAY, "returned");
+        TransactionLot back = TransactionLot.reversal(sent, DAY, "returned");
+        leg(unpaid, "1202", "1202", PostingLine.Side.DR, "3000");
+        leg(back, SB.accountNo(), "2401", PostingLine.Side.CR, "3000");
+        leg(POST.funding(FD, bd("100000"), FundingSource.GATEWAY, null, "PAY1"), "1203", "1203", PostingLine.Side.DR, "100000");
+    }
+
+    @Test
     void theReversalOfAMovementIsItsMirror() {
         TransactionLot in = POST.cashDeposit(SB, bd("5000"), "T1", null);
         TransactionLot back = TransactionLot.reversal(in, DAY.plusDays(1), "wrong account");

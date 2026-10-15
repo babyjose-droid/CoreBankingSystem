@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrap } from './client';
+import type { CollectionOrder } from './integrationTypes';
 import type {
   Approval,
   CasaAccountInput,
@@ -11,6 +12,7 @@ import type {
   DepositTransferInput,
   TermDepositFundingInput,
   DepositAccountSummary,
+  DepositCollectionOrderInput,
   DepositFamily,
   DepositProduct,
   DepositProductInput,
@@ -264,5 +266,39 @@ export function useReverseFunding(id: string) {
   return useMutation({
     mutationFn: (reason: string) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/funding/reverse', { params: { path: { id } }, body: { reason } }) as never),
     onSuccess: done,
+  });
+}
+
+// ---- payment links for deposit accounts (P4-2b) ----------------------------------------------------------------
+
+export function useDepositCollectionOrders(family: DepositFamily, id: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['deposit-orders', family, id],
+    queryFn: () =>
+      unwrap<CollectionOrder[]>(
+        (family === 'CASA'
+          ? api.GET('/api/v1/casa/accounts/{id}/collection-orders', { params: { path: { id: id! } } })
+          : api.GET('/api/v1/deposits/accounts/{id}/collection-orders', { params: { path: { id: id! } } })) as never,
+      ),
+    enabled: !!id && enabled,
+  });
+}
+
+export function useCreateDepositCollectionOrder(family: DepositFamily, id: string) {
+  const api = useApiClient();
+  const qc = useQueryClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: DepositCollectionOrderInput) =>
+      unwrap<CollectionOrder>(
+        (family === 'CASA'
+          ? api.POST('/api/v1/casa/accounts/{id}/collection-orders', { params: { path: { id } }, body })
+          : api.POST('/api/v1/deposits/accounts/{id}/collection-orders', { params: { path: { id } }, body })) as never,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['deposit-orders'] });
+      done();
+    },
   });
 }

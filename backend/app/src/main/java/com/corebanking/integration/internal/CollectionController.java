@@ -41,6 +41,34 @@ class CollectionController {
         return collections.orders(id);
     }
 
+    @PostMapping("/casa/accounts/{id}/collection-orders")
+    @PreAuthorize("hasAuthority('casa:transact')")
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> createForAccount(@PathVariable UUID id, @RequestBody CollectionService.DepositOrderInput in,
+                                         @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        return collections.createDepositOrder("CASA", id, in, key);
+    }
+
+    @GetMapping("/casa/accounts/{id}/collection-orders")
+    @PreAuthorize("hasAuthority('casa:view')")
+    List<Map<String, Object>> accountOrders(@PathVariable UUID id) {
+        return collections.depositOrders("CASA", id);
+    }
+
+    @PostMapping("/deposits/accounts/{id}/collection-orders")
+    @PreAuthorize("hasAuthority('deposit:fund')")
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> createForDeposit(@PathVariable UUID id, @RequestBody CollectionService.DepositOrderInput in,
+                                         @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        return collections.createDepositOrder("TERM_DEPOSIT", id, in, key);
+    }
+
+    @GetMapping("/deposits/accounts/{id}/collection-orders")
+    @PreAuthorize("hasAuthority('deposit:view')")
+    List<Map<String, Object>> depositOrders(@PathVariable UUID id) {
+        return collections.depositOrders("TERM_DEPOSIT", id);
+    }
+
     @GetMapping("/collection-orders/{id}")
     @PreAuthorize("hasAuthority('collection:view')")
     Map<String, Object> order(@PathVariable UUID id) {

@@ -16,6 +16,10 @@ import java.util.Objects;
  *   bank transfer out     Dr deposit account         Cr bank (disbursement)
  *   transfer              Dr paying account          Cr receiving account
  *   term deposit funding  Dr account / cash / bank   Cr term deposit
+ *   transfer out through the payment gateway (P4-2b):
+ *     sent                Dr deposit account         Cr payout in transit
+ *     paid                Dr payout in transit       Cr bank (disbursement)
+ *     failed or returned  the reversal of what was posted (the paid lot first, then the sent one)
  * </pre>
  * The reversal of any of them is the mirror lot ({@link TransactionLot#reversal}).
  */
@@ -28,22 +32,25 @@ public final class DepositPostings {
     public static final String BANK_TRANSFER_OUT = "DEPOSIT_BANK_OUT";
     public static final String TRANSFER = "DEPOSIT_TRANSFER";
     public static final String FUNDING = "DEPOSIT_FUNDING";
+    public static final String GATEWAY_TRANSFER_OUT = "DEPOSIT_GATEWAY_OUT";
+    public static final String GATEWAY_PAID = "DEPOSIT_GATEWAY_PAID";
 
     /**
-     * The cash and bank heads a deposit movement settles against, and the inter-branch head a transfer between branches
-     * uses (defaults from the starter charts).
+     * The cash and bank heads a deposit movement settles against, the inter-branch head a transfer between branches uses,
+     * and the head money sent through the payment gateway waits on until the bank pays it (defaults from the starter charts).
      */
-    public record Heads(String cash, String bankIn, String bankOut, String interBranch) {
+    public record Heads(String cash, String bankIn, String bankOut, String interBranch, String inTransit) {
         public Heads {
             Objects.requireNonNull(cash, "cash");
             Objects.requireNonNull(bankIn, "bankIn");
             Objects.requireNonNull(bankOut, "bankOut");
             Objects.requireNonNull(interBranch, "interBranch");
+            Objects.requireNonNull(inTransit, "inTransit");
         }
 
-        /** Cash in hand 1201, collection bank 1203, disbursement bank 1202, inter-branch account 1900. */
+        /** Cash in hand 1201, collection bank 1203, disbursement bank 1202, inter-branch account 1900, payout in transit 2408. */
         public static Heads starter() {
-            return new Heads("1201", "1203", "1202", "1900");
+            return new Heads("1201", "1203", "1202", "1900", "2408");
         }
     }
 
@@ -57,7 +64,7 @@ public final class DepositPostings {
     }
 
     /** How a term deposit is funded. */
-    public enum FundingSource { ACCOUNT, CASH, BANK_TRANSFER }
+    public enum FundingSource { ACCOUNT, CASH, BANK_TRANSFER, GATEWAY }
 
     private final Heads heads;
     private final LocalDate businessDate;
@@ -136,6 +143,7 @@ public final class DepositPostings {
             }
             case CASH -> b.debit(deposit.branch(), heads.cash(), heads.cash(), amount, "Cash for term deposit " + deposit.accountNo());
             case BANK_TRANSFER -> b.debit(deposit.branch(), heads.bankIn(), heads.bankIn(), amount, "Bank transfer for term deposit " + deposit.accountNo());
+            case GATEWAY -> b.debit(deposit.branch(), heads.bankIn(), heads.bankIn(), amount, "Gateway payment for term deposit " + deposit.accountNo());
         }
         b.credit(deposit.branch(), deposit.gl(), deposit.accountNo(), amount, "Principal");
         return b.build();
@@ -143,5 +151,23 @@ public final class DepositPostings {
 
     private static String text(String narration, String fallback) {
         return narration == null || narration.isBlank() ? fallback : narration.trim();
+    }
+
+    /** A transfer out sent through the payment gateway: the money leaves the account and waits on the in-transit head. */
+    public TransactionLot gatewayTransferOut(Leg account, BigDecimal amount, String reference, String narration) {
+        positive(amount);
+        return lot(GATEWAY_TRANSFER_OUT, reference)
+                .debit(account.branch(), account.gl(), account.accountNo(), amount, text(narration, "Bank transfer out (gateway)"))
+                .credit(account.branch(), heads.inTransit(), heads.inTransit(), amount, "Gateway transfer from " + account.accountNo())
+                .build();
+    }
+
+    /** The bank paid a gateway transfer: the in-transit head is cleared against the disbursement bank. No account leg. */
+    public TransactionLot gatewayPaid(String branch, String accountNo, BigDecimal amount, String reference) {
+        positive(amount);
+        return lot(GATEWAY_PAID, reference)
+                .debit(branch, heads.inTransit(), heads.inTransit(), amount, "Gateway transfer paid, from " + accountNo)
+                .credit(branch, heads.bankOut(), heads.bankOut(), amount, "Gateway transfer paid, from " + accountNo)
+                .build();
     }
 }

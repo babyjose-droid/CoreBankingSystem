@@ -2397,6 +2397,7 @@ paths:
         - { name: status, in: query, description: 'INITIATED, ON_HOLD, SENT, SUCCESS, FAILED, RETURNED or CANCELLED', schema: { type: string } }
         - { name: needsAction, in: query, schema: { type: boolean } }
         - { name: loanId, in: query, schema: { type: string, format: uuid } }
+        - { name: accountId, in: query, description: 'A savings or current account: its transfers sent through the gateway (P4-2b)', schema: { type: string, format: uuid } }
         - { name: from, in: query, schema: { type: string, format: date } }
         - { name: to, in: query, schema: { type: string, format: date } }
       responses:
@@ -3859,6 +3860,43 @@ paths:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/DepositMovement' } }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/collection-orders:
+    post:
+      tags: [Deposits]
+      operationId: createCasaCollectionOrder
+      summary: Create a payment link for a savings or current account
+      description: >-
+        Module CASA. Permission casa:transact. Needs an active collection provider. The payment credits the account when it arrives (value on the business date it is posted).
+        A payment the account cannot take goes to the unmatched receipts queue.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositCollectionOrderInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [Deposits]
+      operationId: listCasaCollectionOrders
+      summary: The payment links of a savings or current account
+      description: Module CASA. Permission casa:view.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/casa/accounts/{id}/holds:
     get:
       tags: [Deposits]
@@ -4201,6 +4239,43 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/DepositMovement' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/collection-orders:
+    post:
+      tags: [Deposits]
+      operationId: createTermDepositCollectionOrder
+      summary: Create a payment link for a booked term deposit
+      description: >-
+        Module TD. Permission deposit:fund. Needs an active collection provider. The payment of the principal funds the booked deposit; interest starts on the business date it is posted. One link waits at a time.
+        A payment the account cannot take goes to the unmatched receipts queue.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositCollectionOrderInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [Deposits]
+      operationId: listTermDepositCollectionOrders
+      summary: The payment links of a booked term deposit
+      description: Module TD. Permission deposit:view.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/IntegrationRecord' } }
         default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/accounts/{id}/holds:
     get:
@@ -5743,10 +5818,23 @@ components:
     PaymentResolution:
       type: object
       required: [note]
+      description: Assign the payment to a loan or to a deposit account (a savings or current account is credited, a booked term deposit funded), or mark it for refund.
       properties:
         loanId: { type: string, format: uuid }
+        accountId: { type: string, format: uuid, description: A deposit account (P4-2b) }
         refund: { type: boolean }
         note: { type: string }
+    DepositCollectionOrderInput:
+      type: object
+      description: >-
+        A payment link for a deposit account (P4-2b). For a savings or current account the amount is required and the payment credits the
+        account. For a booked term deposit the amount is its principal (it may be left out) and the payment funds the deposit; a deposit
+        paid out to a bank account names that account here unless it is recorded already.
+      properties:
+        amount: { $ref: '#/components/schemas/Money' }
+        methods: { type: array, items: { type: string, enum: [UPI, CARD, NETBANKING] } }
+        returnUrl: { type: string, format: uri }
+        payoutBankAccount: { $ref: '#/components/schemas/BankAccountInput' }
     MandateInput:
       type: object
       required: [holderName, accountNumber, ifsc, maxAmount, startDate]
@@ -6276,9 +6364,14 @@ components:
       properties:
         type: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT] }
         amount: { type: number, exclusiveMinimum: 0, multipleOf: 0.01 }
-        reference: { type: [string, 'null'], maxLength: 60, description: 'The bank''s UTR (required for a bank transfer), or a slip number' }
+        reference: { type: [string, 'null'], maxLength: 60, description: 'The bank''s UTR (required for a bank transfer recorded by staff), or a slip number' }
         narration: { type: [string, 'null'], maxLength: 200 }
         bankAccount: { $ref: '#/components/schemas/BankAccountInput', description: 'The payee (required for BANK_TRANSFER_OUT) or the remitter (optional for BANK_TRANSFER_IN)' }
+        viaGateway:
+          type: [boolean, 'null']
+          description: >-
+            BANK_TRANSFER_OUT only (P4-2b): send it through the payment gateway. No UTR is needed: the bank gives it when it pays. The money
+            leaves the account when the request is applied and waits in transit; if the payout fails or comes back, it returns to the account.
     DepositTransferInput:
       type: object
       required: [fromAccountId, toAccountId, amount]
@@ -6328,8 +6421,10 @@ components:
         reversedBy: { type: [string, 'null'], format: uuid }
         reversalReason: { type: [string, 'null'] }
         createdBy: { type: string, description: The maker }
-        approvalId: { type: [string, 'null'] }
+        approvalId: { type: [string, 'null'], description: 'null for a movement the system made (a gateway transfer returned, a payment link)' }
         createdAt: { type: string, format: date-time }
+        gatewayStatus: { type: [string, 'null'], enum: [SENT, PAID, RETURNED, null], description: A transfer out sent through the payment gateway (P4-2b) }
+        gatewayUtr: { type: [string, 'null'], description: The bank's UTR once the gateway transfer is paid }
     DepositHold:
       type: object
       properties:
@@ -6439,7 +6534,7 @@ components:
         payoutAccountId: { type: [string, 'null'] }
         payoutAccountNo: { type: [string, 'null'] }
         maturityInstruction: { type: string, enum: [PAY_OUT, RENEW_PRINCIPAL, RENEW_WITH_INTEREST] }
-        fundingSource: { type: [string, 'null'], enum: [ACCOUNT, CASH, BANK_TRANSFER, null] }
+        fundingSource: { type: [string, 'null'], enum: [ACCOUNT, CASH, BANK_TRANSFER, GATEWAY, null], description: GATEWAY - paid through a payment link (P4-2b) }
         fundingAccountNo: { type: [string, 'null'] }
         fundingReference: { type: [string, 'null'] }
         payoutBankAccountMasked: { type: [string, 'null'], description: Recorded at funding }

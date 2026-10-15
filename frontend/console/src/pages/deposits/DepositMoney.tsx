@@ -2,7 +2,9 @@ import { useState } from 'react';
 import {
   useCasaTransaction,
   useCasaTransfer,
+  useCreateDepositCollectionOrder,
   useDepositAccounts,
+  useDepositCollectionOrders,
   useDepositHolds,
   useDepositMovements,
   useFundTermDeposit,
@@ -12,10 +14,14 @@ import {
   useReverseMovement,
 } from '../../api/depositHooks';
 import type { Approval, BankAccountInput, DepositAccount, DepositFamily, DepositHold, DepositMovement } from '../../api/types';
-import { Banner, Button, Card, DateText, Dialog, EmptyState, Input, MoneyText, Select, Spinner, Table, Textarea, humanize, useToast } from '../../ui';
+import { Badge, Banner, Button, Card, Checkbox, DateText, DateTimeText, Dialog, EmptyState, Input, MoneyText, Select, Spinner, StatusBadge, Table, Textarea, humanize, useToast } from '../../ui';
 import { Problems } from './common';
 
-/** Money on deposit accounts (P4-2): balances, statement, holds, and the dialogs that move money or hold it. */
+/**
+ * Money on deposit accounts (P4-2): balances, statement, holds, and the dialogs that move money or hold it. P4-2b adds
+ * transfers out through the payment gateway and payment links (a savings or current account credited, a booked term
+ * deposit funded).
+ */
 
 const KIND_LABEL: Record<string, string> = {
   CASH_DEPOSIT: 'Cash deposit',
@@ -29,6 +35,11 @@ const KIND_LABEL: Record<string, string> = {
   REVERSAL: 'Reversal',
 };
 const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
+const GATEWAY: Record<string, { label: string; tone: 'info' | 'ok' | 'warn' }> = {
+  SENT: { label: 'With the gateway', tone: 'info' },
+  PAID: { label: 'Paid by the bank', tone: 'ok' },
+  RETURNED: { label: 'Came back', tone: 'warn' },
+};
 
 /** Below the threshold money posts at once (APPROVED); from it upward it waits for a checker. */
 export function useMoneyToast() {
@@ -60,7 +71,8 @@ export function BalanceCard({ a }: { a: DepositAccount }) {
 export function MovementsCard({ family, accountId, canReverse }: { family: DepositFamily; accountId: string; canReverse: boolean }) {
   const q = useDepositMovements(family, accountId);
   const [reversing, setReversing] = useState<DepositMovement | null>(null);
-  const reversible = (m: DepositMovement) => canReverse && family === 'CASA' && m.kind !== 'REVERSAL' && !m.reversedBy && m.kind !== 'FUNDING' && m.kind !== 'FUNDING_PAID';
+  const reversible = (m: DepositMovement) =>
+    canReverse && family === 'CASA' && m.kind !== 'REVERSAL' && !m.reversedBy && m.kind !== 'FUNDING' && m.kind !== 'FUNDING_PAID' && !m.gatewayStatus;
   return (
     <Card title="Statement" flush>
       {q.isLoading ? (
@@ -85,6 +97,13 @@ export function MovementsCard({ family, accountId, canReverse }: { family: Depos
                   {m.narration && <span className="muted"> · {m.narration}</span>}
                   {m.reversalReason && <span className="muted"> · {m.reversalReason}</span>}
                   {m.reversedBy && <span className="muted"> (reversed)</span>}
+                  {m.gatewayStatus && (
+                    <>
+                      {' '}
+                      <Badge tone={GATEWAY[m.gatewayStatus].tone}>{GATEWAY[m.gatewayStatus].label}</Badge>
+                      {m.gatewayUtr && <span className="muted"> UTR {m.gatewayUtr}</span>}
+                    </>
+                  )}
                 </span>
               ),
             },
@@ -216,16 +235,18 @@ function BankAccountFields({ value, onChange, legend }: { value: BankAccountInpu
 const emptyBank = (): BankAccountInput => ({ holderName: '', accountNumber: '', ifsc: '' });
 const bankGiven = (b: BankAccountInput) => !!(b.holderName.trim() || b.accountNumber.trim() || b.ifsc.trim());
 
-/** Cash in or out, or a bank transfer in or out recorded with the bank's reference (UTR). */
+/** Cash in or out, a bank transfer in or out recorded with the bank's reference (UTR), or a transfer out sent through the gateway. */
 export function TransactionDialog({ account, type: initial, onClose }: { account: DepositAccount; type: string; onClose: () => void }) {
   const [type, setType] = useState(initial);
   const [amount, setAmount] = useState('');
   const [reference, setReference] = useState('');
   const [narration, setNarration] = useState('');
   const [bank, setBank] = useState(emptyBank());
+  const [viaGateway, setViaGateway] = useState(false);
   const m = useCasaTransaction(account.id!);
   const toast = useMoneyToast();
   const isBank = type.startsWith('BANK_');
+  const gateway = viaGateway && type === 'BANK_TRANSFER_OUT';
   const submit = () =>
     m.mutate(
       {
@@ -234,6 +255,7 @@ export function TransactionDialog({ account, type: initial, onClose }: { account
         reference: reference.trim() || null,
         narration: narration.trim() || null,
         ...(isBank && bankGiven(bank) ? { bankAccount: { ...bank, accountNumber: bank.accountNumber.replace(/ /g, '') } } : {}),
+        ...(gateway ? { viaGateway: true } : {}),
       },
       { onSuccess: (a) => (toast(a, KIND_LABEL[type]), onClose()) },
     );
@@ -255,11 +277,25 @@ export function TransactionDialog({ account, type: initial, onClose }: { account
       <div className="form-grid">
         <Select label="Transaction" value={type} onChange={(e) => setType(e.target.value)} options={['CASH_DEPOSIT', 'CASH_WITHDRAWAL', 'BANK_TRANSFER_IN', 'BANK_TRANSFER_OUT'].map((t) => ({ value: t, label: KIND_LABEL[t] }))} />
         <Input label="Amount" required numeric inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} hint={`Available: ${account.availableBalance ?? '0'}`} />
-        <Input label={isBank ? 'UTR (the bank’s reference)' : 'Slip number'} required={isBank} maxLength={60} value={reference} onChange={(e) => setReference(e.target.value)} />
+        <Input
+          label={gateway ? 'Reference' : isBank ? 'UTR (the bank’s reference)' : 'Slip number'}
+          required={isBank && !gateway}
+          hint={gateway ? 'Optional: the bank gives the UTR when it pays' : undefined}
+          maxLength={60}
+          value={reference}
+          onChange={(e) => setReference(e.target.value)}
+        />
         <Input label="Narration" maxLength={200} value={narration} onChange={(e) => setNarration(e.target.value)} />
       </div>
+      {type === 'BANK_TRANSFER_OUT' && <Checkbox label="Send it through the payment gateway" checked={viaGateway} onChange={(e) => setViaGateway(e.target.checked)} />}
       {isBank && <BankAccountFields value={bank} onChange={setBank} legend={type === 'BANK_TRANSFER_OUT' ? 'Paid to (required)' : 'Received from (optional)'} />}
-      {isBank && <p className="muted">The transfer is recorded here once the bank has made it; sending it through the payment gateway comes later.</p>}
+      {isBank && (
+        <p className="muted">
+          {gateway
+            ? 'The money leaves the account when the request is applied and the gateway sends it; if the payout fails or the bank sends it back, it returns to the account.'
+            : 'The transfer is recorded here once the bank has made it.'}
+        </p>
+      )}
       <p className="muted">Below ₹2,00,000 it is posted at once (the tenant's starting rule); from that amount a checker approves it first.</p>
       <Problems error={m.error} title="The transaction cannot be made:" />
     </Dialog>
@@ -431,3 +467,92 @@ export function ReverseFundingDialog({ account, onClose }: { account: DepositAcc
 }
 
 export const kindLabel = (k: string | undefined) => KIND_LABEL[k ?? ''] ?? humanize(k ?? '');
+
+/** The payment links of an account: a savings or current account (credits) or a term deposit (its funding). */
+export function PaymentLinksCard({ family, accountId }: { family: DepositFamily; accountId: string }) {
+  const q = useDepositCollectionOrders(family, accountId);
+  const rows = q.data ?? [];
+  if (!q.isLoading && rows.length === 0) return null;
+  return (
+    <Card title="Payment links" flush>
+      {q.isLoading ? (
+        <Spinner />
+      ) : (
+        <Table
+          caption="Payment links"
+          captionHidden
+          columns={[
+            { key: 'ref', header: 'Reference', render: (o) => <span className="mono">{o.reference}</span> },
+            { key: 'amt', header: 'Amount', numeric: true, render: (o) => <MoneyText value={o.amount} /> },
+            { key: 'status', header: 'Status', render: (o) => <StatusBadge status={o.status ?? ''} /> },
+            {
+              key: 'url',
+              header: 'Link',
+              render: (o) => (o.paymentUrl && o.status === 'CREATED' ? <span className="mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>{o.paymentUrl}</span> : <span className="muted">—</span>),
+            },
+            { key: 'exp', header: 'Expires', render: (o) => <DateTimeText value={o.expiresAt} /> },
+            { key: 'by', header: 'Created', render: (o) => <span><DateTimeText value={o.createdAt} /> <span className="muted mono">{o.createdBy}</span></span> },
+          ]}
+          rows={rows}
+          rowKey={(o) => o.id ?? ''}
+        />
+      )}
+    </Card>
+  );
+}
+
+const METHODS = ['UPI', 'CARD', 'NETBANKING'] as const;
+
+/** A payment link the customer pays through the gateway: a credit to a savings or current account, or the funding of a booked deposit. */
+export function PaymentLinkDialog({ family, account, onClose }: { family: DepositFamily; account: DepositAccount; onClose: () => void }) {
+  const term = family === 'TERM_DEPOSIT';
+  const t = account.termDeposit;
+  const needsBank = term && t?.payoutTo === 'BANK_ACCOUNT' && !t?.payoutBankAccountMasked;
+  const [amount, setAmount] = useState('');
+  const [methods, setMethods] = useState<string[]>(['UPI']);
+  const [bank, setBank] = useState(emptyBank());
+  const m = useCreateDepositCollectionOrder(family, account.id!);
+  const toast = useToast();
+  const submit = () =>
+    m.mutate(
+      {
+        ...(term ? {} : { amount }),
+        methods: methods as Array<(typeof METHODS)[number]>,
+        ...(needsBank ? { payoutBankAccount: { ...bank, accountNumber: bank.accountNumber.replace(/ /g, '') } } : {}),
+      },
+      { onSuccess: (o) => (toast({ tone: 'success', message: `Payment link ${o.reference} created.` }), onClose()) },
+    );
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      wide={needsBank}
+      title={term ? `Payment link to fund deposit ${account.accountNo}` : `Payment link for account ${account.accountNo}`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={m.isPending} disabled={!term && !amount} onClick={submit}>
+            Create payment link
+          </Button>
+        </>
+      }
+    >
+      {term ? (
+        <p style={{ marginTop: 0 }}>
+          The customer pays the principal of <strong><MoneyText value={t?.principal} /></strong>. The deposit is funded on the business day the payment is posted, and its interest starts that day.
+        </p>
+      ) : (
+        <Input label="Amount" required numeric inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[,\s₹]/g, ''))} />
+      )}
+      <fieldset className="fieldset">
+        <legend>Payment methods</legend>
+        {METHODS.map((x) => (
+          <Checkbox key={x} label={x === 'NETBANKING' ? 'Net banking' : x === 'CARD' ? 'Card' : 'UPI'} checked={methods.includes(x)} onChange={(e) => setMethods(e.target.checked ? [...methods, x] : methods.filter((y) => y !== x))} />
+        ))}
+      </fieldset>
+      {needsBank && <BankAccountFields value={bank} onChange={setBank} legend="The depositor’s bank account (interest and maturity proceeds are paid to it)" />}
+      <p className="muted">A payment the account cannot take (a freeze, a deposit funded another way) goes to the unmatched receipts queue under Collections.</p>
+      <Problems error={m.error} title="The payment link cannot be created:" />
+    </Dialog>
+  );
+}
