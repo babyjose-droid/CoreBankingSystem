@@ -86,6 +86,7 @@ export const P = {
   casaHold: 'casa:hold',
   depositFund: 'deposit:fund',
   depositHold: 'deposit:hold',
+  depositTax: 'deposit:tax',
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];

@@ -52,7 +52,7 @@ export const DEMO_USERS: DemoUser[] = [
     role: 'Maker',
     description: 'Views everything, proposes and creates changes',
     homeBranch: 'HO',
-    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose, P.collectionCreate, P.mandateRegister, P.payoutBeneficiary, P.loanClassify, P.casaOpen, P.depositBook, P.casaTransact, P.casaHold, P.depositFund, P.depositHold],
+    permissions: [...VIEW_PERMISSIONS, ...PROPOSE_PERMISSIONS, P.limitPropose, P.collectionCreate, P.mandateRegister, P.payoutBeneficiary, P.loanClassify, P.casaOpen, P.depositBook, P.casaTransact, P.casaHold, P.depositFund, P.depositHold, P.depositTax],
     roles: ['MAKER'],
   },
   {

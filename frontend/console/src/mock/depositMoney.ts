@@ -13,6 +13,7 @@
 import type {
   BankAccountInput,
   DepositAccount,
+  TaxDeclaration,
   DepositHold,
   DepositHoldInput,
   DepositMovement,
@@ -35,6 +36,16 @@ export const DEPOSIT_CHECKER_FROM = '200000';
 export type MockMovement = DepositMovement & { accountId: string; lotId: string };
 export type MockHold = DepositHold & { accountId: string };
 export type MockDepositOrder = CollectionOrder & { depositAccountId: string; accountNo: string; purpose: 'CREDIT' | 'FUNDING' };
+export type MockDeclaration = TaxDeclaration & { customerId: string };
+export interface MockDeclarationRequest {
+  customerId: string;
+  customerNo: string;
+  taxYear: number;
+  receivedOn: string;
+  reference: string | null;
+  declarationId: string | null;
+  reason: string | null;
+}
 
 export interface MockBankAccount {
   last4: string;
@@ -105,7 +116,7 @@ const plain = (units: bigint) => {
 
 /** Checkers a deposit money request needs, as the tenant's starting rules (tenant V30). */
 export function depositCheckers(payload: ApprovalPayload, amount: string | null): number | null {
-  if (payload.kind === 'DEPOSIT_HOLD') return 1;
+  if (payload.kind === 'DEPOSIT_HOLD' || payload.kind === 'TDS_DECLARATION') return 1;
   if (payload.kind === 'DEPOSIT_TXN') return payload.txn.type === 'REVERSE' || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
   if (payload.kind === 'DEPOSIT_FUNDING') return payload.funding.reason !== null || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
   return null;
@@ -308,6 +319,24 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
     }
     return true;
   }
+  if (p.kind === 'TDS_DECLARATION') {
+    const d = p.declaration;
+    if (d.declarationId) {
+      const x = db.deposits.declarations.find((y) => y.id === d.declarationId);
+      if (!x || x.status !== 'ACTIVE') throw conflict('Conflict', 'the declaration is already revoked');
+      Object.assign(x, { status: 'REVOKED', revokedOn: db.businessDate, revokedBy: maker, revokeReason: d.reason });
+      approval.appliedRef = x.id!;
+    } else {
+      if (db.deposits.declarations.some((y) => y.customerId === d.customerId && y.taxYear === d.taxYear && y.status === 'ACTIVE')) {
+        throw conflict('Conflict', `Form 121 for ${taxYearLabel(d.taxYear)} is already recorded for this customer`);
+      }
+      const x: MockDeclaration = { id: uuid(), customerId: d.customerId, taxYear: d.taxYear, form: 'FORM_121', reference: d.reference, receivedOn: d.receivedOn,
+        status: 'ACTIVE', recordedBy: maker, revokedOn: null, revokedBy: null, revokeReason: null, createdAt: at };
+      db.deposits.declarations.unshift(x);
+      approval.appliedRef = x.id!;
+    }
+    return true;
+  }
   if (p.kind === 'DEPOSIT_FUNDING') {
     const f = p.funding;
     const d = findAccount(db, f.depositId, 'TERM_DEPOSIT');
@@ -398,6 +427,11 @@ function payOrders(db: MockDb, accountId: string): void {
     }
   }
 }
+
+// ---------- tax at source (P4-3b) ----------
+
+const taxYearOf = (iso: string) => (Number(iso.slice(5, 7)) >= 4 ? Number(iso.slice(0, 4)) : Number(iso.slice(0, 4)) - 1);
+const taxYearLabel = (y: number) => `${y}-${String(y + 1).slice(2)}`;
 
 // ---------- routes ----------
 
@@ -573,6 +607,65 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       return propose(user, 'DEPOSIT_HOLD', 'RELEASE', { kind: 'DEPOSIT_HOLD', hold: req }, { ...req }, { kind: h.kind, amount: h.amount, reason: h.reason, placedOn: h.placedOn }, h.id!);
     });
   }
+
+  const taxCustomer = (id: string | null) => {
+    const c = db.customers.find((x) => x.id === id);
+    if (!c) throw notFound(`customer ${id}`);
+    return c;
+  };
+  on('GET', '/api/v1/deposits/tax/declarations', ({ user, url }) => {
+    module('TD');
+    require(user, P.depositView);
+    const c = taxCustomer(url.searchParams.get('customerId'));
+    return ok(db.deposits.declarations.filter((d) => d.customerId === c.id).map(({ customerId: _c, ...d }) => d));
+  });
+  on('POST', '/api/v1/deposits/tax/declarations', ({ user, body }) => {
+    module('TD');
+    require(user, P.depositTax);
+    const b = (body ?? {}) as { customerId?: string; taxYear?: number | null; receivedOn?: string | null; reference?: string | null };
+    if (!b.customerId) throw invalid('customerId is required');
+    const c = taxCustomer(b.customerId);
+    const current = taxYearOf(db.businessDate);
+    const year = b.taxYear ?? current;
+    const problems: string[] = [];
+    if (c.input.customerType !== 'INDIVIDUAL') problems.push('Form 121 is a declaration by an individual');
+    if (!c.input.pan) problems.push("a declaration without a PAN is not valid; record the customer's PAN first");
+    if (year !== current && year !== current + 1) problems.push(`a declaration is recorded for the current tax year (${taxYearLabel(current)}) or the next`);
+    const reference = text(b.reference, 60, 'reference', problems);
+    const receivedOn = b.receivedOn || db.businessDate;
+    if (receivedOn > db.businessDate) problems.push('the date received is after the business date');
+    if (db.deposits.declarations.some((d) => d.customerId === c.id && d.taxYear === year && d.status === 'ACTIVE')) problems.push(`Form 121 for ${taxYearLabel(year)} is already recorded for this customer`);
+    refuseIfAny('the declaration cannot be recorded', problems);
+    const declaration: MockDeclarationRequest = { customerId: c.id, customerNo: c.customerNo, taxYear: year, receivedOn, reference, declarationId: null, reason: null };
+    return propose(user, 'TDS_DECLARATION', 'RECORD', { kind: 'TDS_DECLARATION', declaration }, { ...declaration }, null, c.id, null);
+  });
+  on('POST', '/api/v1/deposits/tax/declarations/{id}/revoke', ({ user, params, body }) => {
+    module('TD');
+    require(user, P.depositTax);
+    const d = db.deposits.declarations.find((x) => x.id === params.id);
+    if (!d) throw notFound(`tax declaration ${params.id}`);
+    const c = taxCustomer(d.customerId);
+    const problems: string[] = [];
+    if (d.status !== 'ACTIVE') problems.push('the declaration is already revoked');
+    const reason = text(((body ?? {}) as { reason?: string }).reason, 500, 'reason', problems);
+    if (!reason) problems.push('a reason is required');
+    refuseIfAny('the declaration cannot be revoked', problems);
+    const declaration: MockDeclarationRequest = { customerId: c.id, customerNo: c.customerNo, taxYear: d.taxYear!, receivedOn: d.receivedOn!, reference: d.reference ?? null, declarationId: d.id!, reason };
+    return propose(user, 'TDS_DECLARATION', 'REVOKE', { kind: 'TDS_DECLARATION', declaration }, { ...declaration }, { taxYear: d.taxYear, receivedOn: d.receivedOn }, d.id!, null);
+  });
+  on('GET', '/api/v1/deposits/tax/summary', ({ user, url }) => {
+    module('TD');
+    require(user, P.depositView);
+    const c = taxCustomer(url.searchParams.get('customerId'));
+    const year = url.searchParams.get('taxYear') ? Number(url.searchParams.get('taxYear')) : taxYearOf(db.businessDate);
+    const dob = c.input.dateOfBirth;
+    const senior = c.input.customerType === 'INDIVIDUAL' && !!dob && year + 1 - Number(dob.slice(0, 4)) - (dob.slice(5) > '03-31' ? 1 : 0) >= 60;
+    const bank = db.deposits.kind === 'BANK';
+    const decl = db.deposits.declarations.find((d) => d.customerId === c.id && d.taxYear === year && d.status === 'ACTIVE');
+    return ok({ customerId: c.id, customerNo: c.customerNo, name: [c.input.firstName, c.input.lastName].filter(Boolean).join(' '), taxYear: year, taxYearLabel: taxYearLabel(year),
+      senior, panOnFile: !!c.input.pan, declarationId: decl?.id ?? null, threshold: bank ? (senior ? '100000' : '50000') : '10000', ratePercent: c.input.pan ? '10' : '20',
+      interest: '0', tax: '0', quarters: [1, 2, 3, 4].map((quarter) => ({ quarter, interest: '0', tax: '0' })), accounts: [], credits: [] });
+  });
 
   on('POST', '/api/v1/deposits/accounts/{id}/fund', ({ user, params, body }) => {
     module('TD');

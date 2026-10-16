@@ -177,5 +177,9 @@ class InterestDayEndTest {
         DepositMovementsTest.leg(payout, DepositMovementsTest.FD.accountNo(), "2403", PostingLine.Side.DR, "1333.33");
         DepositMovementsTest.leg(payout, DepositMovementsTest.CA_MUM.accountNo(), "2402", PostingLine.Side.CR, "1333.33");
         assertEquals(4, payout.lines().size(), "inter-branch legs between HO and MUM");
+        TransactionLot tax = post.taxDeducted(DepositMovementsTest.FD, "2205", bd("6667"), "30010000000011", null);
+        assertEquals(DepositPostings.TAX_DEDUCTED, tax.type());
+        DepositMovementsTest.leg(tax, DepositMovementsTest.FD.accountNo(), "2403", PostingLine.Side.DR, "6667");
+        DepositMovementsTest.leg(tax, "2205", "2205", PostingLine.Side.CR, "6667");
     }
 }

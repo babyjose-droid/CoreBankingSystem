@@ -42,6 +42,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {term && a.status === 'BOOKED' && can(P.depositFund) && <Button onClick={() => setAction('LINK')}>Payment link</Button>}
       {term && active && can(P.depositHold) && <Button onClick={() => setAction('HOLD')}>Lien</Button>}
       {term && active && can(P.depositFund) && <Button variant="ghost" onClick={() => setAction('UNFUND')}>Reverse the funding</Button>}
+      {a.holders?.[0]?.customerId && modules.td && can(P.depositView) && <Link to={`/deposits/tax?customer=${a.holders[0].customerId}`}>Tax at source</Link>}
       <Link to={`/deposits/${familyPath(family)}`}>Back to the list</Link>
     </div>
   );

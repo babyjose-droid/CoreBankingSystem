@@ -24,6 +24,8 @@ import java.util.Objects;
  *     accrual             Dr interest expense (the product's head)   Cr interest payable
  *     credit              Dr interest payable                        Cr the account
  *     payout              Dr the term deposit                        Cr the savings or current account it is paid to
+ *   tax deducted at source on interest (P4-3b):
+ *                         Dr the account                             Cr TDS payable
  * </pre>
  * The reversal of any of them is the mirror lot ({@link TransactionLot#reversal}).
  */
@@ -41,6 +43,7 @@ public final class DepositPostings {
     public static final String INTEREST_ACCRUAL = "DEPOSIT_INTEREST_ACCRUAL";
     public static final String INTEREST_CREDIT = "DEPOSIT_INTEREST_CREDIT";
     public static final String INTEREST_PAYOUT = "DEPOSIT_INTEREST_PAYOUT";
+    public static final String TAX_DEDUCTED = "DEPOSIT_TAX_DEDUCTED";
 
     /**
      * The cash and bank heads a deposit movement settles against, the inter-branch head a transfer between branches uses,
@@ -210,6 +213,15 @@ public final class DepositPostings {
         return lot(INTEREST_PAYOUT, reference)
                 .debit(deposit.branch(), deposit.gl(), deposit.accountNo(), amount, "Interest paid to " + to.accountNo())
                 .credit(to.branch(), to.gl(), to.accountNo(), amount, "Interest on deposit " + deposit.accountNo())
+                .build();
+    }
+
+    /** Tax deducted at source from interest just credited: out of the account, owed to the government until paid over. */
+    public TransactionLot taxDeducted(Leg account, String tdsPayableGl, BigDecimal amount, String reference, String narration) {
+        positive(amount);
+        return lot(TAX_DEDUCTED, reference)
+                .debit(account.branch(), account.gl(), account.accountNo(), amount, text(narration, "Tax deducted at source"))
+                .credit(account.branch(), tdsPayableGl, tdsPayableGl, amount, "Tax deducted at source from " + account.accountNo())
                 .build();
     }
 }

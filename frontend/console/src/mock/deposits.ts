@@ -23,7 +23,7 @@ import { addDays, ageOn, toUtcDate, fromUtcDate } from '../lib/dates';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
 import { BANK_RULES, NBFC_DEPOSIT_RULES, type MockDepositRule } from './depositRules';
-import { applyDepositMoneyApproval, balanceView, onHold, registerDepositMoneyRoutes, type MockDepositOrder, type MockHold, type MockMovement } from './depositMoney';
+import { applyDepositMoneyApproval, balanceView, onHold, registerDepositMoneyRoutes, type MockDeclaration, type MockDepositOrder, type MockHold, type MockMovement } from './depositMoney';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
 export type DepositKind = 'BANK' | 'NBFC_DEPOSIT' | null;
@@ -64,6 +64,8 @@ export interface DepositsDb {
   movementSeq: number;
   /** P4-2b: payment links for deposit accounts (the simulator pays them when they are next listed). */
   orders: MockDepositOrder[];
+  /** P4-3b: Form 121 declarations (there is no deposit day-end in mock mode, so no tax is deducted). */
+  declarations: MockDeclaration[];
 }
 
 type Result = { status: number; body: unknown };
@@ -95,7 +97,7 @@ const TENANT_KIND: Record<DemoTenantCode, { kind: DepositKind; modules: string[]
 };
 
 export function emptyDeposits(): DepositsDb {
-  return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0, orders: [] };
+  return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0, orders: [], declarations: [] };
 }
 
 /** Makes the mock database the given demo tenant: its name, its deposit modules and its demo deposit products. */

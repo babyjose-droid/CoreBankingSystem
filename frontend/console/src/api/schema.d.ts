@@ -3966,6 +3966,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/deposits/tax/declarations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A depositor's Form 121 declarations, newest tax year first
+         * @description Module TD. Permission deposit:view.
+         */
+        get: operations["listTaxDeclarations"];
+        put?: never;
+        /**
+         * Propose recording a depositor's Form 121 for a tax year
+         * @description Module TD. Permission deposit:tax. A checker approves it. From then no tax is deducted from the depositor's interest for that tax year. Refused for a non-individual, without a PAN on file, or when one is already in force.
+         */
+        post: operations["proposeTaxDeclaration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/tax/declarations/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose revoking a Form 121 declaration, with a reason
+         * @description Module TD. Permission deposit:tax. A checker approves it; the next credit deducts the tax for the whole year so far.
+         */
+        post: operations["proposeTaxDeclarationRevoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/tax/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A depositor's tax at source for a tax year
+         * @description Module TD. Permission deposit:view. The current tax year by default.
+         */
+        get: operations["getDepositTaxSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/deposits/accounts/{id}/collection-orders": {
         parameters: {
             query?: never;
@@ -6473,10 +6537,10 @@ export interface components {
             /** Format: date */
             valueDate?: string;
             /**
-             * @description INTEREST_CREDIT and INTEREST_PAYOUT are made by the day-end (P4-3)
+             * @description INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end
              * @enum {string}
              */
-            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT";
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED";
             /** @enum {string} */
             direction?: "DEBIT" | "CREDIT";
             amount?: components["schemas"]["Money"];
@@ -6517,6 +6581,8 @@ export interface components {
             accrued?: components["schemas"]["Money"];
             /** @description Credited to the account so far */
             credited?: components["schemas"]["Money"];
+            /** @description Tax deducted at source from the interest so far (P4-3b) */
+            taxDeducted?: components["schemas"]["Money"];
             /** Format: date */
             lastCreditOn?: string | null;
             /** Format: date */
@@ -6537,7 +6603,7 @@ export interface components {
             events?: {
                 id?: number;
                 /** @enum {string} */
-                kind?: "ACCRUAL" | "CREDIT" | "PAYOUT" | "PAYOUT_HELD" | "REVERSAL";
+                kind?: "ACCRUAL" | "CREDIT" | "PAYOUT" | "PAYOUT_HELD" | "REVERSAL" | "TAX";
                 /** Format: date */
                 periodFrom?: string | null;
                 /** Format: date */
@@ -6549,6 +6615,87 @@ export interface components {
                 note?: string | null;
                 /** Format: uuid */
                 movementId?: string | null;
+            }[];
+        };
+        /** @description Form 121 (it replaced Forms 15G and 15H from 1-Apr-2026), declared by an individual with a PAN on file. */
+        TaxDeclarationInput: {
+            /** Format: uuid */
+            customerId: string;
+            /** @description The tax year by the calendar year it starts in (2026 = 2026-27); the current one by default, or the next */
+            taxYear?: number | null;
+            /**
+             * Format: date
+             * @description The business date by default
+             */
+            receivedOn?: string | null;
+            /** @description The acknowledgement or receipt number */
+            reference?: string | null;
+        };
+        TaxDeclaration: {
+            /** Format: uuid */
+            id?: string;
+            taxYear?: number;
+            /** @enum {string} */
+            form?: "FORM_121";
+            reference?: string | null;
+            /** Format: date */
+            receivedOn?: string;
+            /** @enum {string} */
+            status?: "ACTIVE" | "REVOKED";
+            recordedBy?: string;
+            /** Format: date */
+            revokedOn?: string | null;
+            revokedBy?: string | null;
+            revokeReason?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        /** @description A depositor's tax at source for a tax year, across all their deposits here (P4-3b). */
+        DepositTaxSummary: {
+            /** Format: uuid */
+            customerId?: string;
+            customerNo?: string;
+            name?: string;
+            taxYear?: number;
+            /** @description 2026-27 */
+            taxYearLabel?: string;
+            senior?: boolean;
+            panOnFile?: boolean;
+            /**
+             * Format: uuid
+             * @description Form 121 in force for the year
+             */
+            declarationId?: string | null;
+            threshold?: components["schemas"]["Money"];
+            /** @description The rate that applies (the higher one without a PAN) */
+            ratePercent?: string;
+            interest?: components["schemas"]["Money"];
+            tax?: components["schemas"]["Money"];
+            quarters?: {
+                /** @description 1 = April to June */
+                quarter?: number;
+                interest?: components["schemas"]["Money"];
+                tax?: components["schemas"]["Money"];
+            }[];
+            accounts?: {
+                /** Format: uuid */
+                accountId?: string;
+                accountNo?: string;
+                /** @enum {string} */
+                family?: "CASA" | "TERM_DEPOSIT";
+                interest?: components["schemas"]["Money"];
+                tax?: components["schemas"]["Money"];
+            }[];
+            credits?: {
+                id?: number;
+                /** Format: date */
+                businessDate?: string;
+                accountNo?: string;
+                interest?: components["schemas"]["Money"];
+                tax?: components["schemas"]["Money"];
+                ratePercent?: string | null;
+                /** @enum {string} */
+                basis?: "EXEMPT" | "DECLARATION" | "BELOW_THRESHOLD" | "RATE" | "NO_PAN_RATE";
             }[];
         };
         DepositHold: {
@@ -12387,6 +12534,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DepositInterest"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTaxDeclarations: {
+        parameters: {
+            query: {
+                customerId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxDeclaration"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTaxDeclaration: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaxDeclarationInput"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Approval"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTaxDeclarationRevoke: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Approval"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getDepositTaxSummary: {
+        parameters: {
+            query: {
+                customerId: string;
+                taxYear?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositTaxSummary"];
                 };
             };
             default: components["responses"]["Problem"];

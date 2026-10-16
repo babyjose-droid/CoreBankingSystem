@@ -230,7 +230,8 @@
               "casa:transact",
               "casa:hold",
               "deposit:fund",
-              "deposit:hold"
+              "deposit:hold",
+              "deposit:tax"
             ]
           }
         }
@@ -445,7 +446,8 @@
               "casa:transact",
               "casa:hold",
               "deposit:fund",
-              "deposit:hold"
+              "deposit:hold",
+              "deposit:tax"
             ]
           }
         }
@@ -956,6 +958,12 @@
           "description": "Propose a lien on a term deposit, or its release (maker)",
           "composite": false,
           "clientRole": true
+        },
+        {
+          "name": "deposit:tax",
+          "description": "Propose recording or revoking a depositor's Form 121 declaration (maker)",
+          "composite": false,
+          "clientRole": true
         }
       ]
     }
@@ -1337,7 +1345,8 @@
           "casa:transact",
           "casa:hold",
           "deposit:fund",
-          "deposit:hold"
+          "deposit:hold",
+          "deposit:tax"
         ]
       },
       {
@@ -1425,7 +1434,8 @@
           "casa:transact",
           "casa:hold",
           "deposit:fund",
-          "deposit:hold"
+          "deposit:hold",
+          "deposit:tax"
         ]
       },
       {
@@ -1514,7 +1524,8 @@
           "casa:transact",
           "casa:hold",
           "deposit:fund",
-          "deposit:hold"
+          "deposit:hold",
+          "deposit:tax"
         ]
       }
     ]

@@ -9,6 +9,9 @@ import type {
   DepositHoldInput,
   DepositInterest,
   DepositMovement,
+  DepositTaxSummary,
+  TaxDeclaration,
+  TaxDeclarationInput,
   DepositTransactionInput,
   DepositTransferInput,
   TermDepositFundingInput,
@@ -318,5 +321,54 @@ export function useDepositInterest(family: DepositFamily, id: string | undefined
           : api.GET('/api/v1/deposits/accounts/{id}/interest', { params: { path: { id: id! } } })) as never,
       ),
     enabled: !!id && enabled,
+  });
+}
+
+// ---- tax deducted at source (P4-3b) -------------------------------------------------------------------------------
+
+export function useTaxDeclarations(customerId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['tax-declarations', customerId],
+    queryFn: () => unwrap<TaxDeclaration[]>(api.GET('/api/v1/deposits/tax/declarations', { params: { query: { customerId: customerId! } } }) as never),
+    enabled: !!customerId,
+  });
+}
+
+export function useTaxSummary(customerId: string | undefined, taxYear: number | null) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['tax-summary', customerId, taxYear],
+    queryFn: () =>
+      unwrap<DepositTaxSummary>(
+        api.GET('/api/v1/deposits/tax/summary', { params: { query: { customerId: customerId!, ...(taxYear ? { taxYear } : {}) } } }) as never,
+      ),
+    enabled: !!customerId,
+  });
+}
+
+function useTaxInvalidation() {
+  const qc = useQueryClient();
+  return () => {
+    for (const key of ['tax-declarations', 'tax-summary', 'approvals']) qc.invalidateQueries({ queryKey: [key] });
+  };
+}
+
+export function useProposeTaxDeclaration() {
+  const api = useApiClient();
+  const done = useTaxInvalidation();
+  return useMutation({
+    mutationFn: (body: TaxDeclarationInput) => unwrap<Approval>(api.POST('/api/v1/deposits/tax/declarations', { body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useRevokeTaxDeclaration() {
+  const api = useApiClient();
+  const done = useTaxInvalidation();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/deposits/tax/declarations/{id}/revoke', { params: { path: { id } }, body: { reason } }) as never),
+    onSuccess: done,
   });
 }

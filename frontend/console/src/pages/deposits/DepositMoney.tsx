@@ -36,6 +36,7 @@ const KIND_LABEL: Record<string, string> = {
   REVERSAL: 'Reversal',
   INTEREST_CREDIT: 'Interest',
   INTEREST_PAYOUT: 'Interest paid out',
+  TAX_DEDUCTED: 'Tax deducted at source',
 };
 const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
 const GATEWAY: Record<string, { label: string; tone: 'info' | 'ok' | 'warn' }> = {
@@ -75,7 +76,7 @@ export function MovementsCard({ family, accountId, canReverse }: { family: Depos
   const q = useDepositMovements(family, accountId);
   const [reversing, setReversing] = useState<DepositMovement | null>(null);
   const reversible = (m: DepositMovement) =>
-    canReverse && family === 'CASA' && !['REVERSAL', 'FUNDING', 'FUNDING_PAID', 'INTEREST_CREDIT', 'INTEREST_PAYOUT'].includes(m.kind ?? '') && !m.reversedBy && !m.gatewayStatus;
+    canReverse && family === 'CASA' && !['REVERSAL', 'FUNDING', 'FUNDING_PAID', 'INTEREST_CREDIT', 'INTEREST_PAYOUT', 'TAX_DEDUCTED'].includes(m.kind ?? '') && !m.reversedBy && !m.gatewayStatus;
   return (
     <Card title="Statement" flush>
       {q.isLoading ? (
@@ -566,6 +567,7 @@ const EVENT_LABEL: Record<string, string> = {
   PAYOUT: 'Paid out',
   PAYOUT_HELD: 'Kept on the deposit',
   REVERSAL: 'Accrual taken back',
+  TAX: 'Tax deducted at source',
 };
 
 /** Interest (P4-3): what the day-end has accrued and credited, the next credit date and, for a term deposit, its periods. */
@@ -586,6 +588,8 @@ export function InterestCard({ family, accountId }: { family: DepositFamily; acc
             <dd>{i.accruedThrough ? <DateText value={i.accruedThrough} /> : <span className="muted">The first day-end has not run yet</span>}</dd>
             <dt>Credited so far</dt>
             <dd data-testid="interest-credited"><MoneyText value={i.credited} />{i.lastCreditOn && <span className="muted"> · last for the period to <DateText value={i.lastCreditOn} /></span>}</dd>
+            <dt>Tax deducted at source</dt>
+            <dd data-testid="interest-tax"><MoneyText value={i.taxDeducted} /></dd>
             <dt>Next credit</dt>
             <dd data-testid="interest-next">{i.nextCreditDate ? <DateText value={i.nextCreditDate} /> : '—'}</dd>
           </dl>
@@ -616,7 +620,7 @@ export function InterestCard({ family, accountId }: { family: DepositFamily; acc
               rowKey={(e) => String(e.id)}
             />
           )}
-          <p className="muted" style={{ margin: 0 }}>The day-end accrues interest every calendar day and credits it on the credit dates. Tax deducted at source is not deducted yet.</p>
+          <p className="muted" style={{ margin: 0 }}>The day-end accrues interest every calendar day and credits it on the credit dates, then deducts tax at source when the depositor's interest for the tax year passes the threshold (none with Form 121).</p>
         </div>
       )}
     </Card>

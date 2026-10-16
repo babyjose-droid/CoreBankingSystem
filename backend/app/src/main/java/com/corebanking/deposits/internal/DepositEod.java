@@ -5,6 +5,7 @@ import com.corebanking.calc.Rounding;
 import com.corebanking.deposits.DepositEvents;
 import com.corebanking.deposits.DepositPostings;
 import com.corebanking.deposits.DepositPostings.Leg;
+import com.corebanking.deposits.DepositRules;
 import com.corebanking.deposits.InterestDayEnd;
 import com.corebanking.deposits.InterestDayEnd.Accrual;
 import com.corebanking.deposits.InterestDayEnd.Credit;
@@ -42,7 +43,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * Per account, in its own transaction: an account that fails is an EOD exception, the run goes on (above 5% failing
  * the step fails). The days after the business date up to the next working day are closed with it, as for loans.
  * Re-running a day posts nothing: each account records the last day it accrued. Amounts come from the deposit engine
- * ({@link InterestDayEnd}); tax deducted at source is not deducted yet (P4-3b).
+ * ({@link InterestDayEnd}). Tax deducted at source (P4-3b) is taken from each credit of a product that deducts it
+ * ({@link TaxAtSource}); a payout pays what is left.
  */
 @Component
 class DepositEod implements EodStepProvider {
@@ -88,6 +90,7 @@ class DepositEod implements EodStepProvider {
             private String payable;
             private int yearStart;
             private DepositPostings post;
+            private DepositRules rules;
 
             @Override public String name() { return "Savings interest (accrual and credit)"; }
 
@@ -96,25 +99,27 @@ class DepositEod implements EodStepProvider {
                 payable = payableGl(jdbc);
                 yearStart = yearStartMonth(jdbc);
                 post = new DepositPostings(DepositMoneyService.headsOf(jdbc), ctx.businessDate());
-                return jdbc.queryForList("""
+                List<String> ids = jdbc.queryForList("""
                         SELECT a.id::text FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code
                          WHERE a.family = 'CASA' AND a.status = 'ACTIVE' AND p.interest_bands IS NOT NULL ORDER BY a.account_no
                         """, String.class);
+                rules = ids.isEmpty() ? null : new DepositRuleSets(jdbc).current();
+                return ids;
             }
 
             @Override public void process(EodEngine.Context ctx, String accountId) {
-                tx.executeWithoutResult(s -> savingsDayEnd(jdbc, post, payable, yearStart, ctx.businessDate(), through, UUID.fromString(accountId)));
+                tx.executeWithoutResult(s -> savingsDayEnd(jdbc, post, rules, payable, yearStart, ctx.businessDate(), through, UUID.fromString(accountId)));
             }
 
             @Override public double maxFailureRatio() { return 0.05; }
         };
     }
 
-    static void savingsDayEnd(JdbcTemplate jdbc, DepositPostings post, String payable, int yearStart, LocalDate businessDate, LocalDate through,
-                              UUID id) {
+    static void savingsDayEnd(JdbcTemplate jdbc, DepositPostings post, DepositRules rules, String payable, int yearStart, LocalDate businessDate,
+                              LocalDate through, UUID id) {
         Map<String, Object> a = jdbc.queryForMap("""
                 SELECT a.account_no, a.branch_code, p.gl_liability, p.gl_interest_expense, p.band_mode, p.day_count, p.interest_posting_months,
-                       p.rounding, p.code
+                       p.rounding, p.code, p.tds_applicable, a.customer_id
                   FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code WHERE a.id = ? FOR UPDATE OF a
                 """, id);
         String accountNo = (String) a.get("account_no");
@@ -169,6 +174,9 @@ class DepositEod implements EodStepProvider {
                 PostingService.postDuringEod(jdbc, lot, USER);
                 UUID m = movement(jdbc, id, "INTEREST_CREDIT", "CREDIT", c.amount(), lot.id(), null, narration, null, null);
                 event(jdbc, id, "CREDIT", c.periodFrom(), c.periodEnd(), null, c.amount(), lot.id(), m, businessDate, null);
+                if (Boolean.TRUE.equals(a.get("tds_applicable")) && rules.flag(DepositRules.TDS_ON_SAVINGS, false)) {
+                    TaxAtSource.onCredit(jdbc, post, rules, businessDate, id, (UUID) a.get("customer_id"), leg, c.amount(), m, c.periodFrom(), c.periodEnd());
+                }
                 credited = credited.add(c.amount());
                 lastCredit = c.periodEnd();
                 jdbc.update("UPDATE deposits.casa_account SET next_interest_date = ? WHERE account_id = ?",
@@ -192,6 +200,7 @@ class DepositEod implements EodStepProvider {
             private LocalDate through;
             private String payable;
             private DepositPostings post;
+            private DepositRules rules;
 
             @Override public String name() { return "Term deposit interest (accrual, credit, payout)"; }
 
@@ -199,14 +208,16 @@ class DepositEod implements EodStepProvider {
                 through = through(jdbc, ctx.businessDate());
                 payable = payableGl(jdbc);
                 post = new DepositPostings(DepositMoneyService.headsOf(jdbc), ctx.businessDate());
-                return jdbc.queryForList("""
+                List<String> ids = jdbc.queryForList("""
                         SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
                          WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.start_date IS NOT NULL ORDER BY a.account_no
                         """, String.class);
+                rules = ids.isEmpty() ? null : new DepositRuleSets(jdbc).current();
+                return ids;
             }
 
             @Override public void process(EodEngine.Context ctx, String accountId) {
-                tx.executeWithoutResult(s -> depositDayEnd(jdbc, outbox, post, payable, ctx.businessDate(), through, UUID.fromString(accountId)));
+                tx.executeWithoutResult(s -> depositDayEnd(jdbc, outbox, post, rules, payable, ctx.businessDate(), through, UUID.fromString(accountId)));
             }
 
             @Override public double maxFailureRatio() { return 0.05; }
@@ -224,12 +235,12 @@ class DepositEod implements EodStepProvider {
             SELECT a.account_no, a.branch_code, a.customer_id, p.gl_liability, p.gl_interest_expense, t.principal::numeric AS principal,
                    t.rate_percent::numeric AS rate_percent, t.start_date, t.maturity_date, t.interest_period_months, t.cumulative, t.day_count, t.rounding,
                    t.payout_to, t.payout_account_id, t.payout_bank_name_cipher, t.payout_bank_account_cipher, t.payout_bank_account_last4,
-                   t.payout_bank_ifsc
+                   t.payout_bank_ifsc, t.tds_applicable
               FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id JOIN deposits.product p ON p.code = a.product_code
              WHERE a.id = ?""";
 
-    static void depositDayEnd(JdbcTemplate jdbc, Outbox outbox, DepositPostings post, String payable, LocalDate businessDate, LocalDate through,
-                              UUID id) {
+    static void depositDayEnd(JdbcTemplate jdbc, Outbox outbox, DepositPostings post, DepositRules rules, String payable, LocalDate businessDate,
+                              LocalDate through, UUID id) {
         Map<String, Object> t = jdbc.queryForMap(TERMS + " FOR UPDATE OF a", id);
         TermDeposit.Terms terms = terms(t);
         List<Map<String, Object>> st = jdbc.queryForList("""
@@ -259,9 +270,13 @@ class DepositEod implements EodStepProvider {
                 PostingService.postDuringEod(jdbc, lot, USER);
                 UUID m = movement(jdbc, id, "INTEREST_CREDIT", "CREDIT", c.amount(), lot.id(), null, narration, null, null);
                 event(jdbc, id, "CREDIT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), m, businessDate, null);
+                BigDecimal tax = Boolean.TRUE.equals(t.get("tds_applicable"))
+                        ? TaxAtSource.onCredit(jdbc, post, rules, businessDate, id, (UUID) t.get("customer_id"), leg, c.amount(), m, c.periodFrom(), c.periodEnd())
+                        : BigDecimal.ZERO;
                 credited = credited.add(c.amount());
                 lastCredit = c.periodEnd();
-                if (!terms.cumulative()) payOut(jdbc, outbox, post, businessDate, id, t, leg, c);
+                BigDecimal net = c.amount().subtract(tax);
+                if (!terms.cumulative() && net.signum() > 0) payOut(jdbc, outbox, post, businessDate, id, t, leg, new Credit(c.number(), c.periodFrom(), c.periodEnd(), net));
             }
         }
         InterestDayEnd.DepositState s = r.state();
@@ -332,7 +347,7 @@ class DepositEod implements EodStepProvider {
 
     // ================================================================================================ rows
 
-    private static UUID movement(JdbcTemplate jdbc, UUID accountId, String kind, String direction, BigDecimal amount, UUID lotId, UUID counterparty,
+    static UUID movement(JdbcTemplate jdbc, UUID accountId, String kind, String direction, BigDecimal amount, UUID lotId, UUID counterparty,
                                  String narration, byte[][] party, String[] partyClear) {
         UUID id = UUID.randomUUID();
         jdbc.update("""

@@ -296,6 +296,16 @@ class DepositRulesTest {
         eq("0", tds(BANK, RESIDENT, "60000", "6000", "0"));
     }
 
+    @Test void the_basis_of_each_deduction_is_told() {
+        YearToDate before = new YearToDate(bd("45000"), bd("0"));
+        assertEquals(TdsOnInterest.Basis.BELOW_THRESHOLD, TdsOnInterest.basis(BANK, RESIDENT, before, bd("5000")));
+        assertEquals(TdsOnInterest.Basis.RATE, TdsOnInterest.basis(BANK, RESIDENT, before, bd("6000")));
+        assertEquals(TdsOnInterest.Basis.NO_PAN_RATE, TdsOnInterest.basis(BANK, new Payee(false, false, true, false), before, bd("6000")));
+        assertEquals(TdsOnInterest.Basis.DECLARATION, TdsOnInterest.basis(BANK, new Payee(false, true, true, false), before, bd("60000")));
+        assertEquals(TdsOnInterest.Basis.EXEMPT, TdsOnInterest.basis(BANK, new Payee(false, true, false, true), before, bd("60000")));
+        assertEquals(TdsOnInterest.Basis.BELOW_THRESHOLD, TdsOnInterest.basis(BANK, SENIOR, new YearToDate(bd("90000"), bd("0")), bd("10000")));
+    }
+
     @Test void tax_year_and_senior_citizen() {
         assertEquals(2026, TdsOnInterest.taxYearStarting(LocalDate.of(2027, 3, 31)));
         assertEquals(2027, TdsOnInterest.taxYearStarting(LocalDate.of(2027, 4, 1)));

@@ -4270,6 +4270,79 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DepositInterest' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/tax/declarations:
+    get:
+      tags: [Deposits]
+      operationId: listTaxDeclarations
+      summary: A depositor's Form 121 declarations, newest tax year first
+      description: Module TD. Permission deposit:view.
+      parameters:
+        - { name: customerId, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/TaxDeclaration' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeTaxDeclaration
+      summary: Propose recording a depositor's Form 121 for a tax year
+      description: >-
+        Module TD. Permission deposit:tax. A checker approves it. From then no tax is deducted from the depositor's interest
+        for that tax year. Refused for a non-individual, without a PAN on file, or when one is already in force.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaxDeclarationInput' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/tax/declarations/{id}/revoke:
+    post:
+      tags: [Deposits]
+      operationId: proposeTaxDeclarationRevoke
+      summary: Propose revoking a Form 121 declaration, with a reason
+      description: Module TD. Permission deposit:tax. A checker approves it; the next credit deducts the tax for the whole year so far.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/tax/summary:
+    get:
+      tags: [Deposits]
+      operationId: getDepositTaxSummary
+      summary: A depositor's tax at source for a tax year
+      description: Module TD. Permission deposit:view. The current tax year by default.
+      parameters:
+        - { name: customerId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: taxYear, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositTaxSummary' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/accounts/{id}/collection-orders:
     post:
       tags: [Deposits]
@@ -6438,7 +6511,7 @@ components:
         seq: { type: integer, description: The order movements were made in }
         businessDate: { type: string, format: date }
         valueDate: { type: string, format: date }
-        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT], description: 'INTEREST_CREDIT and INTEREST_PAYOUT are made by the day-end (P4-3)' }
+        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED], description: 'INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end' }
         direction: { type: string, enum: [DEBIT, CREDIT] }
         amount: { $ref: '#/components/schemas/Money' }
         balanceAfter: { $ref: '#/components/schemas/Money' }
@@ -6464,6 +6537,7 @@ components:
         accruedThrough: { type: [string, 'null'], format: date, description: The last day accrued; null before the first day-end }
         accrued: { $ref: '#/components/schemas/Money', description: Accrued and not yet credited }
         credited: { $ref: '#/components/schemas/Money', description: Credited to the account so far }
+        taxDeducted: { $ref: '#/components/schemas/Money', description: 'Tax deducted at source from the interest so far (P4-3b)' }
         lastCreditOn: { type: [string, 'null'], format: date }
         nextCreditDate: { type: [string, 'null'], format: date }
         schedule:
@@ -6485,7 +6559,7 @@ components:
             type: object
             properties:
               id: { type: integer }
-              kind: { type: string, enum: [ACCRUAL, CREDIT, PAYOUT, PAYOUT_HELD, REVERSAL] }
+              kind: { type: string, enum: [ACCRUAL, CREDIT, PAYOUT, PAYOUT_HELD, REVERSAL, TAX] }
               periodFrom: { type: [string, 'null'], format: date }
               periodTo: { type: [string, 'null'], format: date }
               periodNo: { type: [integer, 'null'] }
@@ -6493,6 +6567,75 @@ components:
               businessDate: { type: string, format: date }
               note: { type: [string, 'null'] }
               movementId: { type: [string, 'null'], format: uuid }
+    TaxDeclarationInput:
+      type: object
+      required: [customerId]
+      description: Form 121 (it replaced Forms 15G and 15H from 1-Apr-2026), declared by an individual with a PAN on file.
+      properties:
+        customerId: { type: string, format: uuid }
+        taxYear: { type: [integer, 'null'], description: 'The tax year by the calendar year it starts in (2026 = 2026-27); the current one by default, or the next' }
+        receivedOn: { type: [string, 'null'], format: date, description: The business date by default }
+        reference: { type: [string, 'null'], maxLength: 60, description: The acknowledgement or receipt number }
+    TaxDeclaration:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        taxYear: { type: integer }
+        form: { type: string, enum: [FORM_121] }
+        reference: { type: [string, 'null'] }
+        receivedOn: { type: string, format: date }
+        status: { type: string, enum: [ACTIVE, REVOKED] }
+        recordedBy: { type: string }
+        revokedOn: { type: [string, 'null'], format: date }
+        revokedBy: { type: [string, 'null'] }
+        revokeReason: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    DepositTaxSummary:
+      type: object
+      description: A depositor's tax at source for a tax year, across all their deposits here (P4-3b).
+      properties:
+        customerId: { type: string, format: uuid }
+        customerNo: { type: string }
+        name: { type: string }
+        taxYear: { type: integer }
+        taxYearLabel: { type: string, description: '2026-27' }
+        senior: { type: boolean }
+        panOnFile: { type: boolean }
+        declarationId: { type: [string, 'null'], format: uuid, description: Form 121 in force for the year }
+        threshold: { $ref: '#/components/schemas/Money' }
+        ratePercent: { type: string, description: The rate that applies (the higher one without a PAN) }
+        interest: { $ref: '#/components/schemas/Money' }
+        tax: { $ref: '#/components/schemas/Money' }
+        quarters:
+          type: array
+          items:
+            type: object
+            properties:
+              quarter: { type: integer, description: 1 = April to June }
+              interest: { $ref: '#/components/schemas/Money' }
+              tax: { $ref: '#/components/schemas/Money' }
+        accounts:
+          type: array
+          items:
+            type: object
+            properties:
+              accountId: { type: string, format: uuid }
+              accountNo: { type: string }
+              family: { type: string, enum: [CASA, TERM_DEPOSIT] }
+              interest: { $ref: '#/components/schemas/Money' }
+              tax: { $ref: '#/components/schemas/Money' }
+        credits:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              businessDate: { type: string, format: date }
+              accountNo: { type: string }
+              interest: { $ref: '#/components/schemas/Money' }
+              tax: { $ref: '#/components/schemas/Money' }
+              ratePercent: { type: [string, 'null'] }
+              basis: { type: string, enum: [EXEMPT, DECLARATION, BELOW_THRESHOLD, RATE, NO_PAN_RATE] }
     DepositHold:
       type: object
       properties:

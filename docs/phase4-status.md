@@ -1,6 +1,6 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 15-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 16-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
 
 | Increment | State |
 |-----------|-------|
@@ -8,7 +8,8 @@ Updated 15-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | P4-1 products and opening | Built, pushed (`586b8e8`), live-tested on the local stack on 11-Oct-2026 |
 | P4-2 money movement | Built and pushed (`cdbe397`, fix `fa9482d`); live-tested on the local stack on 14-Oct-2026 (32 of 32 after the fix) |
 | P4-2b gateway for deposits | Built, pushed (`a004bdf`), live-tested on the local stack on 15-Oct-2026 (40 of 40) |
-| P4-3 day-end interest | Interest built on 15-Oct-2026 (accrual, credit, payout, compounding); not yet pushed or live-tested. Tax deducted at source follows as P4-3b |
+| P4-3 day-end interest | Built, pushed (`4cb6da2`), live-tested on the local stack on 15-Oct-2026 (17 of 17) |
+| P4-3b tax deducted at source | Built on 16-Oct-2026 (tax ledger, thresholds, Form 121, deduction at credit); not yet pushed or live-tested |
 | P4-4 to P4-7 | Not started |
 
 ## Decisions taken on 10-Oct-2026
@@ -327,7 +328,53 @@ Interest on deposits now accrues and is credited at end of day. P4-3 is delivere
 
 ### Not verified here
 - **Gradle and Spring**, the real EOD engine and its scheduling: the steps were called by the test as the engine calls them.
-- **Live stack:** not yet run. `p4-3-smoke.py` runs one end of day on demo-bank and demo-nbfc-d (the business date moves on and cannot be moved back) and checks the figures.
 
-### Next: P4-3b
-Tax deducted at source on deposit interest: the depositor's interest per tax year across deposits, thresholds by payer type and age, Form 121 declarations, deduction on credit or payout (2205), tax certificate data. Next tenant migration: V33; next control migration: V5.
+### Verified after the push (15-Oct-2026)
+- **Local stack.** `4cb6da2` built; V32 applied to the three tenants.
+- **Live test** (`p4-3-smoke.py`): 17 of 17. One real end of day on demo-bank and demo-nbfc-d (both COMPLETED; business date now 1-Jul-2026). Savings 20010000000013: 30 June ended the quarter, one day's interest 47.38 credited as worked out from the product (5,47,499.98 → 5,47,547.36), shown in the statement. First day accrued exactly as worked out from each deposit's periods: 4.82 and 20.65 (demo-bank), 4.66 and 11.99 (demo-nbfc-d); next credit 30-Sep-2026. No exceptions; trial balances balanced (bank 8,00,620.41; NBFC 70,016.65).
+- **Not covered live:** payout deposits (none on the local stack; their first credit needs about 30 day-ends) and the console Interest card by eye.
+
+## Increment P4-3b: tax deducted at source
+
+Tax is now deducted at source from deposit interest when the day-end credits it (section 393 of the Income-tax Act, 2025; rules of the rule set, all still unverified: open item P4-02).
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `TdsOnInterest` (from P4-0) decides the tax; new `basis` says why (exempt, Form 121, within the threshold, at the rate, at the higher rate without a PAN). `DepositPostings.taxDeducted`: Dr the account / Cr TDS payable.
+
+**Tenant database** (`V33__deposit_tax_at_source.sql`)
+- Settings `deposits.gl.tds-payable` (2205, added to a deposit tenant that lacked it) and `deposits.tds.rounding` (to the rupee).
+- Movement `TAX_DEDUCTED` on a savings or current account or a funded deposit (a freeze does not stop it).
+- `deposits.tds_ledger`: every interest credit of a product that deducts tax, with the tax (zero or not), the basis, the rate, the payee's senior and PAN status and the declaration in force; never changed. `deposits.tds_problems()` checks the TDS payable head against it, per branch.
+- `deposits.tds_declaration`: Form 121 per depositor and tax year, one in force at a time, only for an individual with a PAN, revoked once (with a reason) and never deleted. Approval rule: a checker for recording and for revoking.
+
+**Application**
+- `TaxAtSource`, called by the day-end after each interest credit of a product that deducts tax (term deposits with `tds_applicable`; savings only when the rule `tds.on-savings-interest` is 1, which it is not): the payee is the first holder; their interest for the tax year is added up across all their deposits here; the tax is deducted from the account and recorded; a payout deposit pays what is left.
+- `DepositTaxService` and `DepositTaxController`: `GET`/`POST /api/v1/deposits/tax/declarations`, `POST /api/v1/deposits/tax/declarations/{id}/revoke`, `GET /api/v1/deposits/tax/summary` (the depositor's year: threshold and rate that apply, interest and tax by quarter, by account and per credit with its basis). New permission `deposit:tax` (MAKER and TENANT_ADMIN) in the three demo realms; the realms must be reloaded.
+- The interest view shows the tax deducted; a staff reversal of a deduction is refused.
+
+**Console**
+- A "Tax at source" page (Deposits menu, and a link on an account page): pick a depositor; their tax year (interest, tax, threshold, rate, Form 121), by quarter and per credit; Form 121 declarations with Record and Revoke (maker-checker).
+- The Interest card shows the tax deducted; the statement names it.
+
+### Choices made in this increment (to confirm)
+- **Tax is deducted when interest is credited**, not on interest accrued and not yet credited. A deposit that credits its interest only at maturity (period 0) is taxed only then: see open item P4-17.
+- **The payee is the first holder** of a joint account.
+- **A deduction is rounded to the rupee.**
+- **Form 121** is recorded for the current tax year or the next, with an acknowledgement number; the document itself is not stored yet.
+- **Revoking Form 121** catches the year's tax up from the next credit (never more than that credit).
+- **Paying the tax over to the government** (challans, returns, certificates in Form 16A's successor) is not built: the payable head only accumulates.
+
+### Tests
+- **Engine:** 82 tests in `deposits-core` (1 new for the basis, one more posting check).
+- **Tenant database:** 23 checks in the new `deposits_tax_test.sql`; all 25 suites pass.
+- **Application services:** 28 checks in the build sandbox, playing the day-end from 30 June to 31 August on a bank database with deposits of 1 crore paying monthly (66,666.67 a month): a resident crosses 50,000 on the first credit (6,667 deducted, 59,999.67 paid out) and pays 6,666 on the second; a senior crosses 1,00,000 on the second (13,333 on the whole year); Form 121 deducts nothing until revoked, then the year is caught up (13,333); no PAN: 20% (13,333, and the gateway payout sends what is left); Form 121 refusals; the depositor's tax record by quarter; every invariant, including TDS payable against the ledger. The P4-1, P4-2, P4-2b and P4-3 checks still pass.
+- **Console:** 2 new tests; the whole suite, typecheck and build pass.
+- **API contract:** 4 new operations; lint clean; every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring**, the real EOD run, and the realm import with the new permission.
+- **Live stack:** the local deposits earn far less than the 50,000 threshold in a year, so the live test cannot see a deduction from interest alone in a few day-ends; `p4-3b-smoke.py` records and revokes Form 121 through maker-checker, reads the depositor's tax record, and runs one day-end to check that nothing fails and the books (and TDS payable) agree.
+
+### Next: P4-4
+Lifecycle: charges with GST, minimum balance, closure; premature withdrawal (both rule sets), maturity, renewal, overdue deposits, maturity notices. Next tenant migration: V34; next control migration: V5.

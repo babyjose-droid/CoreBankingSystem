@@ -678,6 +678,8 @@ public class DepositMoneyService implements DepositOperations {
         m.put("accrued", DepositRuleSets.plain(s == null ? BigDecimal.ZERO : (BigDecimal) s.get("accrued")));
         m.put("credited", DepositRuleSets.plain(s == null ? BigDecimal.ZERO : (BigDecimal) s.get("credited")));
         m.put("lastCreditOn", s == null ? null : s.get("last_credit"));
+        m.put("taxDeducted", DepositRuleSets.plain(jdbc.queryForObject(
+                "SELECT coalesce(sum(tax), 0)::numeric FROM deposits.tds_ledger WHERE account_id = ?", BigDecimal.class, accountId)));
         if (DepositProductService.CASA.equals(a.family())) {
             m.put("nextCreditDate", jdbc.queryForObject("SELECT next_interest_date::text FROM deposits.casa_account WHERE account_id = ?", String.class, accountId));
             m.put("schedule", List.of());
@@ -826,8 +828,8 @@ public class DepositMoneyService implements DepositOperations {
         }
         if (!out.isEmpty()) return out;
         List<Movement> lot = lotMovements(m.lotId());
-        if (lot.stream().anyMatch(x -> "INTEREST_CREDIT".equals(x.kind()) || "INTEREST_PAYOUT".equals(x.kind()))) {
-            out.add("interest credited or paid out by the day-end is not reversed by hand");
+        if (lot.stream().anyMatch(x -> Set.of("INTEREST_CREDIT", "INTEREST_PAYOUT", "TAX_DEDUCTED").contains(x.kind()))) {
+            out.add("interest credited or paid out, and tax deducted, by the day-end are not reversed by hand");
             return out;
         }
         for (Movement each : lot) {

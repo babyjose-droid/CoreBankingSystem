@@ -27,7 +27,30 @@ public final class TdsOnInterest {
         public static final YearToDate NONE = new YearToDate(BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
+    /** Why the tax on a credit is what it is: shown on the depositor's tax record. */
+    public enum Basis {
+        /** A payee to whom no deduction applies. */
+        EXEMPT,
+        /** Form 121 for the tax year, with a PAN. */
+        DECLARATION,
+        /** The year's interest so far, this credit included, is within the threshold. */
+        BELOW_THRESHOLD,
+        /** Deducted at the rate. */
+        RATE,
+        /** Deducted at the higher rate: no PAN on file. */
+        NO_PAN_RATE
+    }
+
     private TdsOnInterest() {}
+
+    /** The basis {@link #deduct} applies, in the same order of tests. */
+    public static Basis basis(DepositRules rules, Payee payee, YearToDate before, BigDecimal interestNow) {
+        if (payee.exempt()) return Basis.EXEMPT;
+        if (payee.declarationOnFile() && payee.panOnFile()) return Basis.DECLARATION;
+        BigDecimal threshold = rules.required(payee.seniorCitizen() ? DepositRules.TDS_THRESHOLD_SENIOR : DepositRules.TDS_THRESHOLD);
+        if (before.interest().add(interestNow).compareTo(threshold) <= 0) return Basis.BELOW_THRESHOLD;
+        return payee.panOnFile() ? Basis.RATE : Basis.NO_PAN_RATE;
+    }
 
     /** Tax to deduct from {@code interestNow}. Never more than the interest itself; a shortfall is caught up next time. */
     public static BigDecimal deduct(DepositRules rules, Payee payee, YearToDate before, BigDecimal interestNow, Rounding rounding) {

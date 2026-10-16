@@ -296,3 +296,43 @@ describe('interest (P4-3)', () => {
     expect(screen.getByTestId('interest-next')).toHaveTextContent(/30.*Sep.*2026/);
   });
 });
+
+describe('tax at source (P4-3b)', () => {
+  it('records Form 121 through maker-checker and refuses a second one or a past year', async () => {
+    const server = bank();
+    const anu = customer(server, 'Anu');
+    const res = await mockCall(server, 'maker', 'POST', '/api/v1/deposits/tax/declarations', { customerId: anu.id, reference: 'CLAUDE-TEST ACK-1' });
+    expect(res.body).toMatchObject({ status: 'PENDING', entityType: 'TDS_DECLARATION', action: 'RECORD' });
+    expect((await mockCall(server, 'maker', 'POST', '/api/v1/deposits/tax/declarations', { customerId: anu.id, taxYear: 2025 })).body.problems)
+      .toEqual(['a declaration is recorded for the current tax year (2026-27) or the next']);
+    await approveLast(server, 'TDS_DECLARATION');
+    const list = (await mockCall(server, 'auditor', 'GET', `/api/v1/deposits/tax/declarations?customerId=${anu.id}`)).body;
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ taxYear: 2026, status: 'ACTIVE', reference: 'CLAUDE-TEST ACK-1' });
+    expect((await mockCall(server, 'maker', 'POST', '/api/v1/deposits/tax/declarations', { customerId: anu.id })).body.problems)
+      .toEqual(['Form 121 for 2026-27 is already recorded for this customer']);
+    const summary = (await mockCall(server, 'maker', 'GET', `/api/v1/deposits/tax/summary?customerId=${anu.id}`)).body;
+    expect(summary).toMatchObject({ taxYear: 2026, taxYearLabel: '2026-27', panOnFile: true, threshold: '50000', ratePercent: '10', declarationId: list[0].id });
+  });
+
+  it('the tax page shows a depositor’s year and lets a maker record and revoke Form 121', async () => {
+    const user = userEvent.setup();
+    const server = bank();
+    const anu = customer(server, 'Anu');
+    renderApp({ user: 'maker', route: `/deposits/tax?customer=${anu.id}`, server });
+    expect(await screen.findByTestId('tax-deducted')).toHaveTextContent('0.00');
+    expect(screen.getByTestId('tax-declaration')).toHaveTextContent('None');
+    await user.click(screen.getByRole('button', { name: 'Record Form 121' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/^Acknowledgement/), 'CLAUDE-TEST ACK-9');
+    await user.click(within(dialog).getByRole('button', { name: 'Submit for approval' }));
+    expect(await screen.findByText('Form 121 sent for approval.')).toBeInTheDocument();
+    await approveLast(server, 'TDS_DECLARATION');
+    const d = server.db.deposits.declarations[0];
+    expect(d).toMatchObject({ reference: 'CLAUDE-TEST ACK-9', status: 'ACTIVE' });
+    const revoke = await mockCall(server, 'maker', 'POST', `/api/v1/deposits/tax/declarations/${d.id}/revoke`, { reason: 'income above the limit' });
+    expect(revoke.body).toMatchObject({ status: 'PENDING', action: 'REVOKE' });
+    await approveLast(server, 'TDS_DECLARATION');
+    expect(server.db.deposits.declarations[0]).toMatchObject({ status: 'REVOKED', revokeReason: 'income above the limit' });
+  });
+});
