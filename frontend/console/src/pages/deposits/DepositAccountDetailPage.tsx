@@ -1,17 +1,16 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
-import { useDepositAccount, useDepositRules } from '../../api/depositHooks';
+import { useDepositAccount, useDepositProduct, useDepositRules } from '../../api/depositHooks';
 import { useMe } from '../../api/hooks';
 import type { DepositFamily } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
+import { CasaCloseDialog, ChargesCard, ClosureCard, DepositCloseDialog, INSTRUCTION_LABEL, InstructionDialog, RenewDialog } from './DepositLifecycle';
 import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, InterestCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
 
-type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | null;
+type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | 'CLOSE' | 'INSTRUCTION' | 'RENEW' | null;
 const SOURCE: Record<string, string> = { ACCOUNT: 'From account', CASH: 'In cash', BANK_TRANSFER: 'By bank transfer', GATEWAY: 'Through a payment link' };
-
-const INSTRUCTION: Record<string, string> = { PAY_OUT: 'Pay out', RENEW_PRINCIPAL: 'Renew the principal, pay out the interest', RENEW_WITH_INTEREST: 'Renew the principal with the interest' };
 
 export function DepositAccountDetailPage({ family }: { family: DepositFamily }) {
   const { id } = useParams();
@@ -20,6 +19,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
   const me = useMe().data!;
   const modules = useDepositModules();
   const [action, setAction] = useState<Action>(null);
+  const product = useDepositProduct(family, q.data?.productCode);
   if (q.isLoading) return <Spinner />;
   if (q.error || !q.data) return <ErrorBanner error={q.error ?? new Error('Not found')} />;
   const a = q.data;
@@ -27,6 +27,9 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
   const term = family === 'TERM_DEPOSIT';
   const can = (p: string) => hasPermission(me.permissions, p);
   const active = a.status === 'ACTIVE';
+  const matured = a.status === 'MATURED';
+  const isNbfc = rules.data?.kind === 'NBFC_DEPOSIT';
+  const beforeMaturity = !!t?.funded && !!t.maturityDate && a.status === 'ACTIVE';
   const actions = (
     <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
       {!term && active && can(P.casaTransact) && (
@@ -42,6 +45,10 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {term && a.status === 'BOOKED' && can(P.depositFund) && <Button onClick={() => setAction('LINK')}>Payment link</Button>}
       {term && active && can(P.depositHold) && <Button onClick={() => setAction('HOLD')}>Lien</Button>}
       {term && active && can(P.depositFund) && <Button variant="ghost" onClick={() => setAction('UNFUND')}>Reverse the funding</Button>}
+      {term && beforeMaturity && can(P.depositFund) && <Button onClick={() => setAction('INSTRUCTION')}>Maturity instruction</Button>}
+      {term && (active || matured) && can(P.depositFund) && <Button variant={matured ? 'primary' : 'ghost'} onClick={() => setAction('CLOSE')}>{matured ? 'Pay out' : 'Close the deposit'}</Button>}
+      {term && matured && can(P.depositFund) && <Button onClick={() => setAction('RENEW')}>Renew</Button>}
+      {!term && active && can(P.casaTransact) && <Button variant="ghost" onClick={() => setAction('CLOSE')}>Close the account</Button>}
       {a.holders?.[0]?.customerId && modules.td && can(P.depositView) && <Link to={`/deposits/tax?customer=${a.holders[0].customerId}`}>Tax at source</Link>}
       <Link to={`/deposits/${familyPath(family)}`}>Back to the list</Link>
     </div>
@@ -55,6 +62,8 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       />
       {term && a.status === 'BOOKED' && <Banner tone="info">This deposit is booked and waits for its funds. Interest starts on the funding date; the dates and figures below are for funding on <DateText value={t?.figuresFrom} />.</Banner>}
       {term && <NotInsured rules={rules.data} />}
+      {matured && <Banner tone="warn">This deposit has matured and is waiting to be paid out or renewed{isNbfc ? '' : '; it earns overdue interest as the rule set says until it is'}.</Banner>}
+      {a.closure && <ClosureCard closure={a.closure} />}
       {(a.freezes ?? []).length > 0 && <Banner tone="warn">This account is under a {(a.freezes ?? []).map((f) => humanize(f).toLowerCase()).join(' and a ')}.</Banner>}
       <div className="grid-cards">
         {(!term || a.status !== 'BOOKED') && <BalanceCard a={a} />}
@@ -131,13 +140,14 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
                 </>
               )}
               <dt>At maturity</dt>
-              <dd>{INSTRUCTION[t.maturityInstruction ?? 'PAY_OUT']}</dd>
+              <dd data-testid="maturity-instruction">{INSTRUCTION_LABEL[t.maturityInstruction ?? 'PAY_OUT']}</dd>
             </dl>
           </Card>
         )}
       </div>
       {((!term && a.nextInterestDate) || (term && t?.funded)) && <InterestCard family={family} accountId={a.id!} />}
       {(!term || a.status !== 'BOOKED') && <MovementsCard family={family} accountId={a.id!} canReverse={can(P.casaTransact)} />}
+      {!term && a.status !== 'BOOKED' && <ChargesCard account={a} product={product.data} canLevy={can(P.casaTransact)} />}
       <PaymentLinksCard family={family} accountId={a.id!} />
       <HoldsCard family={family} accountId={a.id!} canRelease={can(term ? P.depositHold : P.casaHold)} />
       <Card title="Holders" flush>
@@ -175,6 +185,9 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {action === 'HOLD' && <HoldDialog family={family} account={a} onClose={() => setAction(null)} />}
       {action === 'FUND' && <FundingDialog account={a} casaEnabled={modules.casa} onClose={() => setAction(null)} />}
       {action === 'UNFUND' && <ReverseFundingDialog account={a} onClose={() => setAction(null)} />}
+      {action === 'CLOSE' && (term ? <DepositCloseDialog account={a} isNbfc={isNbfc} onClose={() => setAction(null)} /> : <CasaCloseDialog account={a} onClose={() => setAction(null)} />)}
+      {action === 'INSTRUCTION' && <InstructionDialog account={a} isNbfc={isNbfc} renewalAllowed={product.data?.autoRenewalAllowed === true} onClose={() => setAction(null)} />}
+      {action === 'RENEW' && <RenewDialog account={a} isNbfc={isNbfc} onClose={() => setAction(null)} />}
       {action === 'LINK' && <PaymentLinkDialog family={family} account={a} onClose={() => setAction(null)} />}
     </div>
   );

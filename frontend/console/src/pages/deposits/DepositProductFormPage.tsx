@@ -25,6 +25,14 @@ interface Form {
   bands: Array<{ from: string; rate: string }>;
   bandMode: string;
   posting: string;
+  /** The schedule of charges (P4-4); empty strings for no charge. */
+  gst: string;
+  minPercent: string;
+  minMax: string;
+  closure: string;
+  closureFree: string;
+  closureUntil: string;
+  service: Array<{ code: string; name: string; amount: string }>;
   // term deposits
   minAmount: string;
   maxAmount: string;
@@ -58,6 +66,7 @@ function blank(family: DepositFamily): Form {
   return {
     code: '', name: '', productType: family === 'CASA' ? 'SAVINGS' : 'FD_CUMULATIVE', dayCount: 'ACTUAL_365', rounding: 'PAISE_HALF_UP', tds: family !== 'CASA',
     minBalance: '0', cheque: false, bands: [{ from: '0', rate: '' }], bandMode: 'WHOLE_BALANCE', posting: '3',
+    gst: '18', minPercent: '', minMax: '', closure: '', closureFree: '14', closureUntil: '', service: [],
     minAmount: '', maxAmount: '', minMonths: '12', minDays: '0', maxMonths: '60', maxDays: '0', period: '3',
     amounts: [a], tenures: [t], rates: {}, addOns: [], premature: true, penalty: '', prematureMinDays: '', renewal: false,
     glLiability: '', glInterestExpense: '',
@@ -83,7 +92,12 @@ function fromProduct(p: DepositProduct): Form {
     code: p.code ?? '', name: p.name ?? '', productType: p.productType ?? base.productType, dayCount: p.dayCount ?? 'ACTUAL_365', rounding: p.rounding ?? 'PAISE_HALF_UP',
     tds: p.tdsApplicable === true, minBalance: p.minBalance ?? '0', cheque: p.chequeFacility === true,
     bands: (p.interestBands ?? []).map((b) => ({ from: b.fromBalance ?? '0', rate: b.ratePercent ?? '' })), bandMode: p.bandMode ?? 'WHOLE_BALANCE',
-    posting: String(p.interestPostingMonths ?? 3), minAmount: p.minAmount ?? '', maxAmount: p.maxAmount ?? '',
+    posting: String(p.interestPostingMonths ?? 3),
+    gst: p.charges?.gstRatePercent ?? '18', minPercent: p.charges?.minBalancePercent ?? '', minMax: p.charges?.minBalanceMax ?? '', closure: p.charges?.closureAmount ?? '',
+    closureFree: p.charges?.closureFreeWithinDays == null ? '14' : String(p.charges.closureFreeWithinDays),
+    closureUntil: p.charges?.closureWithinDays == null ? '' : String(p.charges.closureWithinDays),
+    service: (p.charges?.service ?? []).map((x) => ({ code: x.code ?? '', name: x.name ?? '', amount: x.amount ?? '' })),
+    minAmount: p.minAmount ?? '', maxAmount: p.maxAmount ?? '',
     minMonths: String(p.minTenureMonths ?? 0), minDays: String(p.minTenureDays ?? 0), maxMonths: String(p.maxTenureMonths ?? 0), maxDays: String(p.maxTenureDays ?? 0),
     period: String(p.interestPeriodMonths ?? 3), amounts: amounts.length ? amounts : base.amounts, tenures: tenures.length ? tenures : base.tenures, rates,
     addOns: (p.addOns ?? []).map((a) => ({ code: a.code ?? '', percent: a.percent ?? '' })), premature: p.prematureAllowed !== false,
@@ -101,7 +115,7 @@ function toInput(family: DepositFamily, f: Form, prematureFixed: boolean): Depos
   if (family === 'CASA') {
     const bands = f.bands.filter((b) => b.from !== '' || b.rate !== '');
     return {
-      ...common, minBalance: f.minBalance || '0', chequeFacility: f.cheque,
+      ...common, minBalance: f.minBalance || '0', chequeFacility: f.cheque, charges: chargesInput(f),
       ...(bands.length
         ? { interestBands: bands.map((b) => ({ fromBalance: b.from, ratePercent: b.rate })), bandMode: f.bandMode as DepositProductInput['bandMode'],
             interestPostingMonths: Number(f.posting) as DepositProductInput['interestPostingMonths'], dayCount: f.dayCount as DepositProductInput['dayCount'], tdsApplicable: f.tds,
@@ -123,6 +137,18 @@ function toInput(family: DepositFamily, f: Form, prematureFixed: boolean): Depos
     addOns: f.addOns.filter((a) => a.code || a.percent).map((a) => ({ code: a.code, percent: a.percent })), prematureAllowed: f.premature,
     ...(!prematureFixed && f.premature ? { ...(f.penalty !== '' ? { prematurePenaltyPercent: f.penalty } : {}), ...(f.prematureMinDays !== '' ? { prematureMinDays: Number(f.prematureMinDays) } : {}) } : {}),
     autoRenewalAllowed: f.renewal, ...(f.glInterestExpense.trim() ? { glInterestExpense: f.glInterestExpense.trim() } : {}),
+  };
+}
+
+/** The schedule of charges as the API takes it; null when the product charges nothing. */
+function chargesInput(f: Form): DepositProductInput['charges'] {
+  const service = f.service.filter((x) => x.code || x.name || x.amount).map((x) => ({ code: x.code.trim().toUpperCase(), name: x.name.trim(), amount: x.amount }));
+  if (!f.minPercent && !f.minMax && !f.closure && service.length === 0) return null;
+  return {
+    gstRatePercent: f.gst || '18',
+    minBalancePercent: f.minPercent || null, minBalanceMax: f.minMax || null,
+    closureAmount: f.closure || null, closureFreeWithinDays: f.closure ? Number(f.closureFree || 0) : null, closureWithinDays: f.closure && f.closureUntil ? Number(f.closureUntil) : null,
+    service,
   };
 }
 
@@ -199,6 +225,38 @@ export function DepositProductFormPage() {
           )}
         </div>
       </Card>
+
+      {casa && (
+        <Card title="Charges">
+          <div className="stack">
+            <p className="muted" style={{ margin: 0 }}>Amounts are before GST; GST is added to every charge and invoiced. Leave a charge empty for none.</p>
+            <div className="form-grid">
+              <Input label="GST on charges (%)" numeric value={f.gst} onChange={(e) => set({ gst: decimal(e.target.value) })} />
+              <Input label="Minimum balance: % of the month's shortfall" numeric value={f.minPercent} onChange={(e) => set({ minPercent: decimal(e.target.value) })}
+                hint="Charged only after a month short and notified" />
+              <Input label="Minimum balance: most for a month" numeric value={f.minMax} onChange={(e) => set({ minMax: decimal(e.target.value) })} />
+              <Input label="Closure charge" numeric value={f.closure} onChange={(e) => set({ closure: decimal(e.target.value) })} />
+              {f.closure && (
+                <>
+                  <Input label="No closure charge within (days of opening)" numeric value={f.closureFree} onChange={(e) => set({ closureFree: digits(e.target.value) })} />
+                  <Input label="No closure charge after (days)" numeric hint="Empty for no limit" value={f.closureUntil} onChange={(e) => set({ closureUntil: digits(e.target.value) })} />
+                </>
+              )}
+            </div>
+            {f.service.map((x, i) => (
+              <div className="form-grid" key={i}>
+                <Input label={`Service charge ${i + 1}: code`} value={x.code} maxLength={30} onChange={(e) => set({ service: f.service.map((y, k) => (k === i ? { ...y, code: e.target.value.toUpperCase() } : y)) })} />
+                <Input label={`Service charge ${i + 1}: name`} value={x.name} maxLength={100} onChange={(e) => set({ service: f.service.map((y, k) => (k === i ? { ...y, name: e.target.value } : y)) })} />
+                <Input label={`Service charge ${i + 1}: amount`} numeric value={x.amount} onChange={(e) => set({ service: f.service.map((y, k) => (k === i ? { ...y, amount: decimal(e.target.value) } : y)) })} />
+                <div style={{ alignSelf: 'end' }}>
+                  <Button size="sm" aria-label={`Remove service charge ${i + 1}`} onClick={() => set({ service: f.service.filter((_, k) => k !== i) })}>Remove</Button>
+                </div>
+              </div>
+            ))}
+            <div><Button size="sm" onClick={() => set({ service: [...f.service, { code: '', name: '', amount: '' }] })}>Add service charge</Button></div>
+          </div>
+        </Card>
+      )}
 
       {casa ? (
         <Card title="Interest">

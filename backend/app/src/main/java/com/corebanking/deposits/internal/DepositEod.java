@@ -14,8 +14,8 @@ import com.corebanking.deposits.SavingsInterest;
 import com.corebanking.deposits.TermDeposit;
 import com.corebanking.eod.EodStepProvider;
 import com.corebanking.kernel.EodEngine;
-import com.corebanking.ledger.PostingService;
 import com.corebanking.ledger.TransactionLot;
+import com.corebanking.platform.Json;
 import com.corebanking.platform.Outbox;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -25,35 +25,44 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.Function;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Deposit interest at end of day (P4-3), after the lending steps:
+ * Deposits at end of day, after the lending steps:
  * <ol>
- *   <li><b>Savings interest</b>: every interest-bearing savings or current account accrues each calendar day's
+ *   <li><b>Savings interest</b> (P4-3): every interest-bearing savings or current account accrues each calendar day's
  *       interest on that day's closing balance, and on the last day of its interest period (quarterly by default,
  *       counted from the financial year) the period's interest is credited to it.</li>
- *   <li><b>Term deposit interest</b>: every funded deposit accrues day by day; on each credit date the period's
+ *   <li><b>Term deposit interest</b> (P4-3): every funded deposit accrues day by day; on each credit date the period's
  *       interest is credited to the deposit, and a deposit that pays its interest out pays it at once to the savings
  *       or current account named at booking, or to the depositor's bank account through the payment gateway.</li>
+ *   <li><b>Maturity</b> (P4-4): a deposit that has reached its maturity date is paid out or renewed as instructed;
+ *       when that cannot be done it waits as MATURED, to be paid when claimed ({@link DepositClosing#mature}).</li>
+ *   <li><b>Maturity notices</b> (P4-4): a deposit maturing within the notice period is noticed once, and the depositor
+ *       is told (message template DEPOSIT_MATURITY).</li>
+ *   <li><b>Minimum balance</b> (P4-4): at each month-end a savings or current account's average balance is compared
+ *       with its product's minimum, and a charge is levied when the shortfall follows a notified one.</li>
  * </ol>
  * Per account, in its own transaction: an account that fails is an EOD exception, the run goes on (above 5% failing
  * the step fails). The days after the business date up to the next working day are closed with it, as for loans.
- * Re-running a day posts nothing: each account records the last day it accrued. Amounts come from the deposit engine
- * ({@link InterestDayEnd}). Tax deducted at source (P4-3b) is taken from each credit of a product that deducts it
- * ({@link TaxAtSource}); a payout pays what is left.
+ * Re-running a day posts nothing: each account records the last day it accrued, a deposit is matured once, a notice is
+ * sent once and a month is evaluated once. Amounts come from the deposit engine ({@link InterestDayEnd}). Tax deducted
+ * at source (P4-3b) is taken from each credit of a product that deducts it ({@link TaxAtSource}); a payout pays what is left.
  */
 @Component
 class DepositEod implements EodStepProvider {
 
     static final String USER = "eod";
     private final Outbox outbox;
+    private final Json json;
 
-    DepositEod(Outbox outbox) {
+    DepositEod(Outbox outbox, Json json) {
         this.outbox = outbox;
+        this.json = json;
     }
 
     @Override
@@ -64,7 +73,7 @@ class DepositEod implements EodStepProvider {
     @Override
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-        return List.of(savings(jdbc, tx), termDeposits(jdbc, tx));
+        return List.of(savings(jdbc, tx), termDeposits(jdbc, tx), maturities(jdbc, tx), notices(jdbc, tx), minimumBalances(jdbc, tx));
     }
 
     /** The last calendar day this business date closes: the day before the next working day. */
@@ -82,72 +91,99 @@ class DepositEod implements EodStepProvider {
         return v.isEmpty() || v.get(0) == null ? 4 : v.get(0);
     }
 
+    /** One step over a list of accounts, each in its own transaction. */
+    private abstract static class AccountStep implements EodEngine.ItemStep {
+        final JdbcTemplate jdbc;
+        final TransactionTemplate tx;
+        DepositBooks books;
+        DepositRules rules;
+
+        AccountStep(JdbcTemplate jdbc, TransactionTemplate tx) {
+            this.jdbc = jdbc;
+            this.tx = tx;
+        }
+
+        abstract List<String> accounts(EodEngine.Context ctx);
+
+        abstract void each(EodEngine.Context ctx, UUID accountId);
+
+        @Override public List<String> items(EodEngine.Context ctx) {
+            books = DepositBooks.eod(jdbc, new DepositPostings(DepositMoneyService.headsOf(jdbc), ctx.businessDate()), ctx.businessDate());
+            List<String> ids = accounts(ctx);
+            rules = ids.isEmpty() ? null : new DepositRuleSets(jdbc).current();
+            return ids;
+        }
+
+        @Override public void process(EodEngine.Context ctx, String accountId) {
+            tx.executeWithoutResult(s -> each(ctx, UUID.fromString(accountId)));
+        }
+
+        @Override public double maxFailureRatio() { return 0.05; }
+    }
+
     // ================================================================================================ savings
 
     private EodEngine.ItemStep savings(JdbcTemplate jdbc, TransactionTemplate tx) {
-        return new EodEngine.ItemStep() {
+        return new AccountStep(jdbc, tx) {
             private LocalDate through;
-            private String payable;
-            private int yearStart;
-            private DepositPostings post;
-            private DepositRules rules;
 
             @Override public String name() { return "Savings interest (accrual and credit)"; }
 
-            @Override public List<String> items(EodEngine.Context ctx) {
+            @Override List<String> accounts(EodEngine.Context ctx) {
                 through = through(jdbc, ctx.businessDate());
-                payable = payableGl(jdbc);
-                yearStart = yearStartMonth(jdbc);
-                post = new DepositPostings(DepositMoneyService.headsOf(jdbc), ctx.businessDate());
-                List<String> ids = jdbc.queryForList("""
+                return jdbc.queryForList("""
                         SELECT a.id::text FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code
                          WHERE a.family = 'CASA' AND a.status = 'ACTIVE' AND p.interest_bands IS NOT NULL ORDER BY a.account_no
                         """, String.class);
-                rules = ids.isEmpty() ? null : new DepositRuleSets(jdbc).current();
-                return ids;
             }
 
-            @Override public void process(EodEngine.Context ctx, String accountId) {
-                tx.executeWithoutResult(s -> savingsDayEnd(jdbc, post, rules, payable, yearStart, ctx.businessDate(), through, UUID.fromString(accountId)));
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                savingsDayEnd(books, rules, through, id);
             }
-
-            @Override public double maxFailureRatio() { return 0.05; }
         };
     }
 
-    static void savingsDayEnd(JdbcTemplate jdbc, DepositPostings post, DepositRules rules, String payable, int yearStart, LocalDate businessDate,
-                              LocalDate through, UUID id) {
+    /**
+     * What the savings interest of an account works from: its product's bands, where its interest stands (null when
+     * nothing has ever been paid in) and its closing balance on each day from {@code firstDay}.
+     */
+    record SavingsContext(String accountNo, String branch, String gl, String expenseGl, UUID customerId, boolean tds, SavingsInterest interest,
+                          int postingMonths, Rounding rounding, InterestDayEnd.SavingsState state, Function<LocalDate, BigDecimal> balanceAt) {
+        Leg leg() { return new Leg(branch, gl, accountNo); }
+    }
+
+    static SavingsContext savingsContext(JdbcTemplate jdbc, UUID id) {
         Map<String, Object> a = jdbc.queryForMap("""
                 SELECT a.account_no, a.branch_code, p.gl_liability, p.gl_interest_expense, p.band_mode, p.day_count, p.interest_posting_months,
                        p.rounding, p.code, p.tds_applicable, a.customer_id
                   FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code WHERE a.id = ? FOR UPDATE OF a
                 """, id);
-        String accountNo = (String) a.get("account_no");
-        String branch = (String) a.get("branch_code");
         List<SavingsInterest.Band> bands = jdbc.query("""
                 SELECT (b->>'fromBalance')::numeric, (b->>'ratePercent')::numeric
                   FROM deposits.product p, jsonb_array_elements(p.interest_bands) b WHERE p.code = ?
                 """, (rs, i) -> new SavingsInterest.Band(rs.getBigDecimal(1), rs.getBigDecimal(2)), a.get("code"));
         SavingsInterest interest = new SavingsInterest(bands, SavingsInterest.BandMode.valueOf((String) a.get("band_mode")),
                 DayCount.valueOf(a.get("day_count") == null ? "ACTUAL_365" : (String) a.get("day_count")));
-
         List<Map<String, Object>> st = jdbc.queryForList("""
                 SELECT accrued_through, period_from, exact::numeric AS exact, accrued::numeric AS accrued FROM deposits.interest_state WHERE account_id = ?
                 """, id);
-        InterestDayEnd.SavingsState state;
+        InterestDayEnd.SavingsState state = null;
         if (st.isEmpty()) {
             LocalDate first = jdbc.queryForObject("SELECT min(business_date) FROM deposits.movement WHERE account_id = ?", LocalDate.class, id);
-            if (first == null) return;                                       // nothing has been paid in: nothing to earn
-            state = InterestDayEnd.SavingsState.startingOn(first);
+            if (first != null) state = InterestDayEnd.SavingsState.startingOn(first);
         } else {
             Map<String, Object> r = st.get(0);
             state = new InterestDayEnd.SavingsState(date(r.get("accrued_through")), (BigDecimal) r.get("exact"), (BigDecimal) r.get("accrued"),
                     date(r.get("period_from")));
         }
-        if (!through.isAfter(state.accruedThrough())) return;
+        Function<LocalDate, BigDecimal> balanceAt = state == null ? d -> BigDecimal.ZERO : closingBalances(jdbc, id, state.accruedThrough().plusDays(1));
+        return new SavingsContext((String) a.get("account_no"), (String) a.get("branch_code"), (String) a.get("gl_liability"),
+                (String) a.get("gl_interest_expense"), (UUID) a.get("customer_id"), Boolean.TRUE.equals(a.get("tds_applicable")), interest,
+                ((Number) a.get("interest_posting_months")).intValue(), Rounding.valueOf((String) a.get("rounding")), state, balanceAt);
+    }
 
-        // closing balance of each day: the balance after the day's last movement, carried forward
-        LocalDate firstDay = state.accruedThrough().plusDays(1);
+    /** The closing balance of an account on each day from {@code firstDay}: the balance after the day's last movement, carried forward. */
+    static Function<LocalDate, BigDecimal> closingBalances(JdbcTemplate jdbc, UUID id, LocalDate firstDay) {
         List<BigDecimal> opening = jdbc.queryForList("""
                 SELECT balance_after::numeric FROM deposits.movement WHERE account_id = ? AND business_date < ? ORDER BY seq DESC LIMIT 1
                 """, BigDecimal.class, id, firstDay);
@@ -155,32 +191,51 @@ class DepositEod implements EodStepProvider {
         jdbc.query("SELECT business_date, balance_after::numeric FROM deposits.movement WHERE account_id = ? AND business_date >= ? ORDER BY seq",
                 rs -> { closing.put(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2)); }, id, firstDay);
         BigDecimal before = opening.isEmpty() ? BigDecimal.ZERO : opening.get(0);
-        InterestDayEnd.SavingsResult r = InterestDayEnd.savings(interest, state, through, d -> {
+        return d -> {
             Map.Entry<LocalDate, BigDecimal> e = closing.floorEntry(d);
             return e == null ? before : e.getValue();
-        }, ((Number) a.get("interest_posting_months")).intValue(), yearStart, Rounding.valueOf((String) a.get("rounding")));
+        };
+    }
 
-        Leg leg = new Leg(branch, (String) a.get("gl_liability"), accountNo);
+    static void savingsDayEnd(DepositBooks b, DepositRules rules, LocalDate through, UUID id) {
+        JdbcTemplate jdbc = b.jdbc();
+        SavingsContext c = savingsContext(jdbc, id);
+        if (c.state() == null || !through.isAfter(c.state().accruedThrough())) return;   // nothing paid in, or the day is done
+        int yearStart = yearStartMonth(jdbc);
+        InterestDayEnd.SavingsResult r = InterestDayEnd.savings(c.interest(), c.state(), through, c.balanceAt(), c.postingMonths(), yearStart, c.rounding());
+        postSavings(b, rules, c, id, r, yearStart, true);
+    }
+
+    /**
+     * Posts the events of a savings run and saves where the interest stands. {@code moveNextDate}: after a credit the
+     * account's next interest date moves on (not when it is being closed).
+     */
+    static void postSavings(DepositBooks b, DepositRules rules, SavingsContext c, UUID id, InterestDayEnd.SavingsResult r, int yearStart, boolean moveNextDate) {
+        JdbcTemplate jdbc = b.jdbc();
+        String payable = payableGl(jdbc);
+        Leg leg = c.leg();
         BigDecimal credited = BigDecimal.ZERO;
         LocalDate lastCredit = null;
         for (Event e : r.events()) {
             if (e instanceof Accrual acc) {
-                TransactionLot lot = post.interestAccrual(branch, (String) a.get("gl_interest_expense"), payable, accountNo, acc.amount(), accountNo);
-                PostingService.postDuringEod(jdbc, lot, USER);
-                event(jdbc, id, "ACCRUAL", acc.from(), acc.to(), null, acc.amount(), lot.id(), null, businessDate, null);
-            } else if (e instanceof Credit c) {
-                String narration = "Interest " + c.periodFrom() + " to " + c.periodEnd();
-                TransactionLot lot = post.interestCredit(leg, payable, c.amount(), accountNo, narration);
-                PostingService.postDuringEod(jdbc, lot, USER);
-                UUID m = movement(jdbc, id, "INTEREST_CREDIT", "CREDIT", c.amount(), lot.id(), null, narration, null, null);
-                event(jdbc, id, "CREDIT", c.periodFrom(), c.periodEnd(), null, c.amount(), lot.id(), m, businessDate, null);
-                if (Boolean.TRUE.equals(a.get("tds_applicable")) && rules.flag(DepositRules.TDS_ON_SAVINGS, false)) {
-                    TaxAtSource.onCredit(jdbc, post, rules, businessDate, id, (UUID) a.get("customer_id"), leg, c.amount(), m, c.periodFrom(), c.periodEnd());
+                TransactionLot lot = b.post().interestAccrual(c.branch(), c.expenseGl(), payable, c.accountNo(), acc.amount(), c.accountNo());
+                b.post(lot);
+                b.event(id, "ACCRUAL", acc.from(), acc.to(), null, acc.amount(), lot.id(), null, null);
+            } else if (e instanceof Credit cr) {
+                String narration = "Interest " + cr.periodFrom() + " to " + cr.periodEnd();
+                TransactionLot lot = b.post().interestCredit(leg, payable, cr.amount(), c.accountNo(), narration);
+                b.post(lot);
+                UUID m = b.movement(id, "INTEREST_CREDIT", "CREDIT", cr.amount(), lot.id(), null, narration, null);
+                b.event(id, "CREDIT", cr.periodFrom(), cr.periodEnd(), null, cr.amount(), lot.id(), m, null);
+                if (c.tds() && rules.flag(DepositRules.TDS_ON_SAVINGS, false)) {
+                    TaxAtSource.onCredit(b, rules, id, c.customerId(), leg, cr.amount(), m, cr.periodFrom(), cr.periodEnd());
                 }
-                credited = credited.add(c.amount());
-                lastCredit = c.periodEnd();
-                jdbc.update("UPDATE deposits.casa_account SET next_interest_date = ? WHERE account_id = ?",
-                        SavingsInterest.periodEnd(c.periodEnd().plusDays(1), ((Number) a.get("interest_posting_months")).intValue(), yearStart), id);
+                credited = credited.add(cr.amount());
+                lastCredit = cr.periodEnd();
+                if (moveNextDate) {
+                    jdbc.update("UPDATE deposits.casa_account SET next_interest_date = ? WHERE account_id = ?",
+                            SavingsInterest.periodEnd(cr.periodEnd().plusDays(1), c.postingMonths(), yearStart), id);
+                }
             }
         }
         InterestDayEnd.SavingsState s = r.state();
@@ -196,31 +251,22 @@ class DepositEod implements EodStepProvider {
     // ================================================================================================ term deposits
 
     private EodEngine.ItemStep termDeposits(JdbcTemplate jdbc, TransactionTemplate tx) {
-        return new EodEngine.ItemStep() {
+        return new AccountStep(jdbc, tx) {
             private LocalDate through;
-            private String payable;
-            private DepositPostings post;
-            private DepositRules rules;
 
             @Override public String name() { return "Term deposit interest (accrual, credit, payout)"; }
 
-            @Override public List<String> items(EodEngine.Context ctx) {
+            @Override List<String> accounts(EodEngine.Context ctx) {
                 through = through(jdbc, ctx.businessDate());
-                payable = payableGl(jdbc);
-                post = new DepositPostings(DepositMoneyService.headsOf(jdbc), ctx.businessDate());
-                List<String> ids = jdbc.queryForList("""
+                return jdbc.queryForList("""
                         SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
                          WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.start_date IS NOT NULL ORDER BY a.account_no
                         """, String.class);
-                rules = ids.isEmpty() ? null : new DepositRuleSets(jdbc).current();
-                return ids;
             }
 
-            @Override public void process(EodEngine.Context ctx, String accountId) {
-                tx.executeWithoutResult(s -> depositDayEnd(jdbc, outbox, post, rules, payable, ctx.businessDate(), through, UUID.fromString(accountId)));
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                depositDayEnd(books, outbox, rules, through, id);
             }
-
-            @Override public double maxFailureRatio() { return 0.05; }
         };
     }
 
@@ -239,8 +285,9 @@ class DepositEod implements EodStepProvider {
               FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id JOIN deposits.product p ON p.code = a.product_code
              WHERE a.id = ?""";
 
-    static void depositDayEnd(JdbcTemplate jdbc, Outbox outbox, DepositPostings post, DepositRules rules, String payable, LocalDate businessDate,
-                              LocalDate through, UUID id) {
+    static void depositDayEnd(DepositBooks b, Outbox outbox, DepositRules rules, LocalDate through, UUID id) {
+        JdbcTemplate jdbc = b.jdbc();
+        String payable = payableGl(jdbc);
         Map<String, Object> t = jdbc.queryForMap(TERMS + " FOR UPDATE OF a", id);
         TermDeposit.Terms terms = terms(t);
         List<Map<String, Object>> st = jdbc.queryForList("""
@@ -261,22 +308,22 @@ class DepositEod implements EodStepProvider {
         LocalDate lastCredit = null;
         for (Event e : r.events()) {
             if (e instanceof Accrual acc) {
-                TransactionLot lot = post.interestAccrual(branch, (String) t.get("gl_interest_expense"), payable, accountNo, acc.amount(), accountNo);
-                PostingService.postDuringEod(jdbc, lot, USER);
-                event(jdbc, id, "ACCRUAL", acc.from(), acc.to(), null, acc.amount(), lot.id(), null, businessDate, null);
+                TransactionLot lot = b.post().interestAccrual(branch, (String) t.get("gl_interest_expense"), payable, accountNo, acc.amount(), accountNo);
+                b.post(lot);
+                b.event(id, "ACCRUAL", acc.from(), acc.to(), null, acc.amount(), lot.id(), null, null);
             } else if (e instanceof Credit c) {
                 String narration = "Interest for period " + c.number() + " (" + c.periodFrom() + " to " + c.periodEnd().minusDays(1) + ")";
-                TransactionLot lot = post.interestCredit(leg, payable, c.amount(), accountNo, narration);
-                PostingService.postDuringEod(jdbc, lot, USER);
-                UUID m = movement(jdbc, id, "INTEREST_CREDIT", "CREDIT", c.amount(), lot.id(), null, narration, null, null);
-                event(jdbc, id, "CREDIT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), m, businessDate, null);
+                TransactionLot lot = b.post().interestCredit(leg, payable, c.amount(), accountNo, narration);
+                b.post(lot);
+                UUID m = b.movement(id, "INTEREST_CREDIT", "CREDIT", c.amount(), lot.id(), null, narration, null);
+                b.event(id, "CREDIT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), m, null);
                 BigDecimal tax = Boolean.TRUE.equals(t.get("tds_applicable"))
-                        ? TaxAtSource.onCredit(jdbc, post, rules, businessDate, id, (UUID) t.get("customer_id"), leg, c.amount(), m, c.periodFrom(), c.periodEnd())
+                        ? TaxAtSource.onCredit(b, rules, id, (UUID) t.get("customer_id"), leg, c.amount(), m, c.periodFrom(), c.periodEnd())
                         : BigDecimal.ZERO;
                 credited = credited.add(c.amount());
                 lastCredit = c.periodEnd();
                 BigDecimal net = c.amount().subtract(tax);
-                if (!terms.cumulative() && net.signum() > 0) payOut(jdbc, outbox, post, businessDate, id, t, leg, new Credit(c.number(), c.periodFrom(), c.periodEnd(), net));
+                if (!terms.cumulative() && net.signum() > 0) payOut(b, outbox, id, t, leg, new Credit(c.number(), c.periodFrom(), c.periodEnd(), net));
             }
         }
         InterestDayEnd.DepositState s = r.state();
@@ -295,8 +342,8 @@ class DepositEod implements EodStepProvider {
      * depositor's bank account through the gateway. When it cannot be paid (the account is no longer active or is
      * frozen for credits, no bank account recorded), it stays on the deposit, to be paid with the proceeds.
      */
-    private static void payOut(JdbcTemplate jdbc, Outbox outbox, DepositPostings post, LocalDate businessDate, UUID id, Map<String, Object> t,
-                               Leg leg, Credit c) {
+    private static void payOut(DepositBooks b, Outbox outbox, UUID id, Map<String, Object> t, Leg leg, Credit c) {
+        JdbcTemplate jdbc = b.jdbc();
         String accountNo = leg.accountNo();
         if ("CASA".equals(t.get("payout_to"))) {
             UUID payId = (UUID) t.get("payout_account_id");
@@ -307,67 +354,122 @@ class DepositEod implements EodStepProvider {
                       FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code WHERE a.id = ?
                     """, payId);
             if (!"ACTIVE".equals(pay.get("status")) || Boolean.TRUE.equals(pay.get("frozen"))) {
-                event(jdbc, id, "PAYOUT_HELD", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), null, null, businessDate,
+                b.event(id, "PAYOUT_HELD", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), null, null,
                         "account " + pay.get("account_no") + (Boolean.TRUE.equals(pay.get("frozen")) ? " is frozen for credits" : " is " + pay.get("status"))
                                 + ": the interest stays on the deposit");
                 return;
             }
             Leg to = new Leg((String) pay.get("branch_code"), (String) pay.get("gl_liability"), (String) pay.get("account_no"));
-            TransactionLot lot = post.interestPayout(leg, to, c.amount(), accountNo);
-            PostingService.postDuringEod(jdbc, lot, USER);
-            String narration = "Interest on deposit " + accountNo;
-            UUID out = movement(jdbc, id, "INTEREST_PAYOUT", "DEBIT", c.amount(), lot.id(), payId, "Interest paid to " + to.accountNo(), null, null);
-            movement(jdbc, payId, "TRANSFER_IN", "CREDIT", c.amount(), lot.id(), id, narration, null, null);
-            event(jdbc, id, "PAYOUT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), out, businessDate, "paid to account " + to.accountNo());
+            TransactionLot lot = b.post().interestPayout(leg, to, c.amount(), accountNo);
+            b.post(lot);
+            UUID out = b.movement(id, "INTEREST_PAYOUT", "DEBIT", c.amount(), lot.id(), payId, "Interest paid to " + to.accountNo(), null);
+            b.movement(payId, "TRANSFER_IN", "CREDIT", c.amount(), lot.id(), id, "Interest on deposit " + accountNo, null);
+            b.event(id, "PAYOUT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), out, "paid to account " + to.accountNo());
             return;
         }
         if (t.get("payout_bank_ifsc") == null) {
-            event(jdbc, id, "PAYOUT_HELD", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), null, null, businessDate,
+            b.event(id, "PAYOUT_HELD", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), null, null,
                     "no bank account is recorded: the interest stays on the deposit");
             return;
         }
-        TransactionLot lot = post.gatewayTransferOut(leg, c.amount(), accountNo, "Interest on deposit " + accountNo);
-        PostingService.postDuringEod(jdbc, lot, USER);
-        byte[][] party = {(byte[]) t.get("payout_bank_name_cipher"), (byte[]) t.get("payout_bank_account_cipher")};
-        UUID out = movement(jdbc, id, "BANK_TRANSFER_OUT", "DEBIT", c.amount(), lot.id(), null, "Interest on deposit " + accountNo, party,
-                new String[] {(String) t.get("payout_bank_account_last4"), (String) t.get("payout_bank_ifsc")});
-        jdbc.update("INSERT INTO deposits.gateway_transfer (movement_id, status) VALUES (?, 'SENT')", out);
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("movementId", out.toString());
-        payload.put("accountId", id.toString());
-        payload.put("accountNo", accountNo);
-        payload.put("customerId", String.valueOf(t.get("customer_id")));
-        payload.put("branch", leg.branch());
-        payload.put("amount", DepositRuleSets.plain(c.amount()));
-        payload.put("businessDate", businessDate.toString());
-        outbox.publish(jdbc, DepositEvents.TRANSFER_OUT, accountNo, payload);
-        event(jdbc, id, "PAYOUT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), out, businessDate,
+        TransactionLot lot = b.post().gatewayTransferOut(leg, c.amount(), accountNo, "Interest on deposit " + accountNo);
+        UUID out = sendThroughGateway(b, outbox, id, t, leg, lot, c.amount(), "Interest on deposit " + accountNo);
+        b.event(id, "PAYOUT", c.periodFrom(), c.periodEnd(), c.number(), c.amount(), lot.id(), out,
                 "sent through the payment gateway to XXXXXXXX" + t.get("payout_bank_account_last4"));
     }
 
+    /**
+     * Money out of a deposit to its recorded bank account through the payment gateway: the lot (already built, to the
+     * in-transit head), the BANK_TRANSFER_OUT movement with the payee, the transfer to follow, and the outbox event the
+     * integration module sends it from. Returns the movement.
+     */
+    static UUID sendThroughGateway(DepositBooks b, Outbox outbox, UUID id, Map<String, Object> t, Leg leg, TransactionLot lot, BigDecimal amount,
+                                   String narration) {
+        b.post(lot);
+        byte[][] party = {(byte[]) t.get("payout_bank_name_cipher"), (byte[]) t.get("payout_bank_account_cipher")};
+        UUID out = b.movement(id, "BANK_TRANSFER_OUT", "DEBIT", amount, lot.id(), null, narration, null, party,
+                new String[] {(String) t.get("payout_bank_account_last4"), (String) t.get("payout_bank_ifsc")});
+        b.jdbc().update("INSERT INTO deposits.gateway_transfer (movement_id, status) VALUES (?, 'SENT')", out);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("movementId", out.toString());
+        payload.put("accountId", id.toString());
+        payload.put("accountNo", leg.accountNo());
+        payload.put("customerId", String.valueOf(t.get("customer_id")));
+        payload.put("branch", leg.branch());
+        payload.put("amount", DepositRuleSets.plain(amount));
+        payload.put("businessDate", b.today().toString());
+        outbox.publish(b.jdbc(), DepositEvents.TRANSFER_OUT, leg.accountNo(), payload);
+        return out;
+    }
+
+    // ================================================================================================ lifecycle (P4-4)
+
+    private EodEngine.ItemStep maturities(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            @Override public String name() { return "Term deposit maturity (pay out or renew)"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                return jdbc.queryForList("""
+                        SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
+                         WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.maturity_date <= ?::date ORDER BY t.maturity_date, a.account_no
+                        """, String.class, ctx.businessDate().toString());
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                DepositClosing.mature(books, rules, json, outbox, id);
+            }
+        };
+    }
+
+    private EodEngine.ItemStep notices(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            private int days;
+
+            @Override public String name() { return "Term deposit maturity notices"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                days = DepositClosing.noticeDays(jdbc, new DepositRuleSets(jdbc).current());
+                return jdbc.queryForList("""
+                        SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
+                         WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.maturity_date > ?::date AND t.maturity_date - ? <= ?::date
+                           AND NOT EXISTS (SELECT 1 FROM deposits.maturity_notice n WHERE n.account_id = a.id AND n.maturity_date = t.maturity_date)
+                         ORDER BY t.maturity_date, a.account_no
+                        """, String.class, ctx.businessDate().toString(), days, ctx.businessDate().toString());
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                DepositClosing.notice(books, outbox, id);
+            }
+        };
+    }
+
+    private EodEngine.ItemStep minimumBalances(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            private LocalDate through;
+
+            @Override public String name() { return "Minimum balance (month-end)"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                through = through(jdbc, ctx.businessDate());
+                // accounts whose last month-end evaluated is before the last month-end this date closes
+                return jdbc.queryForList("""
+                        SELECT a.id::text FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code
+                          JOIN deposits.casa_account c ON c.account_id = a.id
+                         WHERE a.family = 'CASA' AND a.status = 'ACTIVE' AND p.min_balance > 0
+                           AND (date_trunc('month', ?::date + 1) - interval '1 day')::date >= a.opened_on
+                           AND (c.min_balance_through IS NULL
+                                OR c.min_balance_through < (date_trunc('month', ?::date + 1) - interval '1 day')::date)
+                         ORDER BY a.account_no
+                        """, String.class, through.toString(), through.toString());
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                DepositClosing.minimumBalance(books, json, id, through);
+            }
+        };
+    }
+
     // ================================================================================================ rows
-
-    static UUID movement(JdbcTemplate jdbc, UUID accountId, String kind, String direction, BigDecimal amount, UUID lotId, UUID counterparty,
-                                 String narration, byte[][] party, String[] partyClear) {
-        UUID id = UUID.randomUUID();
-        jdbc.update("""
-                INSERT INTO deposits.movement (id, account_id, kind, direction, amount, balance_after, business_date, lot_id, narration, counterparty_id,
-                                               party_name_cipher, party_account_cipher, party_account_last4, party_ifsc, created_by)
-                VALUES (?, ?, ?, ?, ?, 0, current_date, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, id, accountId, kind, direction, amount, lotId, narration.length() > 200 ? narration.substring(0, 200) : narration, counterparty,
-                party == null ? null : party[0], party == null ? null : party[1], partyClear == null ? null : partyClear[0],
-                partyClear == null ? null : partyClear[1], USER);
-        return id;
-    }
-
-    static void event(JdbcTemplate jdbc, UUID accountId, String kind, LocalDate from, LocalDate to, Integer periodNo, BigDecimal amount, UUID lotId,
-                      UUID movementId, LocalDate businessDate, String note) {
-        jdbc.update("""
-                INSERT INTO deposits.interest_event (account_id, kind, period_from, period_to, period_no, amount, lot_id, movement_id, business_date, note,
-                                                     created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, accountId, kind, from, to, periodNo, amount, lotId, movementId, businessDate, note, USER);
-    }
 
     /** A date column read through queryForMap: java.sql.Date from the JDBC driver. */
     static LocalDate date(Object v) {

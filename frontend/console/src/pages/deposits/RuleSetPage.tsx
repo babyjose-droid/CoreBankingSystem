@@ -24,6 +24,7 @@ const RULE_LABEL: Record<string, string> = {
   'td.loan-spread-percent': 'Loan against a deposit: points above the deposit rate',
   'td.deposits-to-nof-multiple': 'Public deposits at most this multiple of net owned fund',
   'td.renewal-needs-consent': 'A renewal needs the depositor’s consent',
+  'td.overdue-interest': 'A matured deposit left unpaid earns interest',
   'savings.uniform-rate-up-to': 'One savings rate for balances up to',
   'current.interest-allowed': 'Interest on current accounts',
   'casa.review-after-months': 'Review an account with no customer transaction after (months)',
@@ -36,7 +37,7 @@ const RULE_LABEL: Record<string, string> = {
   'tds.on-savings-interest': 'Tax is deducted from savings interest',
   'senior-citizen-age': 'Senior citizen from the age of',
 };
-const YES_NO = new Set(['demand-deposits-allowed', 'insured', 'td.renewal-needs-consent', 'current.interest-allowed', 'tds.on-savings-interest']);
+const YES_NO = new Set(['demand-deposits-allowed', 'insured', 'td.renewal-needs-consent', 'td.overdue-interest', 'current.interest-allowed', 'tds.on-savings-interest']);
 const value = (code: string, v: string) => (YES_NO.has(code) ? (Number(v) === 0 ? 'No' : 'Yes') : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 4 }));
 
 export function RuleSetPage() {

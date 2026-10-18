@@ -12,5 +12,12 @@ public final class DepositEvents {
      */
     public static final String TRANSFER_OUT = "deposit.transfer_out";
 
+    /**
+     * A term deposit is maturing within the notice period (P4-4): accountId, accountNo, customerId, maturityDate, amount
+     * (the expected maturity value, decimal string), instruction. The messaging module tells the depositor (template
+     * DEPOSIT_MATURITY).
+     */
+    public static final String MATURITY_NOTICE = "deposit.maturity_notice";
+
     private DepositEvents() {}
 }

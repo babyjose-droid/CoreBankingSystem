@@ -105,11 +105,11 @@ interface Registrar {
 
 const ok = (body: unknown): Result => ({ status: 200, body });
 const invalid = (detail: string) => new HttpProblem(422, 'Validation failed', detail, {}, PROBLEM_BASE + 'validation');
-function refuseIfAny(what: string, problems: string[]): void {
+export function refuseIfAny(what: string, problems: string[]): void {
   const distinct = [...new Set(problems)];
   if (distinct.length) throw new HttpProblem(422, 'Validation failed', `${what}: ${distinct.join('; ')}`, { problems: distinct }, PROBLEM_BASE + 'validation');
 }
-const plain = (units: bigint) => {
+export const plain = (units: bigint) => {
   const s = fromUnits(units, 4).replace(/\.?0+$/, '');
   return s === '' || s === '-' ? '0' : s;
 };
@@ -118,6 +118,7 @@ const plain = (units: bigint) => {
 export function depositCheckers(payload: ApprovalPayload, amount: string | null): number | null {
   if (payload.kind === 'DEPOSIT_HOLD' || payload.kind === 'TDS_DECLARATION') return 1;
   if (payload.kind === 'DEPOSIT_TXN') return payload.txn.type === 'REVERSE' || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
+  if (payload.kind === 'DEPOSIT_LIFECYCLE') return 1;
   if (payload.kind === 'DEPOSIT_FUNDING') return payload.funding.reason !== null || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
   return null;
 }
@@ -128,7 +129,7 @@ export function balanceOf(db: MockDb, accountId: string): bigint {
   return toUnits(db.deposits.balances[accountId] ?? '0');
 }
 
-function activeHolds(db: MockDb, accountId: string): MockHold[] {
+export function activeHolds(db: MockDb, accountId: string): MockHold[] {
   return db.deposits.holds.filter((h) => h.accountId === accountId && h.status === 'ACTIVE');
 }
 
@@ -151,7 +152,7 @@ export function balanceView(db: MockDb, accountId: string): Pick<DepositAccount,
 export const onHold = (db: MockDb, accountId: string) => activeHolds(db, accountId).length > 0;
 
 /** As the engine's AccountHolds.checkMovement. */
-function movementProblems(db: MockDb, a: DepositAccount, direction: 'DEBIT' | 'CREDIT', amount: string | null | undefined, correction: boolean): string[] {
+export function movementProblems(db: MockDb, a: DepositAccount, direction: 'DEBIT' | 'CREDIT', amount: string | null | undefined, correction: boolean): string[] {
   const out: string[] = [];
   if (a.family === 'CASA' && a.status !== 'ACTIVE') out.push(`account ${a.accountNo} is ${a.status}`);
   if (amount === null || amount === undefined || amount === '' || !/^\d+(\.\d+)?$/.test(String(amount)) || Number(amount) <= 0) {
@@ -190,14 +191,14 @@ function sealBank(b: BankAccountInput | null | undefined, problems: string[]): M
   return problems.length > before ? null : { last4: number.slice(-4), ifsc };
 }
 
-function text(v: string | null | undefined, max: number, field: string, problems: string[]): string | null {
+export function text(v: string | null | undefined, max: number, field: string, problems: string[]): string | null {
   if (!v || !v.trim()) return null;
   const t = v.trim();
   if (t.length > max) problems.push(`the ${field} is longer than ${max} characters`);
   return t;
 }
 
-function findAccount(db: MockDb, id: string, family: 'CASA' | 'TERM_DEPOSIT' | null): DepositAccount {
+export function findAccount(db: MockDb, id: string, family: 'CASA' | 'TERM_DEPOSIT' | null): DepositAccount {
   const a = db.deposits.accounts.find((x) => x.id === id && (!family || x.family === family));
   if (!a) throw notFound(family === 'TERM_DEPOSIT' ? `term deposit ${id}` : `account ${id}`);
   return a;
@@ -205,7 +206,7 @@ function findAccount(db: MockDb, id: string, family: 'CASA' | 'TERM_DEPOSIT' | n
 
 // ---------- writing ----------
 
-function move(db: MockDb, a: DepositAccount, kind: string, direction: 'DEBIT' | 'CREDIT', amount: string, lotId: string, extra: Partial<MockMovement>, maker: string, approvalId: string | null): MockMovement {
+export function move(db: MockDb, a: DepositAccount, kind: string, direction: 'DEBIT' | 'CREDIT', amount: string, lotId: string, extra: Partial<MockMovement>, maker: string, approvalId: string | null): MockMovement {
   const bal = balanceOf(db, a.id!) + (direction === 'CREDIT' ? toUnits(amount) : -toUnits(amount));
   if (bal < 0n) throw conflict('Conflict', `account ${a.accountNo}: the balance would fall below zero`);
   db.deposits.balances[a.id!] = fromUnits(bal, 4);
@@ -235,6 +236,8 @@ function reversalProblems(db: MockDb, m: MockMovement): string[] {
   if (m.reversedBy) return ['the movement is already reversed'];
   if (m.kind === 'FUNDING' || m.kind === 'FUNDING_PAID') return ['this movement funded a term deposit: reverse the funding of the deposit instead'];
   if (m.gatewayStatus) return ['this transfer was sent through the payment gateway: the money comes back only when the bank fails or returns it'];
+  if (['INTEREST_CREDIT', 'INTEREST_PAYOUT', 'TAX_DEDUCTED', 'INTEREST_RECOVERY'].includes(m.kind ?? '')) return ['interest credited or paid out, and tax deducted, by the day-end are not reversed by hand'];
+  if (db.deposits.movements.some((x) => x.lotId === m.lotId && (x.kind === 'CLOSURE' || x.kind === 'RENEWAL'))) return ['a closure or a renewal is not reversed; the account is closed'];
   const out: string[] = [];
   for (const each of db.deposits.movements.filter((x) => x.lotId === m.lotId)) {
     const a = findAccount(db, each.accountId, null);
@@ -281,7 +284,11 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
       const m = db.deposits.movements.find((x) => x.id === t.movementId);
       if (!m) throw notFound(`movement ${t.movementId}`);
       refuseIfAny('the movement cannot be reversed', reversalProblems(db, m));
-      approval.appliedRef = reverseLot(db, m, t.reason!, maker, id).id!;
+      const back = reverseLot(db, m, t.reason!, maker, id);
+      approval.appliedRef = back.id!;
+      for (const c of db.deposits.charges.filter((x) => x.movementId === m.id && x.status === 'ISSUED')) {
+        Object.assign(c, { status: 'CANCELLED', cancelledOn: db.businessDate, creditNoteNo: `GST/DEPCN/${String(db.deposits.charges.filter((y) => y.creditNoteNo).length + 1).padStart(5, '0')}` });
+      }
     } else if (t.type === 'TRANSFER') {
       const from = findAccount(db, t.accountId, 'CASA');
       const to = findAccount(db, t.toAccountId!, 'CASA');

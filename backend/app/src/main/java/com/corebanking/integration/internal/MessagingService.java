@@ -2,6 +2,7 @@ package com.corebanking.integration.internal;
 
 import com.corebanking.audit.AuditLog;
 import com.corebanking.customer.CustomerContacts;
+import com.corebanking.deposits.DepositEvents;
 import com.corebanking.eod.EodStepProvider;
 import com.corebanking.integration.core.MessageTemplate;
 import com.corebanking.integration.core.RetrySchedule;
@@ -76,7 +77,8 @@ class MessagingService implements OutboxConsumer, EodStepProvider {
             "PAYMENT_BOUNCED", Set.of("name", "loan_no", "amount", "due_date", "reason"),
             "DUE_REMINDER", Set.of("name", "loan_no", "amount", "due_date"),
             "NOC_ISSUED", Set.of("name", "loan_no", "date"),
-            "RATE_RESET", Set.of("name", "loan_no", "old_rate", "new_rate", "old_emi", "new_emi", "old_tenure", "new_tenure"));
+            "RATE_RESET", Set.of("name", "loan_no", "old_rate", "new_rate", "old_emi", "new_emi", "old_tenure", "new_tenure"),
+            "DEPOSIT_MATURITY", Set.of("name", "account_no", "amount", "maturity_date", "instruction"));
 
     private static final Map<String, String> TOPICS = Map.of(
             LoanEvents.DISBURSED, "LOAN_DISBURSED", LoanEvents.PAYMENT_RECEIVED, "PAYMENT_RECEIVED",
@@ -213,6 +215,22 @@ class MessagingService implements OutboxConsumer, EodStepProvider {
 
     @Override
     public void on(long outboxId, String topic, String aggregateId, Map<String, Object> p, OffsetDateTime at) {
+        if (DepositEvents.MATURITY_NOTICE.equals(topic)) {
+            // a deposit maturing (P4-4): one message per deposit and maturity date, however often it is relayed
+            if (p.get("customerId") == null || p.get("accountId") == null) return;
+            Map<String, String> v = new LinkedHashMap<>();
+            v.put("account_no", text(p.get("accountNo")));
+            v.put("amount", money(p.get("amount")));
+            v.put("maturity_date", date(p.get("maturityDate")));
+            v.put("instruction", switch (text(p.get("instruction"))) {
+                case "RENEW_PRINCIPAL" -> "renewed (principal), interest paid out";
+                case "RENEW_WITH_INTEREST" -> "renewed with its interest";
+                default -> "paid out";
+            });
+            enqueue("DEPOSIT_MATURITY", UUID.fromString(String.valueOf(p.get("customerId"))), null, UUID.fromString(String.valueOf(p.get("accountId"))),
+                    "maturity:" + p.get("accountId") + ":" + p.get("maturityDate"), v);
+            return;
+        }
         String code = TOPICS.get(topic);
         if (code == null || p.get("customerId") == null || p.get("loanId") == null) return;
         Map<String, String> v = new LinkedHashMap<>();
@@ -244,11 +262,11 @@ class MessagingService implements OutboxConsumer, EodStepProvider {
         }
         // a letter is announced once per loan, however often it is printed; other events once per outbox row
         String key = "NOC_ISSUED".equals(code) ? "noc:" + p.get("loanId") : topic + ":" + outboxId;
-        enqueue(code, UUID.fromString(String.valueOf(p.get("customerId"))), UUID.fromString(String.valueOf(p.get("loanId"))), key, v);
+        enqueue(code, UUID.fromString(String.valueOf(p.get("customerId"))), UUID.fromString(String.valueOf(p.get("loanId"))), null, key, v);
     }
 
     /** Queues one message per active template (channel) of the code. Safe to call twice for the same event key. */
-    void enqueue(String code, UUID customerId, UUID loanId, String eventKey, Map<String, String> values) {
+    void enqueue(String code, UUID customerId, UUID loanId, UUID depositAccountId, String eventKey, Map<String, String> values) {
         List<Map<String, Object>> templates = jdbc.queryForList(
                 "SELECT * FROM integration.message_template WHERE code = ? AND status = 'ACTIVE' AND language = 'en'", code);
         if (templates.isEmpty()) return;
@@ -282,11 +300,11 @@ class MessagingService implements OutboxConsumer, EodStepProvider {
                 }
             }
             jdbc.update("""
-                    INSERT INTO integration.message (id, template_code, channel, language, category, customer_id, loan_id, event_key,
+                    INSERT INTO integration.message (id, template_code, channel, language, category, customer_id, loan_id, deposit_account_id, event_key,
                         recipient_cipher, recipient_masked, body_cipher, status, suppress_reason, last_error, next_attempt_at)
-                    VALUES (?, ?, ?, 'en', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN now() END)
+                    VALUES (?, ?, ?, 'en', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN now() END)
                     ON CONFLICT (template_code, channel, event_key) DO NOTHING
-                    """, UUID.randomUUID(), code, channel, t.get("category"), customerId, loanId, eventKey,
+                    """, UUID.randomUUID(), code, channel, t.get("category"), customerId, loanId, depositAccountId, eventKey,
                     suppress == null ? secrets.seal(recipient, RECIPIENT_AAD) : null,
                     recipient == null ? null : sms ? Masking.mobile(recipient) : Masking.email(recipient),
                     suppress == null ? secrets.seal(body, BODY_AAD) : null, suppress == null ? "QUEUED" : "SUPPRESSED", suppress, error, suppress == null);
@@ -327,7 +345,7 @@ class MessagingService implements OutboxConsumer, EodStepProvider {
         LocalDate due = businessDate.plusDays(props.number("notify.due-reminder.lead-days", 3, 0, 15));
         for (LoanOperations.Due d : loans.duesOn(jdbc, due)) {
             try {
-                enqueue("DUE_REMINDER", d.customerId(), d.loanId(), "due:" + d.loanId() + ":" + d.dueDate(),
+                enqueue("DUE_REMINDER", d.customerId(), d.loanId(), null, "due:" + d.loanId() + ":" + d.dueDate(),
                         Map.of("loan_no", d.loanNo(), "amount", money(d.amount()), "due_date", DATE.format(d.dueDate())));
             } catch (RuntimeException e) {
                 log.warn("due reminder not queued for a loan: {}", e.getClass().getSimpleName());

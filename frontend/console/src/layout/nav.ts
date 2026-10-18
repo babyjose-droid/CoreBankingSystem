@@ -32,6 +32,7 @@ export const NAV: NavGroup[] = [
     items: [
       { to: '/deposits/casa', label: 'Savings and current', perm: P.casaView, modules: ['CASA'] },
       { to: '/deposits/term', label: 'Term deposits', perm: P.depositView, modules: ['TD'] },
+      { to: '/deposits/maturities', label: 'Maturities', perm: P.depositView, modules: ['TD'] },
       { to: '/deposits/tax', label: 'Tax at source', perm: P.depositView, modules: ['TD'] },
       { to: '/deposits/products', label: 'Products', perm: P.productView, modules: ['CASA', 'TD'] },
       { to: '/deposits/rules', label: 'Rule set', perm: P.productView, modules: ['CASA', 'TD'] },

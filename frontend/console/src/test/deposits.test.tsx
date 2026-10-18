@@ -40,8 +40,8 @@ describe('deposits: what a tenant may offer', () => {
   it('shows the rule set with what is not verified', async () => {
     const { unmount } = renderApp({ user: 'checker', route: '/deposits/rules', server: bank() });
     expect(await screen.findByTestId('rule-kind')).toHaveTextContent('Bank');
-    expect(screen.getByText(/15 of 15 rules are not verified/)).toBeInTheDocument();
-    expect(within(screen.getByRole('table', { name: 'Rules in force' })).getAllByRole('row')).toHaveLength(16);
+    expect(screen.getByText(/16 of 16 rules are not verified/)).toBeInTheDocument();
+    expect(within(screen.getByRole('table', { name: 'Rules in force' })).getAllByRole('row')).toHaveLength(17);
     unmount();
     renderApp({ user: 'checker', route: '/deposits/rules', server: nbfc() });
     expect(await screen.findByTestId('rule-kind')).toHaveTextContent('Deposit-taking NBFC');

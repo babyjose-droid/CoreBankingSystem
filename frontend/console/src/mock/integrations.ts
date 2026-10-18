@@ -45,6 +45,7 @@ export const WEBHOOK_EVENT_FIELDS: Record<string, string[]> = {
   'payout.status': ['action', 'amount', 'beneficiaryAccountMasked', 'customerId', 'externalRef', 'failureCode', 'failureReason', 'loanId', 'loanNo', 'payoutRef', 'previousStatus', 'status', 'utr'],
 };
 export const MESSAGE_VARIABLES: Record<string, string[]> = {
+  DEPOSIT_MATURITY: ['account_no', 'amount', 'instruction', 'maturity_date', 'name'],
   DUE_REMINDER: ['amount', 'due_date', 'loan_no', 'name'],
   LOAN_DISBURSED: ['amount', 'date', 'loan_no', 'name', 'net_amount'],
   NOC_ISSUED: ['date', 'loan_no', 'name'],

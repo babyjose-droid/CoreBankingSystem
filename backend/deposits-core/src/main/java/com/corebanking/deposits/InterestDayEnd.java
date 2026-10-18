@@ -126,6 +126,29 @@ public final class InterestDayEnd {
     }
 
     /**
+     * Savings interest on closing an account on {@code closeOn} (P4-4): the days up to the day before are accrued as
+     * the day-end would (crediting any period that ended in them), then the open period's interest is credited, rounded
+     * as the product says, with a true-up accrual first. The closing day itself earns nothing.
+     */
+    public static SavingsResult savingsToClose(SavingsInterest interest, SavingsState state, LocalDate closeOn, Function<LocalDate, BigDecimal> balanceAt,
+                                               int postingMonths, int yearStartMonth, Rounding creditRounding) {
+        LocalDate lastEarning = closeOn.minusDays(1);
+        if (state.accruedThrough().isAfter(lastEarning)) {
+            throw new IllegalArgumentException("interest is already accrued through " + state.accruedThrough() + ", after the closing date " + closeOn);
+        }
+        SavingsResult run = savings(interest, state, lastEarning, balanceAt, postingMonths, yearStartMonth, creditRounding);
+        List<Event> events = new ArrayList<>(run.events());
+        SavingsState s = run.state();
+        BigDecimal credit = creditRounding.apply(s.exact());
+        BigDecimal trueUp = credit.subtract(s.accrued());
+        LocalDate from = s.accruedThrough().plusDays(1).isAfter(lastEarning) ? lastEarning : s.accruedThrough().plusDays(1);
+        if (trueUp.signum() != 0) events.add(new Accrual(from, lastEarning, trueUp));
+        if (credit.signum() > 0) events.add(new Credit(0, s.periodFrom(), lastEarning, credit));
+        return new SavingsResult(new SavingsState(lastEarning.isBefore(s.accruedThrough()) ? s.accruedThrough() : lastEarning, BigDecimal.ZERO,
+                BigDecimal.ZERO, closeOn), List.copyOf(events));
+    }
+
+    /**
      * A term deposit: interest accrues for every day from the start date up to the day before maturity; each period
      * is credited on its credit date (the day after its last earning day), the last one on the maturity date.
      */

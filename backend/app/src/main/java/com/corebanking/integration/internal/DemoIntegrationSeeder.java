@@ -39,7 +39,10 @@ class DemoIntegrationSeeder implements DemoTenantSeeder {
             // RBI 18-Aug-2023: the borrower is told what a floating-rate reset did to the EMI and the tenure
             new String[] {"RATE_RESET", "100000000004",
                     "The interest rate of your loan {{loan_no}} is reset from {{old_rate}}% to {{new_rate}}%. EMI Rs {{old_emi}} -> Rs {{new_emi}};"
-                            + " instalments left {{old_tenure}} -> {{new_tenure}}. You may choose a higher EMI or a longer tenure, or prepay."});
+                            + " instalments left {{old_tenure}} -> {{new_tenure}}. You may choose a higher EMI or a longer tenure, or prepay."},
+            // P4-4: the depositor is told before a term deposit matures (NBFC Directions para 22: at least 14 days before)
+            new String[] {"DEPOSIT_MATURITY", "100000000005",
+                    "Your deposit {{account_no}} matures on {{maturity_date}}: Rs {{amount}}, to be {{instruction}}. Contact your branch to change this."});
 
     private final JdbcTemplate jdbc;
     private final ProviderConfigService providers;

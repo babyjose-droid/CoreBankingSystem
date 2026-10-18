@@ -25,6 +25,8 @@ import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
 import { BANK_RULES, NBFC_DEPOSIT_RULES, type MockDepositRule } from './depositRules';
 import { applyDepositMoneyApproval, balanceView, onHold, registerDepositMoneyRoutes, type MockDeclaration, type MockDepositOrder, type MockHold, type MockMovement } from './depositMoney';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
+import { applyDepositLifecycleApproval, registerDepositLifecycleRoutes, type MockCharge } from './depositLifecycle';
+import type { DepositClosure } from '../api/types';
 
 export type DepositKind = 'BANK' | 'NBFC_DEPOSIT' | null;
 
@@ -66,6 +68,10 @@ export interface DepositsDb {
   orders: MockDepositOrder[];
   /** P4-3b: Form 121 declarations (there is no deposit day-end in mock mode, so no tax is deducted). */
   declarations: MockDeclaration[];
+  /** P4-4: charges levied, how accounts were closed, consents to renew. */
+  charges: MockCharge[];
+  closures: Record<string, DepositClosure>;
+  consents: Record<string, { instruction: string; reference: string; receivedOn: string }>;
 }
 
 type Result = { status: number; body: unknown };
@@ -97,7 +103,8 @@ const TENANT_KIND: Record<DemoTenantCode, { kind: DepositKind; modules: string[]
 };
 
 export function emptyDeposits(): DepositsDb {
-  return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0, orders: [], declarations: [] };
+  return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0, orders: [], declarations: [],
+    charges: [], closures: {}, consents: {} };
 }
 
 /** Makes the mock database the given demo tenant: its name, its deposit modules and its demo deposit products. */
@@ -298,10 +305,12 @@ export function normalise(db: MockDb, family: DepositFamily, b: Partial<DepositP
       tdsApplicable: input.tdsApplicable ?? (interest && rule(db, 'tds.on-savings-interest') === 1),
       minBalance, interestBands: interest ? bands : null, bandMode: interest ? input.bandMode ?? 'WHOLE_BALANCE' : null,
       interestPostingMonths: interest ? input.interestPostingMonths ?? 3 : null, chequeFacility: input.chequeFacility === true,
-      glLiability: input.glLiability ?? (type === 'SAVINGS' ? '2401' : '2402'), glInterestExpense: interest ? input.glInterestExpense ?? '5108' : null };
+      glLiability: input.glLiability ?? (type === 'SAVINGS' ? '2401' : '2402'), glInterestExpense: interest ? input.glInterestExpense ?? '5108' : null,
+      charges: chargesOf(input.charges) };
   }
-  if (input.minBalance != null || input.interestBands != null || input.bandMode != null || input.interestPostingMonths != null || input.chequeFacility != null) {
-    throw invalid('the minimum balance, interest bands and the cheque facility are settings of a savings or current product');
+  if (input.minBalance != null || input.interestBands != null || input.bandMode != null || input.interestPostingMonths != null || input.chequeFacility != null
+      || input.charges != null) {
+    throw invalid('the minimum balance, interest bands, the cheque facility and the schedule of charges are settings of a savings or current product');
   }
   const minAmount = plain(input.minAmount);
   if (minAmount === null) throw invalid('minAmount is required');
@@ -332,6 +341,34 @@ export function normalise(db: MockDb, family: DepositFamily, b: Partial<DepositP
     interestPeriodMonths: input.interestPeriodMonths, rateCard, addOns, prematureAllowed: input.prematureAllowed ?? true, prematurePenaltyPercent: penalty,
     prematureMinDays: input.prematureMinDays ?? null, autoRenewalAllowed: input.autoRenewalAllowed === true,
     glLiability: input.glLiability ?? '2403', glInterestExpense: input.glInterestExpense ?? '5107' };
+}
+
+/** A savings or current product's schedule of charges (P4-4), checked as the engine's DepositCharges.problems; null for none. */
+function chargesOf(c: DepositProductInput['charges']): DepositProduct['charges'] {
+  if (c == null) return null;
+  const amt = (what: string, v: unknown): string | null => {
+    const x = plain(v as string | number | null);
+    if (x !== null && (Number(x) <= 0 || Number(x) > 1_000_000 || (x.split('.')[1] ?? '').length > 2)) throw invalid(`charges: ${what} is an amount above zero, to the paisa`);
+    return x;
+  };
+  const gst = plain((c.gstRatePercent ?? 18) as string | number) ?? '18';
+  if (Number(gst) < 0 || Number(gst) > 100) throw invalid('charges: the GST rate on charges is from 0 to 100 percent');
+  const minPercent = plain(c.minBalancePercent as string | number | null);
+  const minMax = amt('the most charged for a month\'s shortfall', c.minBalanceMax);
+  if ((minPercent === null) !== (minMax === null)) throw invalid('charges: a minimum balance charge needs both its percentage of the shortfall and its most for a month');
+  if (minPercent !== null && (Number(minPercent) <= 0 || Number(minPercent) > 100)) throw invalid('charges: the minimum balance charge is more than 0 and at most 100 percent of the shortfall');
+  const closure = amt('the closure charge', c.closureAmount);
+  if (closure === null && (c.closureFreeWithinDays != null || c.closureWithinDays != null)) throw invalid('charges: a free period and a limit go with a closure charge');
+  if (closure !== null && (c.closureFreeWithinDays == null || c.closureFreeWithinDays < 0 || c.closureFreeWithinDays > 3660)) throw invalid('charges: the closure charge needs its free period (0 to 3660 days)');
+  if (closure !== null && c.closureWithinDays != null && c.closureWithinDays <= c.closureFreeWithinDays!) throw invalid('charges: the closure charge ends after its free period');
+  const service = (c.service ?? []).map((x) => {
+    if (!/^[A-Z][A-Z0-9_]{2,29}$/.test(x.code ?? '') || x.code === 'MIN_BALANCE' || x.code === 'CLOSURE') throw invalid('charges: a service charge code is 3 to 30 capitals, digits or _ (not MIN_BALANCE or CLOSURE)');
+    if (!x.name?.trim() || x.name.length > 100) throw invalid('charges: each service charge has a name of at most 100 characters');
+    return { code: x.code, name: x.name.trim(), amount: amt(`service charge ${x.code}`, x.amount) ?? (() => { throw invalid(`charges: service charge ${x.code}: the amount is above zero`); })() };
+  });
+  if (new Set(service.map((x) => x.code)).size !== service.length) throw invalid('charges: a service charge is listed twice');
+  return { gstRatePercent: gst, minBalancePercent: minPercent, minBalanceMax: minMax, closureAmount: closure, closureFreeWithinDays: closure === null ? null : c.closureFreeWithinDays ?? null,
+    closureWithinDays: closure === null ? null : c.closureWithinDays ?? null, service };
 }
 
 /** Everything that stops the product from being approved under the rule set (the engine's product checks). */
@@ -735,6 +772,7 @@ const summaryOf = (db: MockDb, a: DepositAccount): DepositAccountSummary => ({
 
 export function applyDepositApproval(db: MockDb, p: ApprovalPayload, approval: { id?: string; entityId?: string | null; maker?: string; appliedRef?: string | null }, checker: string, at: string): boolean {
   if (applyDepositMoneyApproval(db, p, approval, checker, at)) return true;
+  if (applyDepositLifecycleApproval(db, p, approval, checker, at)) return true;
   if (p.kind === 'DEPOSIT_PRODUCT') {
     const existing = db.deposits.products.find((x) => x.code === p.product.code);
     if (existing && existing.status !== 'ACTIVE') throw conflict('Conflict', `deposit product ${p.product.code} is not active any more`);
@@ -852,7 +890,8 @@ export function registerDepositRoutes(db: MockDb, r: Registrar): void {
       require(user, view);
       const a = db.deposits.accounts.find((x) => x.id === params.id && x.family === family);
       if (!a) throw notFound(family === 'CASA' ? `account ${params.id}` : `term deposit ${params.id}`);
-      return ok({ ...a, ...balanceView(db, a.id!) });
+      const closure = db.deposits.closures[a.id!] ?? null;
+      return ok({ ...a, ...balanceView(db, a.id!), closedOn: closure?.closedOn ?? null, closure });
     });
     on('POST', `/api/v1/${base}/accounts`, ({ user, body }) => {
       module(mod);
@@ -863,6 +902,7 @@ export function registerDepositRoutes(db: MockDb, r: Registrar): void {
   }
 
   registerDepositMoneyRoutes(db, r, module);
+  registerDepositLifecycleRoutes(db, r, module);
 
   on('POST', '/api/v1/deposits/preview', ({ user, body }) => {
     module('TD');

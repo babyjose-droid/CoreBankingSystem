@@ -4002,6 +4002,96 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/charges:
+    get:
+      tags: [Deposits]
+      operationId: listCasaCharges
+      summary: The charges levied on a savings or current account, with their GST invoices (P4-4)
+      description: Module CASA. Permission casa:view. Newest first, at most 500. A charge whose movement was reversed is CANCELLED, with a credit note.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositCharge' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaCharge
+      summary: Propose one of the product's service charges (maker-checker)
+      description: >-
+        Module CASA. Permission casa:transact. Always waits for a checker. The charge is the amount in the product's schedule with
+        GST on top (CGST and SGST within the branch's state, IGST when the depositor's address is in another state), and gets a tax
+        invoice. 422 with every reason: a code the product does not have, no reason, an account that is not ACTIVE, too little free
+        balance (after liens; none when frozen for debits). To refund a charge, reverse its movement: it is then cancelled with a
+        credit note.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositChargeInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/minimum-balance:
+    get:
+      tags: [Deposits]
+      operationId: listCasaMinimumBalanceMonths
+      summary: The month-ends evaluated against the product's minimum balance (P4-4)
+      description: >-
+        Module CASA. Permission casa:view. Newest first. The day-end compares each month's average daily closing balance with the
+        product's minimum; a short month is notified, and a short month after a notified one is charged (a percentage of the
+        shortfall, capped, never below zero).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/MinimumBalanceMonth' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/closure-quote:
+    get:
+      tags: [Deposits]
+      operationId: getCasaClosureQuote
+      summary: What closing a savings or current account today would pay, and why it cannot be closed
+      description: Module CASA. Permission casa:view. Interest to the day before, the closure charge of the product's schedule, the rest payable.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CasaClosureQuote' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/close:
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaClosure
+      summary: Propose closing a savings or current account (maker-checker)
+      description: >-
+        Module CASA. Permission casa:transact. Always waits for a checker. When applied: interest to the day before is credited, the
+        closure charge taken (with GST), the rest paid to another account, in cash or by a bank transfer (with its UTR), and the account
+        CLOSED. 422 with every reason: no reason, a freeze or lien in force, a deposit paying out to the account, a gateway transfer
+        not yet paid, where the money goes not given or not possible.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CasaClosureInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/rules:
     get:
       tags: [Deposits]
@@ -4412,6 +4502,110 @@ paths:
             schema: { $ref: '#/components/schemas/DepositHoldInput' }
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/closure-quote:
+    get:
+      tags: [Deposits]
+      operationId: getTermDepositClosureQuote
+      summary: What closing a term deposit today would pay (premature or at maturity), and why it cannot be closed
+      description: >-
+        Module TD. Permission deposit:view. Before maturity, the premature rule of the rule set: a deposit-taking NBFC repays
+        nothing in the first three months except on death or, for an individual, an emergency or a critical illness; no interest
+        from three to six months; after six months the rate for the period run less 2 points (the lowest rate less 3 when it has
+        none); a bank the rate for the period run, not above the contracted rate, less the product's penalty. At or after maturity,
+        interest for the days the proceeds waited (the contracted rate to the next working day when it matured on a holiday; then
+        the overdue rate for a bank, nothing for an NBFC; rules unverified).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: reason, in: query, schema: { type: string, enum: [DEPOSITOR_REQUEST, DEATH, EMERGENCY_EXPENSE, CRITICAL_ILLNESS] }, description: Why it is closed before maturity. Default DEPOSITOR_REQUEST }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TermDepositClosureQuote' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/close:
+    post:
+      tags: [Deposits]
+      operationId: proposeTermDepositClosure
+      summary: Propose closing a term deposit before maturity, or paying a matured one (maker-checker)
+      description: >-
+        Module TD. Permission deposit:fund. Always waits for a checker. When applied: interest above what the rule allows is recovered
+        (or what is due beyond what was credited is credited, with tax at source), overdue interest credited, the whole balance paid
+        to a savings or current account of the depositor (any account on death), in cash, by a bank transfer with its UTR, or through
+        the payment gateway to the bank account recorded on the deposit, and the deposit CLOSED. 422 with every reason from the
+        quote, and a closure for death, an emergency or illness without a note of what supports it.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TermDepositClosureInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/maturity-instruction:
+    post:
+      tags: [Deposits]
+      operationId: proposeMaturityInstruction
+      summary: Propose a new maturity instruction for a funded deposit (maker-checker)
+      description: >-
+        Module TD. Permission deposit:fund. Always waits for a checker. PAY_OUT, RENEW_PRINCIPAL or RENEW_WITH_INTEREST, before the
+        maturity date. On a deposit-taking NBFC a renewal needs the depositor's express consent (Directions para 17): the reference
+        of their signed request and the date it was received; an instruction given at booking is not that consent. 422: the same
+        instruction, a deposit not funded or at maturity, a product that does not renew, consent missing or dated outside booking
+        and today.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaturityInstructionInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/renew:
+    post:
+      tags: [Deposits]
+      operationId: proposeTermDepositRenewal
+      summary: Propose renewing a matured deposit (maker-checker)
+      description: >-
+        Module TD. Permission deposit:fund. For a MATURED deposit (one the day-end could not pay or renew). Overdue interest is
+        credited, then a new deposit is booked on the product's terms today (same product, tenure, holders, nominees and payout),
+        funded with the whole balance or the principal (the rest paid out). An NBFC needs the depositor's consent with the request.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TermDepositRenewalInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/maturities:
+    get:
+      tags: [Deposits]
+      operationId: listDepositMaturities
+      summary: Deposits maturing between two dates, and every matured deposit waiting to be paid
+      description: >-
+        Module TD. Permission deposit:view. In the caller's branches. Default from the business date for 30 days. With the expected
+        amount, the instruction, the consent on file, the notice sent and why a matured deposit waits.
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DepositMaturity' } }
         default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/holds/{holdId}/release:
     post:
@@ -5992,7 +6186,7 @@ components:
       type: object
       required: [code, channel, body]
       properties:
-        code: { type: string, enum: [LOAN_DISBURSED, PAYMENT_RECEIVED, PAYMENT_BOUNCED, DUE_REMINDER, NOC_ISSUED, RATE_RESET] }
+        code: { type: string, enum: [LOAN_DISBURSED, PAYMENT_RECEIVED, PAYMENT_BOUNCED, DUE_REMINDER, NOC_ISSUED, RATE_RESET, DEPOSIT_MATURITY], description: "DEPOSIT_MATURITY (P4-4): a term deposit maturing; variables name, account_no, amount, maturity_date, instruction" }
         channel: { type: string, enum: [SMS, EMAIL] }
         language: { type: string, default: en }
         category: { type: string, enum: [TRANSACTIONAL, SERVICE, PROMOTIONAL], default: TRANSACTIONAL }
@@ -6295,6 +6489,27 @@ components:
         autoRenewalAllowed: { type: [boolean, 'null'], description: Default false }
         glLiability: { type: [string, 'null'], description: 'Default 2401 savings, 2402 current, 2403 term deposits' }
         glInterestExpense: { type: [string, 'null'], description: 'Default 5108 savings, 5107 term deposits' }
+        charges: { oneOf: [ { $ref: '#/components/schemas/DepositChargesInput' }, { type: 'null' } ], description: 'Savings and current: the schedule of charges (P4-4); none for no charges' }
+    DepositChargesInput:
+      type: object
+      description: A savings or current product's schedule of charges. Amounts before GST.
+      properties:
+        gstRatePercent: { type: [number, string, 'null'], description: Default 18 }
+        minBalancePercent: { type: [number, string, 'null'], description: 'Percentage of the month''s shortfall charged; with minBalanceMax, or neither for no charge' }
+        minBalanceMax: { type: [number, string, 'null'], description: The most charged for one month }
+        closureAmount: { type: [number, string, 'null'], description: 'Charged on closing the account; none for no charge' }
+        closureFreeWithinDays: { type: [integer, 'null'], minimum: 0, description: 'No closure charge within this many days of opening (14 by convention)' }
+        closureWithinDays: { type: [integer, 'null'], minimum: 0, description: 'No closure charge after this many days; none for no limit' }
+        service:
+          type: [array, 'null']
+          maxItems: 30
+          items:
+            type: object
+            required: [code, name, amount]
+            properties:
+              code: { type: string, pattern: '^[A-Z][A-Z0-9_]{2,29}$' }
+              name: { type: string, maxLength: 100 }
+              amount: { type: [number, string] }
     DepositProduct:
       type: object
       description: Amounts and rates are decimal strings. Settings of the other family are null.
@@ -6346,6 +6561,24 @@ components:
         autoRenewalAllowed: { type: [boolean, 'null'] }
         glLiability: { type: string }
         glInterestExpense: { type: [string, 'null'] }
+        charges:
+          type: [object, 'null']
+          description: The schedule of charges (savings and current); amounts are decimal strings
+          properties:
+            gstRatePercent: { type: string }
+            minBalancePercent: { type: [string, 'null'] }
+            minBalanceMax: { type: [string, 'null'] }
+            closureAmount: { type: [string, 'null'] }
+            closureFreeWithinDays: { type: [integer, 'null'] }
+            closureWithinDays: { type: [integer, 'null'] }
+            service:
+              type: array
+              items:
+                type: object
+                properties:
+                  code: { type: string }
+                  name: { type: string }
+                  amount: { type: string }
         updatedBy: { type: [string, 'null'] }
         updatedAt: { type: [string, 'null'] }
     DepositAddOnGiven:
@@ -6511,7 +6744,7 @@ components:
         seq: { type: integer, description: The order movements were made in }
         businessDate: { type: string, format: date }
         valueDate: { type: string, format: date }
-        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED], description: 'INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end' }
+        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL], description: 'INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4)' }
         direction: { type: string, enum: [DEBIT, CREDIT] }
         amount: { $ref: '#/components/schemas/Money' }
         balanceAfter: { $ref: '#/components/schemas/Money' }
@@ -6559,7 +6792,7 @@ components:
             type: object
             properties:
               id: { type: integer }
-              kind: { type: string, enum: [ACCRUAL, CREDIT, PAYOUT, PAYOUT_HELD, REVERSAL, TAX] }
+              kind: { type: string, enum: [ACCRUAL, CREDIT, PAYOUT, PAYOUT_HELD, REVERSAL, TAX, RECOVERY, OVERDUE] }
               periodFrom: { type: [string, 'null'], format: date }
               periodTo: { type: [string, 'null'], format: date }
               periodNo: { type: [integer, 'null'] }
@@ -6717,6 +6950,169 @@ components:
         freezes: { type: array, items: { type: string, enum: [DEBIT_FREEZE, CREDIT_FREEZE, TOTAL_FREEZE] } }
         nextInterestDate: { type: [string, 'null'], format: date, description: 'Savings and current: the last day of the interest period in progress; null for an account that bears no interest' }
         termDeposit: { $ref: '#/components/schemas/TermDepositTerms' }
+        closedOn: { type: [string, 'null'], format: date }
+        closure: { oneOf: [ { $ref: '#/components/schemas/DepositClosure' }, { type: 'null' } ], description: How the account was closed (P4-4) }
+    DepositClosure:
+      type: object
+      description: 'How an account was closed: the interest worked out, what was recovered, charged and taxed, and what was paid where.'
+      properties:
+        kind: { type: string, enum: [CASA, PREMATURE, MATURITY, RENEWAL] }
+        reason: { type: string, enum: [DEPOSITOR_REQUEST, DEATH, EMERGENCY_EXPENSE, CRITICAL_ILLNESS, MATURITY] }
+        closedOn: { type: string, format: date }
+        ratePercent: { type: [string, 'null'] }
+        interestDue: { type: [string, 'null'] }
+        interestCredited: { type: [string, 'null'] }
+        interestRecovered: { type: [string, 'null'] }
+        overdueInterest: { type: [string, 'null'] }
+        charges: { type: [string, 'null'] }
+        tax: { type: [string, 'null'] }
+        paidAmount: { type: [string, 'null'] }
+        payTo: { type: [string, 'null'], enum: [ACCOUNT, CASH, BANK_TRANSFER, GATEWAY, RENEWAL, null] }
+        payAccountNo: { type: [string, 'null'] }
+        payReference: { type: [string, 'null'] }
+        renewedToAccountNo: { type: [string, 'null'] }
+        basis: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+        closedBy: { type: [string, 'null'] }
+    DepositChargeInput:
+      type: object
+      required: [code, reason]
+      properties:
+        code: { type: string, description: One of the product's service charges }
+        reason: { type: string, maxLength: 500 }
+    DepositCharge:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, description: 'A service charge code, MIN_BALANCE or CLOSURE' }
+        description: { type: string }
+        businessDate: { type: string, format: date }
+        taxableValue: { type: string }
+        gstRatePercent: { type: string }
+        cgst: { type: string }
+        sgst: { type: string }
+        igst: { type: string }
+        total: { type: string }
+        invoiceNo: { type: string }
+        supplierState: { type: string }
+        placeOfSupply: { type: string }
+        status: { type: string, enum: [ISSUED, CANCELLED] }
+        cancelledOn: { type: [string, 'null'], format: date }
+        creditNoteNo: { type: [string, 'null'] }
+        movementId: { type: string, format: uuid }
+        reason: { type: [string, 'null'] }
+        createdBy: { type: string }
+    MinimumBalanceMonth:
+      type: object
+      properties:
+        month: { type: string, format: date }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        required: { type: string }
+        average: { type: string }
+        shortfall: { type: string }
+        notified: { type: boolean }
+        chargeInvoiceNo: { type: [string, 'null'] }
+        charged: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+    DepositPayoutInput:
+      type: object
+      required: [mode]
+      description: 'Where the proceeds of a closure go: ACCOUNT (accountId), CASH (the slip number as reference), BANK_TRANSFER (the UTR), GATEWAY (a term deposit only, to the bank account recorded on it).'
+      properties:
+        mode: { type: string, enum: [ACCOUNT, CASH, BANK_TRANSFER, GATEWAY] }
+        accountId: { type: [string, 'null'], format: uuid }
+        reference: { type: [string, 'null'], maxLength: 60 }
+    CasaClosureInput:
+      type: object
+      required: [payTo, reason]
+      properties:
+        payTo: { $ref: '#/components/schemas/DepositPayoutInput' }
+        reason: { type: string, maxLength: 500 }
+    CasaClosureQuote:
+      type: object
+      properties:
+        accountNo: { type: string }
+        closeOn: { type: string, format: date }
+        balance: { type: string }
+        interest: { type: string, description: 'Interest to the day before, credited on closure' }
+        closureCharge:
+          type: [object, 'null']
+          properties:
+            code: { type: string }
+            description: { type: string }
+            taxableValue: { type: string }
+            gst: { type: string }
+            total: { type: string }
+        payable: { type: string }
+        problems: { type: array, items: { type: string } }
+    TermDepositClosureQuote:
+      type: object
+      properties:
+        kind: { type: [string, 'null'], enum: [PREMATURE, MATURITY, null] }
+        reason: { type: [string, 'null'] }
+        closeOn: { type: string, format: date }
+        maturityDate: { type: [string, 'null'], format: date }
+        principal: { type: [string, 'null'] }
+        balance: { type: [string, 'null'] }
+        ratePercent: { type: [string, 'null'], description: The rate interest is worked out at }
+        interestDue: { type: [string, 'null'] }
+        interestCredited: { type: [string, 'null'] }
+        toCredit: { type: [string, 'null'] }
+        toRecover: { type: [string, 'null'] }
+        overdueInterest: { type: [string, 'null'] }
+        basis: { type: [string, 'null'], description: Which rule gave the figures }
+        payableBeforeTax: { type: [string, 'null'] }
+        taxNote: { type: string }
+        problems: { type: array, items: { type: string } }
+    TermDepositClosureInput:
+      type: object
+      required: [payTo]
+      properties:
+        reason: { type: [string, 'null'], enum: [DEPOSITOR_REQUEST, DEATH, EMERGENCY_EXPENSE, CRITICAL_ILLNESS, null], description: Before maturity. Default DEPOSITOR_REQUEST }
+        payTo: { $ref: '#/components/schemas/DepositPayoutInput' }
+        note: { type: [string, 'null'], maxLength: 500, description: 'Required for death, an emergency or illness: what supports it' }
+    RenewalConsentInput:
+      type: object
+      required: [reference, receivedOn]
+      properties:
+        reference: { type: string, maxLength: 60, description: The depositor's signed request }
+        receivedOn: { type: string, format: date }
+    MaturityInstructionInput:
+      type: object
+      required: [maturityInstruction]
+      properties:
+        maturityInstruction: { type: string, enum: [PAY_OUT, RENEW_PRINCIPAL, RENEW_WITH_INTEREST] }
+        consent: { oneOf: [ { $ref: '#/components/schemas/RenewalConsentInput' }, { type: 'null' } ], description: A deposit-taking NBFC's renewal only }
+    TermDepositRenewalInput:
+      type: object
+      required: [instruction]
+      properties:
+        instruction: { type: string, enum: [RENEW_PRINCIPAL, RENEW_WITH_INTEREST] }
+        consent: { oneOf: [ { $ref: '#/components/schemas/RenewalConsentInput' }, { type: 'null' } ] }
+    DepositMaturity:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        accountNo: { type: string }
+        status: { type: string, enum: [ACTIVE, MATURED] }
+        branchCode: { type: string }
+        customerNo: { type: string }
+        customerName: { type: string }
+        productCode: { type: string }
+        principal: { type: string }
+        ratePercent: { type: string }
+        startDate: { type: string, format: date }
+        maturityDate: { type: string, format: date }
+        maturityInstruction: { type: string }
+        payoutTo: { type: string }
+        payoutAccountNo: { type: [string, 'null'] }
+        payoutBankAccountMasked: { type: [string, 'null'] }
+        balance: { type: string }
+        expectedAmount: { type: string, description: The maturity value on the terms }
+        noticeOn: { type: [string, 'null'], format: date }
+        consentReference: { type: [string, 'null'] }
+        waitingBecause: { type: [string, 'null'], description: 'A MATURED deposit: why the day-end could not pay or renew it' }
     TermDepositTerms:
       type: object
       description: The terms frozen at booking, with figures from the same calculation as the preview.

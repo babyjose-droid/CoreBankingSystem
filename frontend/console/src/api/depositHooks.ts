@@ -10,6 +10,15 @@ import type {
   DepositInterest,
   DepositMovement,
   DepositTaxSummary,
+  CasaClosureInput,
+  CasaClosureQuote,
+  DepositCharge,
+  DepositMaturity,
+  MaturityInstructionInput,
+  MinimumBalanceMonth,
+  TermDepositClosureInput,
+  TermDepositClosureQuote,
+  TermDepositRenewalInput,
   TaxDeclaration,
   TaxDeclarationInput,
   DepositTransactionInput,
@@ -167,7 +176,8 @@ export function useBookTermDeposit() {
 function useMoneyInvalidation() {
   const qc = useQueryClient();
   return () => {
-    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals']) qc.invalidateQueries({ queryKey: [key] });
+    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote'])
+      qc.invalidateQueries({ queryKey: [key] });
   };
 }
 
@@ -370,5 +380,106 @@ export function useRevokeTaxDeclaration() {
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       unwrap<Approval>(api.POST('/api/v1/deposits/tax/declarations/{id}/revoke', { params: { path: { id } }, body: { reason } }) as never),
     onSuccess: done,
+  });
+}
+
+// ---- lifecycle (P4-4) --------------------------------------------------------------------------------------------
+
+/** The charges levied on a savings or current account, with their GST invoices. */
+export function useCasaCharges(id: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['casa-charges', id],
+    queryFn: () => unwrap<DepositCharge[]>(api.GET('/api/v1/casa/accounts/{id}/charges', { params: { path: { id: id! } } }) as never),
+    enabled: !!id && enabled,
+  });
+}
+
+/** The month-ends the day-end checked against the product's minimum balance. */
+export function useMinimumBalanceMonths(id: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['casa-charges', 'minimum', id],
+    queryFn: () => unwrap<MinimumBalanceMonth[]>(api.GET('/api/v1/casa/accounts/{id}/minimum-balance', { params: { path: { id: id! } } }) as never),
+    enabled: !!id && enabled,
+  });
+}
+
+export function useProposeCasaCharge(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: { code: string; reason: string }) => unwrap<Approval>(api.POST('/api/v1/casa/accounts/{id}/charges', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+/** What closing a savings or current account today would pay; nothing is posted. */
+export function useCasaClosureQuote(id: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['closure-quote', 'CASA', id],
+    queryFn: () => unwrap<CasaClosureQuote>(api.GET('/api/v1/casa/accounts/{id}/closure-quote', { params: { path: { id: id! } } }) as never),
+    enabled: !!id && enabled,
+  });
+}
+
+/** What closing a term deposit today would pay, before maturity for the reason given or at maturity; nothing is posted. */
+export function useDepositClosureQuote(id: string | undefined, reason: string | null, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['closure-quote', 'TERM_DEPOSIT', id, reason],
+    queryFn: () =>
+      unwrap<TermDepositClosureQuote>(
+        api.GET('/api/v1/deposits/accounts/{id}/closure-quote', { params: { path: { id: id! }, query: reason ? { reason: reason as 'DEATH' } : {} } }) as never,
+      ),
+    enabled: !!id && enabled,
+  });
+}
+
+export function useCloseCasa(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: CasaClosureInput) => unwrap<Approval>(api.POST('/api/v1/casa/accounts/{id}/close', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useCloseDeposit(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: TermDepositClosureInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/close', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useMaturityInstruction(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: MaturityInstructionInput) =>
+      unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/maturity-instruction', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useRenewDeposit(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: TermDepositRenewalInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/renew', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+/** Deposits maturing between two dates (default the next 30 days) and every matured deposit waiting. */
+export function useDepositMaturities(from: string | null, to: string | null) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['deposit-maturities', from, to],
+    queryFn: () =>
+      unwrap<DepositMaturity[]>(api.GET('/api/v1/deposits/maturities', { params: { query: { ...(from ? { from } : {}), ...(to ? { to } : {}) } } }) as never),
   });
 }

@@ -76,7 +76,7 @@ SELECT pg_temp.check(deposits.rule_value('tds.threshold') = 10000 AND deposits.r
 SELECT pg_temp.check(deposits.rule_value('savings.uniform-rate-up-to') IS NULL AND deposits.rule_value('casa.inoperative-after-months') IS NULL,
                      'D13 bank-only rules do not apply');
 SELECT pg_temp.expect_fail($q$ SELECT deposits.rule_required('savings.uniform-rate-up-to') $q$, 'P0002', 'D14 asking for a rule that must exist names it');
-SELECT pg_temp.check((SELECT count(*) = 24 AND bool_and(source <> '') FROM deposits.rules_in_force()), 'D15 24 rules in force, each with its source');
+SELECT pg_temp.check((SELECT count(*) = 25 AND bool_and(source <> '') FROM deposits.rules_in_force()), 'D15 25 rules in force (V34 adds overdue interest), each with its source');
 SELECT pg_temp.check((SELECT count(*) = 19 FROM deposits.rules_in_force() WHERE verified)
                      AND (SELECT bool_and(NOT verified) FROM deposits.rules_in_force() WHERE code LIKE 'tds.%' OR code = 'senior-citizen-age'),
                      'D16 the 19 figures read in the RBI Directions are marked verified; the tax figures are not');
@@ -106,8 +106,8 @@ SELECT pg_temp.check(deposits.rule_value('tds.threshold') = 50000 AND deposits.r
                      AND deposits.rule_value('tds.on-savings-interest') = 0, 'B8 tax at source: above 50,000, or 1,00,000 for senior citizens; not on savings interest');
 SELECT pg_temp.check(deposits.rule_value('td.max-rate-percent') IS NULL AND deposits.rule_value('td.lock-in-months') IS NULL
                      AND deposits.rule_value('td.min-tenure-months') IS NULL, 'B9 NBFC ceilings and the lock-in do not apply to a bank');
-SELECT pg_temp.check((SELECT count(*) = 15 AND bool_and(NOT verified) FROM deposits.rules_in_force()),
-                     'B10 15 bank rules in force (14 from V28, one from V29), none marked verified (the RBI text was not opened)');
+SELECT pg_temp.check((SELECT count(*) = 16 AND bool_and(NOT verified) FROM deposits.rules_in_force()),
+                     'B10 16 bank rules in force (14 from V28, one each from V29 and V34), none marked verified (the RBI text was not opened)');
 SELECT pg_temp.become('SFB');
 SELECT pg_temp.check(deposits.rule_kind() = 'BANK', 'B11 a small finance bank uses the BANK rule set');
 SELECT pg_temp.become('COOP_BANK');
@@ -139,7 +139,7 @@ VALUES ('BANK', 'tds.threshold', 60000, '2027-04-01', 'CLAUDE-TEST Finance Act',
 SELECT pg_temp.check(deposits.rule_value('tds.threshold') = 50000 AND deposits.rule_value('tds.threshold', '2027-03-31') = 50000
                      AND deposits.rule_value('tds.threshold', '2027-04-01') = 60000, 'H5 ended and replaced: the value follows the date asked for');
 SELECT pg_temp.check((SELECT value = 60000 AND effective_from = '2027-04-01' FROM deposits.rules_in_force('2027-06-30') WHERE code = 'tds.threshold')
-                     AND (SELECT count(*) = 15 FROM deposits.rules_in_force('2027-06-30')), 'H6 the rule set of a later date shows the new value once');
+                     AND (SELECT count(*) = 16 FROM deposits.rules_in_force('2027-06-30')), 'H6 the rule set of a later date shows the new value once');
 SELECT pg_temp.expect_fail($q$ UPDATE deposits.rule SET effective_to = '2027-06-30' WHERE kind = 'BANK' AND code = 'tds.threshold' AND effective_from = '2026-04-01' $q$,
                            '42501', 'H7 an ended rule cannot be re-opened or moved');
 UPDATE deposits.rule SET verified = true, source = 'CLAUDE-TEST primary text', note = 'read by compliance'

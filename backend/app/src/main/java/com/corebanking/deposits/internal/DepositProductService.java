@@ -3,6 +3,7 @@ package com.corebanking.deposits.internal;
 import com.corebanking.calc.DayCount;
 import com.corebanking.calc.Rounding;
 import com.corebanking.deposits.DemandDepositProduct;
+import com.corebanking.deposits.DepositCharges;
 import com.corebanking.deposits.DepositRateTable;
 import com.corebanking.deposits.DepositRules;
 import com.corebanking.deposits.SavingsInterest;
@@ -69,7 +70,13 @@ public class DepositProductService {
                                Integer maxTenureMonths, Integer maxTenureDays, Integer interestPeriodMonths, List<RateInput> rateCard,
                                List<AddOnInput> addOns, Boolean prematureAllowed, BigDecimal prematurePenaltyPercent,
                                Integer prematureMinDays, Boolean autoRenewalAllowed,
-                               String glLiability, String glInterestExpense) {}
+                               String glLiability, String glInterestExpense, ChargesInput charges) {}
+
+    /** openapi.yaml#/components/schemas/DepositChargesInput: a savings or current product's schedule of charges (P4-4). */
+    public record ChargesInput(BigDecimal gstRatePercent, BigDecimal minBalancePercent, BigDecimal minBalanceMax, BigDecimal closureAmount,
+                               Integer closureFreeWithinDays, Integer closureWithinDays, List<ServiceChargeInput> service) {}
+
+    public record ServiceChargeInput(String code, String name, BigDecimal amount) {}
 
     // ---- what the API returns and what an approval request carries: amounts and rates as plain decimal strings ----
     public record Band(String fromBalance, String ratePercent) {}
@@ -77,6 +84,12 @@ public class DepositProductService {
     public record Rate(String fromAmount, Integer fromMonths, Integer fromDays, String ratePercent) {}
 
     public record AddOn(String code, String percent) {}
+
+    /** openapi.yaml#/components/schemas/DepositCharges. */
+    public record Charges(String gstRatePercent, String minBalancePercent, String minBalanceMax, String closureAmount,
+                          Integer closureFreeWithinDays, Integer closureWithinDays, List<ServiceCharge> service) {}
+
+    public record ServiceCharge(String code, String name, String amount) {}
 
     /** openapi.yaml#/components/schemas/DepositProduct. Settings of the other family are null. */
     public record Product(String code, String name, String family, String productType, String status, Integer version,
@@ -87,7 +100,7 @@ public class DepositProductService {
                           Integer maxTenureMonths, Integer maxTenureDays, Integer interestPeriodMonths, List<Rate> rateCard,
                           List<AddOn> addOns, Boolean prematureAllowed, String prematurePenaltyPercent, Integer prematureMinDays,
                           Boolean autoRenewalAllowed,
-                          String glLiability, String glInterestExpense, String updatedBy, String updatedAt) {}
+                          String glLiability, String glInterestExpense, Charges charges, String updatedBy, String updatedAt) {}
 
     private static final String SELECT = """
             SELECT code, name, family, product_type, status, version, effective_from::text AS effective_from, day_count, rounding,
@@ -105,7 +118,13 @@ public class DepositProductService {
                      (SELECT coalesce(jsonb_agg(jsonb_build_object('code', a->>'code', 'percent', a->>'percent') ORDER BY a->>'code'), '[]'::jsonb)
                         FROM jsonb_array_elements(add_ons) a)::text END AS add_ons,
                    premature_allowed, premature_penalty_percent::text AS premature_penalty_percent, premature_min_days,
-                   auto_renewal_allowed, gl_liability, gl_interest_expense, updated_by, to_json(updated_at)#>>'{}' AS updated_at
+                   auto_renewal_allowed, gl_liability, gl_interest_expense, updated_by, to_json(updated_at)#>>'{}' AS updated_at,
+                   CASE WHEN charges IS NULL THEN NULL ELSE jsonb_build_object(
+                     'gstRatePercent', charges->>'gstRatePercent', 'minBalancePercent', charges->>'minBalancePercent',
+                     'minBalanceMax', charges->>'minBalanceMax', 'closureAmount', charges->>'closureAmount',
+                     'closureFreeWithinDays', (charges->>'closureFreeWithinDays')::int, 'closureWithinDays', (charges->>'closureWithinDays')::int,
+                     'service', (SELECT coalesce(jsonb_agg(jsonb_build_object('code', x->>'code', 'name', x->>'name', 'amount', x->>'amount') ORDER BY x->>'code'), '[]'::jsonb)
+                                   FROM jsonb_array_elements(coalesce(charges->'service', '[]'::jsonb)) x))::text END AS charges
               FROM deposits.product
             """;
 
@@ -126,7 +145,7 @@ public class DepositProductService {
     // ---- reading ------------------------------------------------------------------------------------------------
 
     public List<Product> list(String family) {
-        return jdbc.query(SELECT + " WHERE family = ? ORDER BY code", this::map, family);
+        return jdbc.query(SELECT + " WHERE family = ? ORDER BY code", (rs, i) -> map(json, rs), family);
     }
 
     /** The product of this family, or 404: a savings product is not found under the term deposit paths. */
@@ -137,7 +156,12 @@ public class DepositProductService {
     }
 
     Product find(String code) {
-        List<Product> found = jdbc.query(SELECT + " WHERE code = ?", this::map, code);
+        return load(jdbc, json, code);
+    }
+
+    /** A product read through any JdbcTemplate (the day-end's is bound to the tenant's own data source); null when there is none. */
+    static Product load(JdbcTemplate jdbc, Json json, String code) {
+        List<Product> found = jdbc.query(SELECT + " WHERE code = ?", (rs, i) -> map(json, rs), code);
         return found.isEmpty() ? null : found.get(0);
     }
 
@@ -159,7 +183,8 @@ public class DepositProductService {
                 }, code);
     }
 
-    private Product map(ResultSet rs, int i) throws SQLException {
+    private static Product map(Json json, ResultSet rs) throws SQLException {
+        String charges = rs.getString("charges");
         String bands = rs.getString("interest_bands");
         String card = rs.getString("rate_card");
         String addOns = rs.getString("add_ons");
@@ -174,7 +199,58 @@ public class DepositProductService {
                 addOns == null ? null : List.of(json.read(addOns, AddOn[].class)), bool(rs, "premature_allowed"),
                 DepositRuleSets.plain(rs.getString("premature_penalty_percent")), whole(rs, "premature_min_days"),
                 bool(rs, "auto_renewal_allowed"), rs.getString("gl_liability"), rs.getString("gl_interest_expense"),
-                rs.getString("updated_by"), rs.getString("updated_at"));
+                charges == null ? null : plainCharges(json.read(charges, Charges.class)), rs.getString("updated_by"), rs.getString("updated_at"));
+    }
+
+    private static Charges plainCharges(Charges c) {
+        List<ServiceCharge> service = new ArrayList<>();
+        for (ServiceCharge x : c.service() == null ? List.<ServiceCharge>of() : c.service()) {
+            service.add(new ServiceCharge(x.code(), x.name(), DepositRuleSets.plain(x.amount())));
+        }
+        return new Charges(DepositRuleSets.plain(c.gstRatePercent()), DepositRuleSets.plain(c.minBalancePercent()), DepositRuleSets.plain(c.minBalanceMax()),
+                DepositRuleSets.plain(c.closureAmount()), c.closureFreeWithinDays(), c.closureWithinDays(), List.copyOf(service));
+    }
+
+    /** The engine's view of a schedule of charges; a product without one charges nothing (GST at 18% if ever it did). */
+    static DepositCharges.Schedule schedule(Charges c) {
+        if (c == null) return DepositCharges.Schedule.none();
+        List<DepositCharges.Service> service = new ArrayList<>();
+        for (ServiceCharge x : c.service() == null ? List.<ServiceCharge>of() : c.service()) {
+            service.add(new DepositCharges.Service(x.code(), x.name(), decimal(x.amount())));
+        }
+        return new DepositCharges.Schedule(c.gstRatePercent() == null ? BigDecimal.valueOf(18) : new BigDecimal(c.gstRatePercent()),
+                decimal(c.minBalancePercent()), decimal(c.minBalanceMax()), decimal(c.closureAmount()), c.closureFreeWithinDays(),
+                c.closureWithinDays(), service);
+    }
+
+    static String chargesJson(Charges c) {
+        if (c == null) return null;
+        StringBuilder sb = new StringBuilder("{\"gstRatePercent\": ").append(number(c.gstRatePercent()));
+        if (c.minBalancePercent() != null) sb.append(", \"minBalancePercent\": ").append(number(c.minBalancePercent()));
+        if (c.minBalanceMax() != null) sb.append(", \"minBalanceMax\": ").append(number(c.minBalanceMax()));
+        if (c.closureAmount() != null) sb.append(", \"closureAmount\": ").append(number(c.closureAmount()));
+        if (c.closureFreeWithinDays() != null) sb.append(", \"closureFreeWithinDays\": ").append(c.closureFreeWithinDays().intValue());
+        if (c.closureWithinDays() != null) sb.append(", \"closureWithinDays\": ").append(c.closureWithinDays().intValue());
+        sb.append(", \"service\": [");
+        boolean first = true;
+        for (ServiceCharge x : c.service()) {
+            if (!x.code().matches("[A-Z][A-Z0-9_]{2,29}")) throw ApiException.invalid("service charge code " + x.code() + " is not valid");
+            if (!first) sb.append(", ");
+            first = false;
+            sb.append("{\"code\": \"").append(x.code()).append("\", \"name\": ").append(jsonText(x.name())).append(", \"amount\": ").append(number(x.amount())).append('}');
+        }
+        return sb.append("]}").toString();
+    }
+
+    /** A JSON string: quotes, backslashes and control characters escaped. */
+    private static String jsonText(String v) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char ch : v.toCharArray()) {
+            if (ch == '"' || ch == '\\') sb.append('\\').append(ch);
+            else if (ch < 0x20) sb.append(String.format("\\u%04x", (int) ch));
+            else sb.append(ch);
+        }
+        return sb.append('"').toString();
     }
 
     static Integer whole(ResultSet rs, String column) throws SQLException {
@@ -222,6 +298,7 @@ public class DepositProductService {
         List<String> out = new ArrayList<>(CASA.equals(p.family())
                 ? DemandDepositProduct.problems(rules, demand(p))
                 : TermDepositProduct.problems(rules, term(p)));
+        if (CASA.equals(p.family())) out.addAll(DepositCharges.problems(schedule(p.charges())));
         glProblem(p.glLiability(), "LIABILITY", "deposits are liabilities", out);
         if (p.glInterestExpense() != null) glProblem(p.glInterestExpense(), "EXPENSE", "interest on deposits is an expense", out);
         return out;
@@ -349,16 +426,37 @@ public class DepositProductService {
         if (!interest && in.glInterestExpense() != null) throw ApiException.invalid("glInterestExpense goes with interest bands; this product has none");
         glCode(liability);
         if (expense != null) glCode(expense);
+        Charges charges = charges(in.charges());
         return new Product(in.code(), in.name().trim(), CASA, type, "ACTIVE", null, from.toString(),
                 interest ? (dayCount == null ? "ACTUAL_365" : dayCount) : null, rounding, tds,
                 DepositRuleSets.plain(minBalance), interest ? bands : null, bandMode, posting, Boolean.TRUE.equals(in.chequeFacility()),
-                null, null, null, null, null, null, null, null, null, null, null, null, null, liability, expense, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, liability, expense, charges, null, null);
+    }
+
+    /** The schedule as entered: shapes checked here, figures by the engine ({@link DepositCharges#problems}). */
+    private static Charges charges(ChargesInput in) {
+        if (in == null) return null;
+        List<ServiceChargeInput> rows = in.service() == null ? List.of() : in.service();
+        if (rows.size() > 30) throw ApiException.invalid("at most 30 service charges");
+        List<ServiceCharge> service = new ArrayList<>();
+        for (ServiceChargeInput x : rows) {
+            if (x == null || x.code() == null || x.amount() == null || x.name() == null) throw ApiException.invalid("each service charge has a code, a name and an amount");
+            service.add(new ServiceCharge(x.code().trim(), x.name().trim(), DepositRuleSets.plain(x.amount())));
+        }
+        for (Integer d : java.util.Arrays.asList(in.closureFreeWithinDays(), in.closureWithinDays())) {
+            if (d != null && (d < 0 || d > MAX_TENURE_DAYS)) throw ApiException.invalid("a number of days for the closure charge is from 0 to " + MAX_TENURE_DAYS);
+        }
+        BigDecimal gst = in.gstRatePercent() == null ? BigDecimal.valueOf(18) : in.gstRatePercent();
+        percent("gstRatePercent", gst, false);
+        if (in.minBalancePercent() != null) percent("minBalancePercent", in.minBalancePercent(), false);
+        return new Charges(DepositRuleSets.plain(gst), DepositRuleSets.plain(in.minBalancePercent()), DepositRuleSets.plain(in.minBalanceMax()),
+                DepositRuleSets.plain(in.closureAmount()), in.closureFreeWithinDays(), in.closureWithinDays(), List.copyOf(service));
     }
 
     private Product termProduct(ProductInput in, String type, String rounding, String dayCount, LocalDate from) {
         if (in.minBalance() != null || in.interestBands() != null || in.bandMode() != null || in.interestPostingMonths() != null
-                || in.chequeFacility() != null) {
-            throw ApiException.invalid("the minimum balance, interest bands and the cheque facility are settings of a savings or current product");
+                || in.chequeFacility() != null || in.charges() != null) {
+            throw ApiException.invalid("the minimum balance, interest bands, the cheque facility and charges are settings of a savings or current product");
         }
         if (in.minAmount() == null) throw ApiException.invalid("minAmount is required");
         money("minAmount", in.minAmount(), false);
@@ -412,7 +510,7 @@ public class DepositProductService {
                 DepositRuleSets.plain(in.minAmount()), DepositRuleSets.plain(in.maxAmount()), minMonths, minDays, maxMonths, maxDays,
                 in.interestPeriodMonths(), card, addOns, in.prematureAllowed() == null || in.prematureAllowed(),
                 DepositRuleSets.plain(in.prematurePenaltyPercent()), in.prematureMinDays(), Boolean.TRUE.equals(in.autoRenewalAllowed()),
-                liability, expense, null, null);
+                liability, expense, null, null, null);
     }
 
     private static void money(String what, BigDecimal v, boolean zeroAllowed) {
@@ -519,7 +617,8 @@ public class DepositProductService {
                     p.interestPostingMonths(), p.chequeFacility(), decimal(p.minAmount()), decimal(p.maxAmount()), p.minTenureMonths(),
                     p.minTenureDays(), p.maxTenureMonths(), p.maxTenureDays(), p.interestPeriodMonths(), cardJson(p.rateCard()),
                     addOnsJson(p.addOns()), p.prematureAllowed(), decimal(p.prematurePenaltyPercent()), p.prematureMinDays(),
-                    p.autoRenewalAllowed(), p.glLiability(), p.glInterestExpense(), LocalDate.parse(p.effectiveFrom()), r.id(), r.maker()};
+                    p.autoRenewalAllowed(), p.glLiability(), p.glInterestExpense(), chargesJson(p.charges()), LocalDate.parse(p.effectiveFrom()),
+                    r.id(), r.maker()};
             if (existing == null) {
                 List<Object> args = new ArrayList<>(List.of(code, p.family(), p.productType()));
                 args.addAll(java.util.Arrays.asList(values));
@@ -528,8 +627,8 @@ public class DepositProductService {
                             interest_bands, band_mode, interest_posting_months, cheque_facility, min_amount, max_amount, min_tenure_months,
                             min_tenure_days, max_tenure_months, max_tenure_days, interest_period_months, rate_card, add_ons, premature_allowed,
                             premature_penalty_percent, premature_min_days, auto_renewal_allowed, gl_liability, gl_interest_expense,
-                            effective_from, approval_id, updated_by)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            charges, effective_from, approval_id, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)
                         """, args.toArray());
             } else {
                 List<Object> args = new ArrayList<>(java.util.Arrays.asList(values));
@@ -540,7 +639,7 @@ public class DepositProductService {
                                interest_posting_months = ?, cheque_facility = ?, min_amount = ?, max_amount = ?, min_tenure_months = ?,
                                min_tenure_days = ?, max_tenure_months = ?, max_tenure_days = ?, interest_period_months = ?, rate_card = ?::jsonb,
                                add_ons = ?::jsonb, premature_allowed = ?, premature_penalty_percent = ?, premature_min_days = ?,
-                               auto_renewal_allowed = ?, gl_liability = ?, gl_interest_expense = ?, effective_from = ?, approval_id = ?,
+                               auto_renewal_allowed = ?, gl_liability = ?, gl_interest_expense = ?, charges = ?::jsonb, effective_from = ?, approval_id = ?,
                                updated_by = ?
                          WHERE code = ?
                         """, args.toArray());

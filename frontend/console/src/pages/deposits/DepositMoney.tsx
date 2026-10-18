@@ -37,6 +37,10 @@ const KIND_LABEL: Record<string, string> = {
   INTEREST_CREDIT: 'Interest',
   INTEREST_PAYOUT: 'Interest paid out',
   TAX_DEDUCTED: 'Tax deducted at source',
+  CHARGE: 'Charge (with GST)',
+  CLOSURE: 'Closure proceeds',
+  INTEREST_RECOVERY: 'Interest recovered',
+  RENEWAL: 'Renewed into a new deposit',
 };
 const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
 const GATEWAY: Record<string, { label: string; tone: 'info' | 'ok' | 'warn' }> = {
@@ -76,7 +80,7 @@ export function MovementsCard({ family, accountId, canReverse }: { family: Depos
   const q = useDepositMovements(family, accountId);
   const [reversing, setReversing] = useState<DepositMovement | null>(null);
   const reversible = (m: DepositMovement) =>
-    canReverse && family === 'CASA' && !['REVERSAL', 'FUNDING', 'FUNDING_PAID', 'INTEREST_CREDIT', 'INTEREST_PAYOUT', 'TAX_DEDUCTED'].includes(m.kind ?? '') && !m.reversedBy && !m.gatewayStatus;
+    canReverse && family === 'CASA' && !['REVERSAL', 'FUNDING', 'FUNDING_PAID', 'INTEREST_CREDIT', 'INTEREST_PAYOUT', 'TAX_DEDUCTED', 'CLOSURE', 'INTEREST_RECOVERY', 'RENEWAL'].includes(m.kind ?? '') && !m.reversedBy && !m.gatewayStatus;
   return (
     <Card title="Statement" flush>
       {q.isLoading ? (

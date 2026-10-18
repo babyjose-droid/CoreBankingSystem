@@ -3698,6 +3698,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/accounts/{id}/charges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The charges levied on a savings or current account, with their GST invoices (P4-4)
+         * @description Module CASA. Permission casa:view. Newest first, at most 500. A charge whose movement was reversed is CANCELLED, with a credit note.
+         */
+        get: operations["listCasaCharges"];
+        put?: never;
+        /**
+         * Propose one of the product's service charges (maker-checker)
+         * @description Module CASA. Permission casa:transact. Always waits for a checker. The charge is the amount in the product's schedule with GST on top (CGST and SGST within the branch's state, IGST when the depositor's address is in another state), and gets a tax invoice. 422 with every reason: a code the product does not have, no reason, an account that is not ACTIVE, too little free balance (after liens; none when frozen for debits). To refund a charge, reverse its movement: it is then cancelled with a credit note.
+         */
+        post: operations["proposeCasaCharge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/minimum-balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The month-ends evaluated against the product's minimum balance (P4-4)
+         * @description Module CASA. Permission casa:view. Newest first. The day-end compares each month's average daily closing balance with the product's minimum; a short month is notified, and a short month after a notified one is charged (a percentage of the shortfall, capped, never below zero).
+         */
+        get: operations["listCasaMinimumBalanceMonths"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/closure-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What closing a savings or current account today would pay, and why it cannot be closed
+         * @description Module CASA. Permission casa:view. Interest to the day before, the closure charge of the product's schedule, the rest payable.
+         */
+        get: operations["getCasaClosureQuote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose closing a savings or current account (maker-checker)
+         * @description Module CASA. Permission casa:transact. Always waits for a checker. When applied: interest to the day before is credited, the closure charge taken (with GST), the rest paid to another account, in cash or by a bank transfer (with its UTR), and the account CLOSED. 422 with every reason: no reason, a freeze or lien in force, a deposit paying out to the account, a gateway transfer not yet paid, where the money goes not given or not possible.
+         */
+        post: operations["proposeCasaClosure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/deposits/rules": {
         parameters: {
             query?: never;
@@ -4072,6 +4156,106 @@ export interface paths {
          * @description Module TD. Permission deposit:hold. Kind LIEN only (a term deposit takes no freeze). Always waits for a checker. 422: a deposit not funded, an amount above the available balance, no reason.
          */
         post: operations["proposeTermDepositLien"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/closure-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What closing a term deposit today would pay (premature or at maturity), and why it cannot be closed
+         * @description Module TD. Permission deposit:view. Before maturity, the premature rule of the rule set: a deposit-taking NBFC repays nothing in the first three months except on death or, for an individual, an emergency or a critical illness; no interest from three to six months; after six months the rate for the period run less 2 points (the lowest rate less 3 when it has none); a bank the rate for the period run, not above the contracted rate, less the product's penalty. At or after maturity, interest for the days the proceeds waited (the contracted rate to the next working day when it matured on a holiday; then the overdue rate for a bank, nothing for an NBFC; rules unverified).
+         */
+        get: operations["getTermDepositClosureQuote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose closing a term deposit before maturity, or paying a matured one (maker-checker)
+         * @description Module TD. Permission deposit:fund. Always waits for a checker. When applied: interest above what the rule allows is recovered (or what is due beyond what was credited is credited, with tax at source), overdue interest credited, the whole balance paid to a savings or current account of the depositor (any account on death), in cash, by a bank transfer with its UTR, or through the payment gateway to the bank account recorded on the deposit, and the deposit CLOSED. 422 with every reason from the quote, and a closure for death, an emergency or illness without a note of what supports it.
+         */
+        post: operations["proposeTermDepositClosure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/maturity-instruction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose a new maturity instruction for a funded deposit (maker-checker)
+         * @description Module TD. Permission deposit:fund. Always waits for a checker. PAY_OUT, RENEW_PRINCIPAL or RENEW_WITH_INTEREST, before the maturity date. On a deposit-taking NBFC a renewal needs the depositor's express consent (Directions para 17): the reference of their signed request and the date it was received; an instruction given at booking is not that consent. 422: the same instruction, a deposit not funded or at maturity, a product that does not renew, consent missing or dated outside booking and today.
+         */
+        post: operations["proposeMaturityInstruction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose renewing a matured deposit (maker-checker)
+         * @description Module TD. Permission deposit:fund. For a MATURED deposit (one the day-end could not pay or renew). Overdue interest is credited, then a new deposit is booked on the product's terms today (same product, tenure, holders, nominees and payout), funded with the whole balance or the principal (the rest paid out). An NBFC needs the depositor's consent with the request.
+         */
+        post: operations["proposeTermDepositRenewal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/maturities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deposits maturing between two dates, and every matured deposit waiting to be paid
+         * @description Module TD. Permission deposit:view. In the caller's branches. Default from the business date for 30 days. With the expected amount, the instruction, the consent on file, the notice sent and why a matured deposit waits.
+         */
+        get: operations["listDepositMaturities"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5888,8 +6072,11 @@ export interface components {
             scopes: string[];
         };
         MessageTemplateInput: {
-            /** @enum {string} */
-            code: "LOAN_DISBURSED" | "PAYMENT_RECEIVED" | "PAYMENT_BOUNCED" | "DUE_REMINDER" | "NOC_ISSUED" | "RATE_RESET";
+            /**
+             * @description DEPOSIT_MATURITY (P4-4): a term deposit maturing; variables name, account_no, amount, maturity_date, instruction
+             * @enum {string}
+             */
+            code: "LOAN_DISBURSED" | "PAYMENT_RECEIVED" | "PAYMENT_BOUNCED" | "DUE_REMINDER" | "NOC_ISSUED" | "RATE_RESET" | "DEPOSIT_MATURITY";
             /** @enum {string} */
             channel: "SMS" | "EMAIL";
             /** @default en */
@@ -6281,6 +6468,28 @@ export interface components {
             glLiability?: string | null;
             /** @description Default 5108 savings, 5107 term deposits */
             glInterestExpense?: string | null;
+            /** @description Savings and current: the schedule of charges (P4-4); none for no charges */
+            charges?: components["schemas"]["DepositChargesInput"] | null;
+        };
+        /** @description A savings or current product's schedule of charges. Amounts before GST. */
+        DepositChargesInput: {
+            /** @description Default 18 */
+            gstRatePercent?: number | string | null;
+            /** @description Percentage of the month's shortfall charged; with minBalanceMax, or neither for no charge */
+            minBalancePercent?: number | string | null;
+            /** @description The most charged for one month */
+            minBalanceMax?: number | string | null;
+            /** @description Charged on closing the account; none for no charge */
+            closureAmount?: number | string | null;
+            /** @description No closure charge within this many days of opening (14 by convention) */
+            closureFreeWithinDays?: number | null;
+            /** @description No closure charge after this many days; none for no limit */
+            closureWithinDays?: number | null;
+            service?: {
+                code: string;
+                name: string;
+                amount: number | string;
+            }[] | null;
         };
         /** @description Amounts and rates are decimal strings. Settings of the other family are null. */
         DepositProduct: {
@@ -6327,6 +6536,20 @@ export interface components {
             autoRenewalAllowed?: boolean | null;
             glLiability?: string;
             glInterestExpense?: string | null;
+            /** @description The schedule of charges (savings and current); amounts are decimal strings */
+            charges?: {
+                gstRatePercent?: string;
+                minBalancePercent?: string | null;
+                minBalanceMax?: string | null;
+                closureAmount?: string | null;
+                closureFreeWithinDays?: number | null;
+                closureWithinDays?: number | null;
+                service?: {
+                    code?: string;
+                    name?: string;
+                    amount?: string;
+                }[];
+            } | null;
             updatedBy?: string | null;
             updatedAt?: string | null;
         };
@@ -6537,10 +6760,10 @@ export interface components {
             /** Format: date */
             valueDate?: string;
             /**
-             * @description INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end
+             * @description INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4)
              * @enum {string}
              */
-            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED";
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL";
             /** @enum {string} */
             direction?: "DEBIT" | "CREDIT";
             amount?: components["schemas"]["Money"];
@@ -6603,7 +6826,7 @@ export interface components {
             events?: {
                 id?: number;
                 /** @enum {string} */
-                kind?: "ACCRUAL" | "CREDIT" | "PAYOUT" | "PAYOUT_HELD" | "REVERSAL" | "TAX";
+                kind?: "ACCRUAL" | "CREDIT" | "PAYOUT" | "PAYOUT_HELD" | "REVERSAL" | "TAX" | "RECOVERY" | "OVERDUE";
                 /** Format: date */
                 periodFrom?: string | null;
                 /** Format: date */
@@ -6797,6 +7020,190 @@ export interface components {
              */
             nextInterestDate?: string | null;
             termDeposit?: components["schemas"]["TermDepositTerms"];
+            /** Format: date */
+            closedOn?: string | null;
+            /** @description How the account was closed (P4-4) */
+            closure?: components["schemas"]["DepositClosure"] | null;
+        };
+        /** @description How an account was closed: the interest worked out, what was recovered, charged and taxed, and what was paid where. */
+        DepositClosure: {
+            /** @enum {string} */
+            kind?: "CASA" | "PREMATURE" | "MATURITY" | "RENEWAL";
+            /** @enum {string} */
+            reason?: "DEPOSITOR_REQUEST" | "DEATH" | "EMERGENCY_EXPENSE" | "CRITICAL_ILLNESS" | "MATURITY";
+            /** Format: date */
+            closedOn?: string;
+            ratePercent?: string | null;
+            interestDue?: string | null;
+            interestCredited?: string | null;
+            interestRecovered?: string | null;
+            overdueInterest?: string | null;
+            charges?: string | null;
+            tax?: string | null;
+            paidAmount?: string | null;
+            /** @enum {string|null} */
+            payTo?: "ACCOUNT" | "CASH" | "BANK_TRANSFER" | "GATEWAY" | "RENEWAL" | null;
+            payAccountNo?: string | null;
+            payReference?: string | null;
+            renewedToAccountNo?: string | null;
+            basis?: string | null;
+            note?: string | null;
+            closedBy?: string | null;
+        };
+        DepositChargeInput: {
+            /** @description One of the product's service charges */
+            code: string;
+            reason: string;
+        };
+        DepositCharge: {
+            /** Format: uuid */
+            id?: string;
+            /** @description A service charge code, MIN_BALANCE or CLOSURE */
+            code?: string;
+            description?: string;
+            /** Format: date */
+            businessDate?: string;
+            taxableValue?: string;
+            gstRatePercent?: string;
+            cgst?: string;
+            sgst?: string;
+            igst?: string;
+            total?: string;
+            invoiceNo?: string;
+            supplierState?: string;
+            placeOfSupply?: string;
+            /** @enum {string} */
+            status?: "ISSUED" | "CANCELLED";
+            /** Format: date */
+            cancelledOn?: string | null;
+            creditNoteNo?: string | null;
+            /** Format: uuid */
+            movementId?: string;
+            reason?: string | null;
+            createdBy?: string;
+        };
+        MinimumBalanceMonth: {
+            /** Format: date */
+            month?: string;
+            /** Format: date */
+            from?: string;
+            /** Format: date */
+            to?: string;
+            required?: string;
+            average?: string;
+            shortfall?: string;
+            notified?: boolean;
+            chargeInvoiceNo?: string | null;
+            charged?: string | null;
+            note?: string | null;
+        };
+        /** @description Where the proceeds of a closure go: ACCOUNT (accountId), CASH (the slip number as reference), BANK_TRANSFER (the UTR), GATEWAY (a term deposit only, to the bank account recorded on it). */
+        DepositPayoutInput: {
+            /** @enum {string} */
+            mode: "ACCOUNT" | "CASH" | "BANK_TRANSFER" | "GATEWAY";
+            /** Format: uuid */
+            accountId?: string | null;
+            reference?: string | null;
+        };
+        CasaClosureInput: {
+            payTo: components["schemas"]["DepositPayoutInput"];
+            reason: string;
+        };
+        CasaClosureQuote: {
+            accountNo?: string;
+            /** Format: date */
+            closeOn?: string;
+            balance?: string;
+            /** @description Interest to the day before, credited on closure */
+            interest?: string;
+            closureCharge?: {
+                code?: string;
+                description?: string;
+                taxableValue?: string;
+                gst?: string;
+                total?: string;
+            } | null;
+            payable?: string;
+            problems?: string[];
+        };
+        TermDepositClosureQuote: {
+            /** @enum {string|null} */
+            kind?: "PREMATURE" | "MATURITY" | null;
+            reason?: string | null;
+            /** Format: date */
+            closeOn?: string;
+            /** Format: date */
+            maturityDate?: string | null;
+            principal?: string | null;
+            balance?: string | null;
+            /** @description The rate interest is worked out at */
+            ratePercent?: string | null;
+            interestDue?: string | null;
+            interestCredited?: string | null;
+            toCredit?: string | null;
+            toRecover?: string | null;
+            overdueInterest?: string | null;
+            /** @description Which rule gave the figures */
+            basis?: string | null;
+            payableBeforeTax?: string | null;
+            taxNote?: string;
+            problems?: string[];
+        };
+        TermDepositClosureInput: {
+            /**
+             * @description Before maturity. Default DEPOSITOR_REQUEST
+             * @enum {string|null}
+             */
+            reason?: "DEPOSITOR_REQUEST" | "DEATH" | "EMERGENCY_EXPENSE" | "CRITICAL_ILLNESS" | null;
+            payTo: components["schemas"]["DepositPayoutInput"];
+            /** @description Required for death, an emergency or illness: what supports it */
+            note?: string | null;
+        };
+        RenewalConsentInput: {
+            /** @description The depositor's signed request */
+            reference: string;
+            /** Format: date */
+            receivedOn: string;
+        };
+        MaturityInstructionInput: {
+            /** @enum {string} */
+            maturityInstruction: "PAY_OUT" | "RENEW_PRINCIPAL" | "RENEW_WITH_INTEREST";
+            /** @description A deposit-taking NBFC's renewal only */
+            consent?: components["schemas"]["RenewalConsentInput"] | null;
+        };
+        TermDepositRenewalInput: {
+            /** @enum {string} */
+            instruction: "RENEW_PRINCIPAL" | "RENEW_WITH_INTEREST";
+            consent?: components["schemas"]["RenewalConsentInput"] | null;
+        };
+        DepositMaturity: {
+            /** Format: uuid */
+            id?: string;
+            accountNo?: string;
+            /** @enum {string} */
+            status?: "ACTIVE" | "MATURED";
+            branchCode?: string;
+            customerNo?: string;
+            customerName?: string;
+            productCode?: string;
+            principal?: string;
+            ratePercent?: string;
+            /** Format: date */
+            startDate?: string;
+            /** Format: date */
+            maturityDate?: string;
+            maturityInstruction?: string;
+            payoutTo?: string;
+            payoutAccountNo?: string | null;
+            payoutBankAccountMasked?: string | null;
+            balance?: string;
+            /** @description The maturity value on the terms */
+            expectedAmount?: string;
+            /** Format: date */
+            noticeOn?: string | null;
+            consentReference?: string | null;
+            /** @description A MATURED deposit: why the day-end could not pay or renew it */
+            waitingBecause?: string | null;
         };
         /** @description The terms frozen at booking, with figures from the same calculation as the preview. */
         TermDepositTerms: {
@@ -12210,6 +12617,117 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    listCasaCharges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositCharge"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCasaCharge: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositChargeInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCasaMinimumBalanceMonths: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinimumBalanceMonth"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaClosureQuote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CasaClosureQuote"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCasaClosure: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CasaClosureInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
     getTermDepositRules: {
         parameters: {
             query?: never;
@@ -12735,6 +13253,119 @@ export interface operations {
         };
         responses: {
             202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTermDepositClosureQuote: {
+        parameters: {
+            query?: {
+                /** @description Why it is closed before maturity. Default DEPOSITOR_REQUEST */
+                reason?: "DEPOSITOR_REQUEST" | "DEATH" | "EMERGENCY_EXPENSE" | "CRITICAL_ILLNESS";
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TermDepositClosureQuote"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTermDepositClosure: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermDepositClosureInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeMaturityInstruction: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaturityInstructionInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeTermDepositRenewal: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermDepositRenewalInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listDepositMaturities: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositMaturity"][];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };

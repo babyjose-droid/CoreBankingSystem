@@ -1,5 +1,5 @@
 /**
- * The two deposit rule sets as seeded by tenant migrations V28 and V29, for the mock API. Generated from
+ * The two deposit rule sets as seeded by tenant migrations V28, V29 and V34, for the mock API. Generated from
  * deposits.rules_in_force() of a migrated bank and deposit-taking NBFC database; the backend's rows are the truth.
  */
 export interface MockDepositRule {
@@ -20,6 +20,7 @@ export const BANK_RULES: MockDepositRule[] = [
   {"code": "nominees.max", "value": "4", "effectiveFrom": "2026-04-01", "source": "Banking Laws (Amendment) Act 2025, in force 1-Nov-2025 (PIB release via IIBF note)", "verified": false, "note": "Simultaneous with shares totalling 100%, or successive"},
   {"code": "savings.uniform-rate-up-to", "value": "100000", "effectiveFrom": "2026-04-01", "source": "RBI Commercial Banks Interest Rate on Deposits Directions 2025 (summary)", "verified": false, "note": "One rate on balances up to this amount; different rates allowed above"},
   {"code": "senior-citizen-age", "value": "60", "effectiveFrom": "2026-04-01", "source": "Income-tax practice (resident aged 60 or more in the tax year)", "verified": false, "note": null},
+  {"code": "td.overdue-interest", "value": "1", "effectiveFrom": "2026-04-01", "source": "RBI Commercial Banks Interest Rate on Deposits Directions 2025 (summary)", "verified": false, "note": "A matured deposit left unpaid earns the savings rate or the contracted rate, whichever is lower"},
   {"code": "td.premature.mandatory-up-to", "value": "10000000", "effectiveFrom": "2026-04-01", "source": "RBI Commercial Banks Interest Rate on Deposits Directions 2025 (summary)", "verified": false, "note": "Term deposits of individuals up to this amount must allow premature withdrawal"},
   {"code": "tds.no-pan-rate-percent", "value": "20", "effectiveFrom": "2026-04-01", "source": "Carried over from s.206AA of the 1961 Act; not confirmed under the 2025 Act", "verified": false, "note": "Confirm before go-live"},
   {"code": "tds.on-savings-interest", "value": "0", "effectiveFrom": "2026-04-01", "source": "Listed among the no-deduction cases by one practitioner source", "verified": false, "note": "Decision D-17: off by default; confirm"},
@@ -46,6 +47,7 @@ export const NBFC_DEPOSIT_RULES: MockDepositRule[] = [
   {"code": "td.max-tenure-months", "value": "60", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025, para 16", "verified": true, "note": null},
   {"code": "td.min-compounding-rest-months", "value": "1", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025, para 19", "verified": true, "note": "Interest paid or compounded at rests not shorter than monthly"},
   {"code": "td.min-tenure-months", "value": "12", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025, para 16", "verified": true, "note": null},
+  {"code": "td.overdue-interest", "value": "0", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025 (no provision found for interest after maturity)", "verified": false, "note": "No interest after maturity unless the deposit is renewed; confirm"},
   {"code": "td.premature.no-interest-before-months", "value": "6", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025, para 40", "verified": true, "note": "After 3 months but before 6 months: no interest"},
   {"code": "td.premature.rate-cut-from-minimum-percent", "value": "3", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025, para 40", "verified": true, "note": "Below the minimum rate, when no rate exists for the period run"},
   {"code": "td.premature.rate-cut-percent", "value": "2", "effectiveFrom": "2026-04-01", "source": "RBI NBFC Public Deposits Directions 2025, para 40", "verified": true, "note": "Below the rate for the period the deposit has run"},

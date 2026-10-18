@@ -20,7 +20,7 @@ SELECT pg_temp.check((SELECT name = 'Term deposits' FROM ledger.gl_head WHERE co
 SELECT pg_temp.check((SELECT count(*) = 0 FROM ledger.gl_head h JOIN ledger.gl_head p ON p.code = h.parent_code WHERE p.category <> h.category OR p.is_posting),
                      'S4 every head sits under a non-posting head of its own category');
 SELECT pg_temp.check((SELECT sum(debit) = sum(credit) FROM ledger.trial_balance('2026-10-10')), 'S5 the trial balance still works with the new heads');
-SELECT pg_temp.check(deposits.rule_kind() = 'BANK' AND (SELECT count(*) = 15 FROM deposits.rules_in_force()), 'S6 the bank rule set is in force from the first day');
+SELECT pg_temp.check(deposits.rule_kind() = 'BANK' AND (SELECT count(*) = 16 FROM deposits.rules_in_force()), 'S6 the bank rule set is in force from the first day (16 rules with V34)');
 
 -- An NBFC provisioned the same way gets none of it.
 UPDATE platform.legal_entity SET entity_type = 'NBFC';

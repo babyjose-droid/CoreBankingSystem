@@ -133,6 +133,7 @@ export type ApprovalPayload =
   | { kind: 'DEPOSIT_TXN'; txn: MockTxn }
   | { kind: 'DEPOSIT_HOLD'; hold: MockHoldRequest }
   | { kind: 'DEPOSIT_FUNDING'; funding: MockFunding }
+  | { kind: 'DEPOSIT_LIFECYCLE'; op: 'CHARGE' | 'CASA_CLOSE' | 'TD_CLOSE' | 'INSTRUCTION' | 'RENEW'; accountId: string; data: Record<string, unknown> }
   | { kind: 'TDS_DECLARATION'; declaration: MockDeclarationRequest };
 
 export type StoredStaff = Required<Omit<Staff, 'userId'>> & { userId: string };

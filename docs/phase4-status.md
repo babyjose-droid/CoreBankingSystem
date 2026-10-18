@@ -1,6 +1,6 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 16-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 18-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
 
 | Increment | State |
 |-----------|-------|
@@ -9,8 +9,9 @@ Updated 16-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | P4-2 money movement | Built and pushed (`cdbe397`, fix `fa9482d`); live-tested on the local stack on 14-Oct-2026 (32 of 32 after the fix) |
 | P4-2b gateway for deposits | Built, pushed (`a004bdf`), live-tested on the local stack on 15-Oct-2026 (40 of 40) |
 | P4-3 day-end interest | Built, pushed (`4cb6da2`), live-tested on the local stack on 15-Oct-2026 (17 of 17) |
-| P4-3b tax deducted at source | Built on 16-Oct-2026 (tax ledger, thresholds, Form 121, deduction at credit); not yet pushed or live-tested |
-| P4-4 to P4-7 | Not started |
+| P4-3b tax deducted at source | Built, pushed (`6c52240`), live-tested on the local stack on 16-Oct-2026 (21 of 21) |
+| P4-4 lifecycle | Built on 18-Oct-2026 (charges with GST, minimum balance, closures, premature withdrawal, maturity, renewal, notices); not yet pushed or live-tested |
+| P4-5 to P4-7 | Not started |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -376,5 +377,60 @@ Tax is now deducted at source from deposit interest when the day-end credits it 
 - **Gradle and Spring**, the real EOD run, and the realm import with the new permission.
 - **Live stack:** the local deposits earn far less than the 50,000 threshold in a year, so the live test cannot see a deduction from interest alone in a few day-ends; `p4-3b-smoke.py` records and revokes Form 121 through maker-checker, reads the depositor's tax record, and runs one day-end to check that nothing fails and the books (and TDS payable) agree.
 
-### Next: P4-4
-Lifecycle: charges with GST, minimum balance, closure; premature withdrawal (both rule sets), maturity, renewal, overdue deposits, maturity notices. Next tenant migration: V34; next control migration: V5.
+### Verified after the push (16-Oct-2026)
+- **Local stack.** `6c52240` built; V33 applied; the realms reloaded with `deposit:tax`.
+- **Live test** (`p4-3b-smoke.py`): 21 of 21. Form 121 recorded and revoked through maker-checker; the depositor's tax year read (threshold 1,00,000 for the senior depositor on demo-bank, 10,000 on demo-nbfc-d); one end of day on both tenants with no exception, and the books, the interest payable and the TDS payable heads agreeing.
+
+## Increment P4-4: the life of an account after opening
+
+Charges, the minimum balance, closing accounts, closing a term deposit before maturity under either rule set, maturity, renewal, matured deposits left unpaid and maturity notices.
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `DepositCharges`: a savings or current product's schedule of charges (minimum balance as a percentage of the month's shortfall with a cap, a closure charge with a free period and a limit, named service charges), GST on top (CGST and SGST within the state, IGST otherwise), the month's average balance, and a charge cut to what the account can pay.
+- `Maturity`: a deposit maturing on a holiday is paid on the next working day with interest at the contracted rate for the days between; a matured deposit left unpaid earns, at a bank, the lower of the contracted rate and the tenant's overdue rate for the days it waited, and at a deposit-taking NBFC nothing (rule `td.overdue-interest`).
+- `PrematureWithdrawal` (from P4-0) gives the figures of an early closure under both rule sets; `InterestDayEnd.savingsToClose` the savings interest to the day before a closure; `DepositPostings`: charge, closure, interest recovery and renewal lots.
+
+**Tenant database** (`V34__deposit_lifecycle.sql`)
+- Settings: the heads charges post to (4107 and the GST heads 2201 to 2203), the overdue rate (2.75%, the demo savings rate) and the notice period when the rule set has none (14 days). Rule `td.overdue-interest`: bank 1, NBFC 0 (unverified, P4-19).
+- `deposits.product.charges` (savings and current only); `deposits.charge`: every charge with its GST and tax invoice number, cancelled with a credit note when its movement is reversed; the GST output register and summary include deposit charges.
+- `deposits.min_balance_month`: each month-end's average balance against the minimum, whether the depositor was told, and the charge.
+- Statuses: a savings or current account is CLOSED with nothing on it and nothing held; a term deposit is MATURED while its proceeds wait. `deposits.closure` records how each account was closed: the rate, the interest due, credited and recovered, interest after maturity, charges, tax, what was paid and where, or the deposit it was renewed into.
+- Movements CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL; a deposit funded by renewing another (funding source RENEWAL).
+- `deposits.renewal_consent`: a deposit-taking NBFC renews only with the depositor's consent, recorded after booking (P4-06). `deposits.maturity_notice`: one per deposit and maturity date; the message it sends carries the deposit (`integration.message.deposit_account_id`).
+- Approval rules: a checker for a charge, a closure, a maturity instruction and a renewal.
+
+**Application**
+- `DepositClosing`: the same code for the day-end and for an approved request (`DepositBooks`). It works out every reason an operation cannot be done before it writes anything.
+- Day-end steps after interest: "Term deposit maturity (pay out or renew)", "Term deposit maturity notices" and "Minimum balance (month-end)". At maturity a deposit is paid to the account named at booking or through the gateway to the bank account recorded, or renewed for the same tenure at the card rate of the day (principal, or principal with interest); when it cannot be (the account closed or frozen, no bank account, no consent on an NBFC, the product no longer offered), it waits as MATURED with the reason. A gateway payout that comes back puts the deposit back to MATURED.
+- `DepositLifecycleService` and `DepositLifecycleController`: `GET`/`POST /casa/accounts/{id}/charges`, `GET /casa/accounts/{id}/minimum-balance`, `GET /casa/accounts/{id}/closure-quote`, `POST /casa/accounts/{id}/close`, `GET /deposits/accounts/{id}/closure-quote?reason=`, `POST /deposits/accounts/{id}/close`, `POST /deposits/accounts/{id}/maturity-instruction`, `POST /deposits/accounts/{id}/renew`, `GET /deposits/maturities`. The account view shows how it was closed. No new permission.
+- Messaging: template code DEPOSIT_MATURITY (name, account_no, amount, maturity_date, instruction); the demo tenants get an SMS template for it.
+- A staff reversal of a charge cancels its invoice with a credit note; a closure, a renewal or an interest recovery is not reversed.
+
+**Console**
+- Account page: Close the account, Close the deposit (or Pay out when matured), Maturity instruction, Renew; each dialog shows the backend's quote and every reason it cannot go ahead. A Charges card on a savings or current account (schedule, invoices, months below the minimum, Levy a charge) and a card saying how a closed account was closed.
+- A Maturities page (Deposits menu): deposits maturing in a window and matured deposits waiting, with the instruction, consent and notice.
+- The product form and page take a savings or current product's schedule of charges.
+- Mock mode: charges, closures, instructions and the maturities list; no deposit day-end, so nothing matures or is noticed by itself and no minimum balance month is evaluated.
+
+### Choices made in this increment (to confirm: open item P4-20)
+- **Minimum balance**: the month's average of the daily closing balances; the charge is a percentage of the shortfall with a monthly cap, and only for a month whose shortfall follows a short month the depositor was told of.
+- **Closure charge**: none within the free period after opening (14 days on the demo schedule) nor after the limit; cut to what the account holds.
+- **GST** on deposit charges at the product's rate, place of supply the depositor's state (the branch's when unknown).
+- **Overdue interest** at a bank: the lower of the contracted rate and the tenant's overdue rate (a setting, 2.75%); none at a deposit-taking NBFC (P4-19).
+- **Renewal** is for the same tenure at the card rate of the renewal day, keeping the add-ons it had that the product still offers; on a deposit-taking NBFC only with a consent recorded after booking (P4-06).
+- **An emergency withdrawal within an NBFC's lock-in** repays the allowed share; the rest stays on deposit on its terms.
+- **Tax at source** is deducted from interest credited at closure, as from any credit.
+
+### Tests
+- **Engine:** 94 tests in `deposits-core` (12 new in `DepositLifecycleTest`).
+- **Tenant database:** 58 checks in the new `deposits_lifecycle_test.sql`; all 26 suites pass (three rule counts in older suites updated for the new rule).
+- **Application services:** in the build sandbox, on stand-ins for Spring with the real approval flow and real day-end runs: 68 checks on a bank (charges and invoices, credit note on reversal, the minimum balance month, closing a savings account, premature closure, maturity paid, renewed and on a holiday, a matured deposit waiting and paid with overdue interest, notices once) and 23 on a deposit-taking NBFC (lock-in, death, emergency share, no interest before six months, the rate cut, renewal refused without consent and done with it).
+- **Console:** 8 new tests; 315 pass, typecheck and build clean.
+- **API contract:** 9 new operations; lint clean; every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring** and the real EOD scheduling; the live stack (`p4-4-smoke.py`).
+
+### Next: P4-5
+Recurring deposits with late charge, standing instructions (including a sweep to a loan instalment), loan against a deposit. Next tenant migration: V35; next control migration: V5.

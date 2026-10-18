@@ -1,11 +1,9 @@
 package com.corebanking.deposits.internal;
 
 import com.corebanking.calc.Rounding;
-import com.corebanking.deposits.DepositPostings;
 import com.corebanking.deposits.DepositPostings.Leg;
 import com.corebanking.deposits.DepositRules;
 import com.corebanking.deposits.TdsOnInterest;
-import com.corebanking.ledger.PostingService;
 import com.corebanking.ledger.TransactionLot;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -63,8 +61,10 @@ final class TaxAtSource {
      *
      * @return the tax deducted (zero when none is)
      */
-    static BigDecimal onCredit(JdbcTemplate jdbc, DepositPostings post, DepositRules rules, LocalDate businessDate, UUID accountId, UUID customerId,
-                               Leg leg, BigDecimal interest, UUID interestMovement, LocalDate periodFrom, LocalDate periodTo) {
+    static BigDecimal onCredit(DepositBooks books, DepositRules rules, UUID accountId, UUID customerId, Leg leg, BigDecimal interest,
+                               UUID interestMovement, LocalDate periodFrom, LocalDate periodTo) {
+        JdbcTemplate jdbc = books.jdbc();
+        LocalDate businessDate = books.today();
         Payee p = payee(jdbc, rules, customerId, businessDate);
         TdsOnInterest.YearToDate before = yearToDate(jdbc, customerId, p.taxYear());
         BigDecimal tax = TdsOnInterest.deduct(rules, p.payee(), before, interest, rounding(jdbc));
@@ -79,18 +79,18 @@ final class TaxAtSource {
         if (tax.signum() > 0) {
             String narration = "Tax deducted at source (" + rate.stripTrailingZeros().toPlainString() + "%" + (basis == TdsOnInterest.Basis.NO_PAN_RATE ? ", no PAN" : "")
                     + ") on interest, tax year " + p.taxYear() + "-" + String.valueOf(p.taxYear() + 1).substring(2);
-            TransactionLot lot = post.taxDeducted(leg, payableGl(jdbc), tax, leg.accountNo(), narration);
-            PostingService.postDuringEod(jdbc, lot, DepositEod.USER);
+            TransactionLot lot = books.post().taxDeducted(leg, payableGl(jdbc), tax, leg.accountNo(), narration);
+            books.post(lot);
             lotId = lot.id();
-            taxMovement = DepositEod.movement(jdbc, accountId, "TAX_DEDUCTED", "DEBIT", tax, lot.id(), null, narration, null, null);
-            DepositEod.event(jdbc, accountId, "TAX", periodFrom, periodTo, null, tax, lot.id(), taxMovement, businessDate, narration);
+            taxMovement = books.movement(accountId, "TAX_DEDUCTED", "DEBIT", tax, lot.id(), null, narration, null);
+            books.event(accountId, "TAX", periodFrom, periodTo, null, tax, lot.id(), taxMovement, narration);
         }
         jdbc.update("""
                 INSERT INTO deposits.tds_ledger (customer_id, tax_year, account_id, business_date, interest, tax, rate_percent, basis, senior, pan_on_file,
                                                  declaration_id, interest_movement_id, tax_movement_id, lot_id, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, customerId, p.taxYear(), accountId, businessDate, interest, tax, rate, basis.name(), p.payee().seniorCitizen(), p.payee().panOnFile(),
-                p.declarationId(), interestMovement, taxMovement, lotId, DepositEod.USER);
+                p.declarationId(), interestMovement, taxMovement, lotId, books.user());
         return tax;
     }
 }

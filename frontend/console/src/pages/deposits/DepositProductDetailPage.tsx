@@ -107,6 +107,20 @@ export function DepositProductDetailPage() {
                 <dd className="num">{Number(p.minBalance ?? 0).toLocaleString('en-IN')}</dd>
                 <dt>Cheque facility</dt>
                 <dd>{p.chequeFacility ? 'Yes' : 'No'}</dd>
+                <dt>Charges</dt>
+                <dd data-testid="product-charges">
+                  {!p.charges ? (
+                    'None'
+                  ) : (
+                    <span>
+                      {p.charges.minBalancePercent ? `Minimum balance ${p.charges.minBalancePercent}% of the shortfall, at most ${p.charges.minBalanceMax} a month` : 'No minimum balance charge'}
+                      {'; '}
+                      {p.charges.closureAmount ? `closure ${p.charges.closureAmount} (free within ${p.charges.closureFreeWithinDays} days${p.charges.closureWithinDays ? `, none after ${p.charges.closureWithinDays}` : ''})` : 'no closure charge'}
+                      {(p.charges.service ?? []).map((x) => `; ${x.name} ${x.amount}`).join('')}
+                      {`; GST ${p.charges.gstRatePercent}% on top`}
+                    </span>
+                  )}
+                </dd>
               </>
             ) : (
               <>

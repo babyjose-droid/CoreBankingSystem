@@ -26,6 +26,11 @@ import java.util.Objects;
  *     payout              Dr the term deposit                        Cr the savings or current account it is paid to
  *   tax deducted at source on interest (P4-3b):
  *                         Dr the account                             Cr TDS payable
+ *   lifecycle (P4-4):
+ *     charge              Dr the account (charge + GST)              Cr charge income, Cr CGST and SGST, or IGST
+ *     closure payout      Dr the account (its whole balance)         Cr cash / bank / payout in transit / another account
+ *     interest recovered  Dr the term deposit                        Cr the product's interest expense head
+ *     renewal             Dr the matured deposit                     Cr the new deposit
  * </pre>
  * The reversal of any of them is the mirror lot ({@link TransactionLot#reversal}).
  */
@@ -44,6 +49,28 @@ public final class DepositPostings {
     public static final String INTEREST_CREDIT = "DEPOSIT_INTEREST_CREDIT";
     public static final String INTEREST_PAYOUT = "DEPOSIT_INTEREST_PAYOUT";
     public static final String TAX_DEDUCTED = "DEPOSIT_TAX_DEDUCTED";
+    public static final String CHARGE = "DEPOSIT_CHARGE";
+    public static final String CLOSURE = "DEPOSIT_CLOSURE";
+    public static final String INTEREST_RECOVERY = "DEPOSIT_INTEREST_RECOVERY";
+    public static final String RENEWAL = "DEPOSIT_RENEWAL";
+
+    /** Where the proceeds of a closure go. */
+    public enum PayTo { ACCOUNT, CASH, BANK_TRANSFER, GATEWAY }
+
+    /** The GL heads a charge credits: the income head and the three GST output heads. */
+    public record ChargeHeads(String income, String cgst, String sgst, String igst) {
+        public ChargeHeads {
+            Objects.requireNonNull(income, "income");
+            Objects.requireNonNull(cgst, "cgst");
+            Objects.requireNonNull(sgst, "sgst");
+            Objects.requireNonNull(igst, "igst");
+        }
+
+        /** Account service charges 4107, CGST 2201, SGST 2202, IGST 2203. */
+        public static ChargeHeads starter() {
+            return new ChargeHeads("4107", "2201", "2202", "2203");
+        }
+    }
 
     /**
      * The cash and bank heads a deposit movement settles against, the inter-branch head a transfer between branches uses,
@@ -222,6 +249,63 @@ public final class DepositPostings {
         return lot(TAX_DEDUCTED, reference)
                 .debit(account.branch(), account.gl(), account.accountNo(), amount, text(narration, "Tax deducted at source"))
                 .credit(account.branch(), tdsPayableGl, tdsPayableGl, amount, "Tax deducted at source from " + account.accountNo())
+                .build();
+    }
+
+    /**
+     * A charge with its GST: out of the account, to the income head and the output tax heads (all in the account's
+     * branch, the place the service is supplied from). Narrations follow the loans' invoices: "CGST &lt;charge&gt;".
+     */
+    public TransactionLot charge(Leg account, ChargeHeads h, DepositCharges.Charge c, String reference) {
+        positive(c.taxable());
+        TransactionLot.Builder b = lot(CHARGE, reference)
+                .debit(account.branch(), account.gl(), account.accountNo(), c.total(), c.description())
+                .credit(account.branch(), h.income(), h.income(), c.taxable(), c.description() + " " + account.accountNo());
+        if (c.tax().cgst().signum() > 0) b.credit(account.branch(), h.cgst(), h.cgst(), c.tax().cgst(), "CGST " + c.description() + " " + account.accountNo());
+        if (c.tax().sgst().signum() > 0) b.credit(account.branch(), h.sgst(), h.sgst(), c.tax().sgst(), "SGST " + c.description() + " " + account.accountNo());
+        if (c.tax().igst().signum() > 0) b.credit(account.branch(), h.igst(), h.igst(), c.tax().igst(), "IGST " + c.description() + " " + account.accountNo());
+        return b.build();
+    }
+
+    /**
+     * The proceeds of a closing account paid out: to cash, to another bank (recorded with its UTR), through the payment
+     * gateway (to the in-transit head), or to another deposit account (inter-branch legs when the branches differ).
+     *
+     * @param to the receiving account; only for {@link PayTo#ACCOUNT}
+     */
+    public TransactionLot closurePayout(Leg account, BigDecimal amount, PayTo payTo, Leg to, String reference, String narration) {
+        positive(amount);
+        Objects.requireNonNull(payTo, "payTo");
+        String text = text(narration, "Closure of " + account.accountNo());
+        TransactionLot.Builder b = lot(CLOSURE, reference).debit(account.branch(), account.gl(), account.accountNo(), amount, text);
+        switch (payTo) {
+            case ACCOUNT -> {
+                if (to == null) throw new IllegalArgumentException("a payout to an account names the account");
+                if (to.accountNo().equals(account.accountNo())) throw new IllegalArgumentException("an account cannot pay its closure to itself");
+                b.credit(to.branch(), to.gl(), to.accountNo(), amount, "Proceeds of " + account.accountNo());
+            }
+            case CASH -> b.credit(account.branch(), heads.cash(), heads.cash(), amount, text);
+            case BANK_TRANSFER -> b.credit(account.branch(), heads.bankOut(), heads.bankOut(), amount, text);
+            case GATEWAY -> b.credit(account.branch(), heads.inTransit(), heads.inTransit(), amount, "Gateway transfer from " + account.accountNo());
+        }
+        return b.build();
+    }
+
+    /** Interest credited earlier and not earned on a premature closure: taken back from the deposit to the expense head. */
+    public TransactionLot interestRecovery(Leg deposit, String expenseGl, BigDecimal amount, String reference) {
+        positive(amount);
+        return lot(INTEREST_RECOVERY, reference)
+                .debit(deposit.branch(), deposit.gl(), deposit.accountNo(), amount, "Interest recovered on premature closure")
+                .credit(deposit.branch(), expenseGl, expenseGl, amount, "Interest recovered from " + deposit.accountNo())
+                .build();
+    }
+
+    /** A matured deposit renewed: its proceeds fund the new deposit. */
+    public TransactionLot renewal(Leg matured, Leg renewed, BigDecimal amount) {
+        positive(amount);
+        return lot(RENEWAL, matured.accountNo())
+                .debit(matured.branch(), matured.gl(), matured.accountNo(), amount, "Renewed as " + renewed.accountNo())
+                .credit(renewed.branch(), renewed.gl(), renewed.accountNo(), amount, "Renewal of " + matured.accountNo())
                 .build();
     }
 }

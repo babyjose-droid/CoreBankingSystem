@@ -133,9 +133,11 @@ public class DepositMoneyService implements DepositOperations {
     private final PiiKeys keys;
     private final Json json;
     private final Outbox outbox;
+    private final DepositLifecycleService lifecycle;
 
     DepositMoneyService(JdbcTemplate jdbc, ApprovalService approvals, AmountLimitService limits, PostingService postings, LedgerSettings ledger,
-                        BusinessDays days, BranchScope scope, PiiKeys keys, Json json, Outbox outbox) {
+                        BusinessDays days, BranchScope scope, PiiKeys keys, Json json, Outbox outbox, @Lazy DepositLifecycleService lifecycle) {
+        this.lifecycle = lifecycle;
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.limits = limits;
@@ -220,6 +222,7 @@ public class DepositMoneyService implements DepositOperations {
 
     /** Posts an approved money request; returns the id of the (first) movement written. */
     String applyTxn(ApprovalRequest r) {
+        if (DepositLifecycleService.CHARGE.equals(r.action())) return lifecycle.applyCharge(r);
         Txn t = convert(r.payload(), Txn.class);
         return switch (t.type()) {
             case REVERSE -> reverse(t, r);
@@ -283,7 +286,9 @@ public class DepositMoneyService implements DepositOperations {
     private String reverse(Txn t, ApprovalRequest r) {
         Movement m = movement(UUID.fromString(t.movementId()));
         DepositAccountService.refuseIfAny("the movement cannot be reversed", reversalProblems(m));
-        return reverseLot(m, t.reason(), r.id(), r.maker()).toString();
+        UUID back = reverseLot(m, t.reason(), r.id(), r.maker());
+        if ("CHARGE".equals(m.kind())) lifecycle.cancelCharges(m.id(), back, days.requireOpen());
+        return back.toString();
     }
 
     /**
@@ -558,6 +563,12 @@ public class DepositMoneyService implements DepositOperations {
         String why = reason == null || reason.isBlank() ? "the gateway transfer did not reach the payee" : reason.trim();
         if (why.length() > 500) why = why.substring(0, 500);
         Movement m = movement(movementId);
+        // a term deposit closed by this transfer waits as MATURED again for its money (P4-4)
+        Account closed = account(m.accountId(), null, false);
+        if (DepositProductService.TERM_DEPOSIT.equals(closed.family()) && "CLOSED".equals(closed.status())) {
+            jdbc.update("UPDATE deposits.account SET status = 'MATURED' WHERE id = ?", closed.id());
+            jdbc.update("UPDATE deposits.closure SET payout_returned_on = ? WHERE account_id = ? AND payout_returned_on IS NULL", days.requireOpen(), closed.id());
+        }
         DepositAccountService.refuseIfAny("the transfer cannot be taken back", reversalProblems(m, true));
         LocalDate today = days.requireOpen();
         UUID paidReversal = null;
@@ -828,8 +839,12 @@ public class DepositMoneyService implements DepositOperations {
         }
         if (!out.isEmpty()) return out;
         List<Movement> lot = lotMovements(m.lotId());
-        if (lot.stream().anyMatch(x -> Set.of("INTEREST_CREDIT", "INTEREST_PAYOUT", "TAX_DEDUCTED").contains(x.kind()))) {
+        if (lot.stream().anyMatch(x -> Set.of("INTEREST_CREDIT", "INTEREST_PAYOUT", "TAX_DEDUCTED", "INTEREST_RECOVERY").contains(x.kind()))) {
             out.add("interest credited or paid out, and tax deducted, by the day-end are not reversed by hand");
+            return out;
+        }
+        if (!gateway && lot.stream().anyMatch(x -> Set.of("CLOSURE", "RENEWAL").contains(x.kind()))) {
+            out.add("a closure or a renewal is not reversed; the account is closed");
             return out;
         }
         for (Movement each : lot) {
@@ -856,6 +871,10 @@ public class DepositMoneyService implements DepositOperations {
         List<String> out = new ArrayList<>();
         if (!"ACTIVE".equals(d.status()) || td.get("funding_movement_id") == null) {
             out.add("deposit " + d.accountNo() + " is " + d.status() + "; only a funded deposit has a funding to reverse");
+            return out;
+        }
+        if ("RENEWAL".equals(td.get("funding_source"))) {
+            out.add("deposit " + d.accountNo() + " was funded by renewing another; a renewal is not reversed");
             return out;
         }
         Movement m = movement((UUID) td.get("funding_movement_id"));

@@ -100,9 +100,11 @@ public class DepositAccountService {
     private final DepositProductService products;
     private final Json json;
     private final DepositMoneyService money;
+    private final DepositLifecycleService lifecycle;
 
     DepositAccountService(JdbcTemplate jdbc, ApprovalService approvals, BusinessDays days, BranchScope scope, DepositRuleSets ruleSets,
-                          DepositProductService products, Json json, @Lazy DepositMoneyService money) {
+                          DepositProductService products, Json json, @Lazy DepositMoneyService money, @Lazy DepositLifecycleService lifecycle) {
+        this.lifecycle = lifecycle;
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.days = days;
@@ -327,10 +329,10 @@ public class DepositAccountService {
                 problems.add("maturityInstruction is PAY_OUT, RENEW_PRINCIPAL or RENEW_WITH_INTEREST");
             } else if (!"PAY_OUT".equals(o.maturityInstruction())) {
                 if (!Boolean.TRUE.equals(product.autoRenewalAllowed())) problems.add("product " + product.code() + " does not allow renewal at maturity");
-                // NBFC Directions para 17: no renewal without the depositor's express consent. Recording that consent
-                // comes with maturity processing (P4-4); until then such a deposit is booked to be paid out.
+                // NBFC Directions para 17: no renewal without the depositor's express consent, recorded once the deposit
+                // is funded (its maturity instruction, P4-4); an instruction given at booking is not that consent
                 if (rules.flag(DepositRules.TD_RENEWAL_NEEDS_CONSENT, false)) {
-                    problems.add("a renewal needs the depositor's consent, recorded when the deposit matures; book the deposit to be paid out");
+                    problems.add("a renewal needs the depositor's express consent, recorded once the deposit is funded; book the deposit to be paid out");
                 }
             }
             if (problems.isEmpty()) quote = quote(rules, settings, request);
@@ -451,28 +453,39 @@ public class DepositAccountService {
                 o.maturityInstruction());
     }
 
+    /** A savings or current account request: its opening (P4-1) and its closure (P4-4). */
     @Service
     static class CasaApplier implements ApprovalApplier {
         private final DepositAccountService accounts;
+        private final DepositLifecycleService lifecycle;
 
-        CasaApplier(@Lazy DepositAccountService accounts) {
+        CasaApplier(@Lazy DepositAccountService accounts, @Lazy DepositLifecycleService lifecycle) {
             this.accounts = accounts;
+            this.lifecycle = lifecycle;
         }
 
         @Override public String entityType() { return CASA_ENTITY; }
 
-        @Override public String apply(ApprovalRequest r) { return accounts.open(r); }
+        @Override
+        public String apply(ApprovalRequest r) {
+            return DepositLifecycleService.CLOSE.equals(r.action()) ? lifecycle.applyCasaClosure(r) : accounts.open(r);
+        }
     }
 
-    /** A term deposit request: its booking (P4-1), its funding and the reversal of its funding (P4-2). */
+    /**
+     * A term deposit request: its booking (P4-1), its funding and the reversal of its funding (P4-2), its closure, its
+     * maturity instruction and its renewal after maturity (P4-4).
+     */
     @Service
     static class TermDepositApplier implements ApprovalApplier {
         private final DepositAccountService accounts;
         private final DepositMoneyService money;
+        private final DepositLifecycleService lifecycle;
 
-        TermDepositApplier(@Lazy DepositAccountService accounts, @Lazy DepositMoneyService money) {
+        TermDepositApplier(@Lazy DepositAccountService accounts, @Lazy DepositMoneyService money, @Lazy DepositLifecycleService lifecycle) {
             this.accounts = accounts;
             this.money = money;
+            this.lifecycle = lifecycle;
         }
 
         @Override public String entityType() { return TD_ENTITY; }
@@ -481,6 +494,9 @@ public class DepositAccountService {
         public String apply(ApprovalRequest r) {
             return switch (r.action()) {
                 case DepositMoneyService.FUND, DepositMoneyService.REVERSE_FUNDING -> money.applyFunding(r);
+                case DepositLifecycleService.CLOSE -> lifecycle.applyDepositClosure(r);
+                case DepositLifecycleService.INSTRUCTION -> lifecycle.applyInstruction(r);
+                case DepositLifecycleService.RENEW -> lifecycle.applyRenewal(r);
                 default -> accounts.open(r);
             };
         }
@@ -540,7 +556,7 @@ public class DepositAccountService {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT a.id::text AS id, a.account_no, a.family, a.product_code, a.product_version, p.name AS product_name, p.product_type,
                        a.branch_code, a.operating_mode, a.nomination_mode, a.status, a.opened_on::text AS opened_on, a.opened_by,
-                       a.approval_id::text AS approval_id
+                       a.approval_id::text AS approval_id, a.closed_on::text AS closed_on
                   FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code
                  WHERE a.id = ? AND a.family = ?
                 """, id, family);
@@ -563,6 +579,8 @@ public class DepositAccountService {
         out.put("openedOn", a.get("opened_on"));
         out.put("openedBy", a.get("opened_by"));
         out.put("approvalId", a.get("approval_id"));
+        out.put("closedOn", a.get("closed_on"));
+        out.put("closure", lifecycle.closure(id));
         out.put("holders", jdbc.query("""
                 SELECT h.holder_no, c.id::text, c.customer_no, c.display_name FROM deposits.account_holder h
                   JOIN customer.customer c ON c.id = h.customer_id WHERE h.account_id = ? ORDER BY h.holder_no
