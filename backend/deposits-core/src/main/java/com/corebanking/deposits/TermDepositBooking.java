@@ -66,6 +66,18 @@ public final class TermDepositBooking {
         LocalDate maturity = r.tenure().addTo(r.start());
         TermDeposit.Terms terms = new TermDeposit.Terms(r.amount(), rate.ratePercent(), r.start(), maturity,
                 product.interestPeriodMonths(), product.cumulative(), product.dayCount(), product.rounding());
+        if (product.type() == TermDepositProduct.Type.RD) {
+            // the amount is the monthly instalment; every instalment paid on its due date
+            int months = r.tenure().months();
+            List<TermDeposit.Period> periods = RecurringDeposit.periods(r.start(), months, r.amount(), rate.ratePercent(), product.interestPeriodMonths(),
+                    product.rounding());
+            List<TaxLine> tax = product.tdsApplicable() ? projectTax(rules, product, r, periods) : List.of();
+            BigDecimal totalTax = tax.stream().map(TaxLine::tax).reduce(product.rounding().apply(BigDecimal.ZERO), BigDecimal::add);
+            return new Quote(rate, maturity, terms, periods,
+                    RecurringDeposit.totalInterest(r.amount(), rate.ratePercent(), months, product.interestPeriodMonths(), product.rounding()),
+                    RecurringDeposit.maturityValue(r.amount(), rate.ratePercent(), months, product.interestPeriodMonths(), product.rounding()),
+                    RecurringDeposit.annualisedYield(r.amount(), rate.ratePercent(), months, product.interestPeriodMonths(), product.rounding()), tax, totalTax);
+        }
         List<TermDeposit.Period> periods = TermDeposit.periods(terms);
         List<TaxLine> tax = product.tdsApplicable() ? projectTax(rules, product, r, periods) : List.of();
         BigDecimal totalTax = tax.stream().map(TaxLine::tax).reduce(product.rounding().apply(BigDecimal.ZERO), BigDecimal::add);
@@ -104,6 +116,10 @@ public final class TermDepositBooking {
             dated = false;
         }
         if (!dated) return null;
+        if (p.type() == TermDepositProduct.Type.RD && r.tenure().days() != 0) {
+            out.add("a recurring deposit runs for a whole number of months");
+            return null;
+        }
         LocalDate maturity = r.tenure().addTo(r.start());
         if (!p.minTenure().reachedBy(r.start(), maturity)) {
             out.add("the tenure " + r.tenure() + " is shorter than the product's shortest tenure of " + p.minTenure());

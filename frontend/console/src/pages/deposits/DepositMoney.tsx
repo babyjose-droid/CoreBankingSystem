@@ -41,6 +41,8 @@ const KIND_LABEL: Record<string, string> = {
   CLOSURE: 'Closure proceeds',
   INTEREST_RECOVERY: 'Interest recovered',
   RENEWAL: 'Renewed into a new deposit',
+  RD_INSTALMENT: 'Instalment',
+  RD_LATE_CHARGE: 'Late charge on an instalment',
 };
 const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
 const GATEWAY: Record<string, { label: string; tone: 'info' | 'ok' | 'warn' }> = {
@@ -624,7 +626,13 @@ export function InterestCard({ family, accountId }: { family: DepositFamily; acc
               rowKey={(e) => String(e.id)}
             />
           )}
-          <p className="muted" style={{ margin: 0 }}>The day-end accrues interest every calendar day and credits it on the credit dates, then deducts tax at source when the depositor's interest for the tax year passes the threshold (none with Form 121).</p>
+          {i.monthsWorkedOut != null && (
+            <p className="muted" style={{ margin: 0 }} data-testid="interest-rd">
+              A recurring deposit earns month by month on the instalments held through each month: the day-end works out each month when it ends ({i.monthsWorkedOut} so far)
+              and credits the interest every quarter. The periods above assume every instalment is paid on time.
+            </p>
+          )}
+          <p className="muted" style={{ margin: 0 }} hidden={i.monthsWorkedOut != null}>The day-end accrues interest every calendar day and credits it on the credit dates, then deducts tax at source when the depositor's interest for the tax year passes the threshold (none with Form 121).</p>
         </div>
       )}
     </Card>

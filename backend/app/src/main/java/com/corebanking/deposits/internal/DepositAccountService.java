@@ -5,6 +5,7 @@ import com.corebanking.deposits.DepositRateTable;
 import com.corebanking.deposits.DepositRefusal;
 import com.corebanking.deposits.DepositRules;
 import com.corebanking.deposits.Nomination;
+import com.corebanking.deposits.RecurringDeposit;
 import com.corebanking.deposits.SavingsInterest;
 import com.corebanking.deposits.Tenure;
 import com.corebanking.deposits.TermDeposit;
@@ -327,6 +328,8 @@ public class DepositAccountService {
             }
             if (!INSTRUCTIONS.contains(o.maturityInstruction())) {
                 problems.add("maturityInstruction is PAY_OUT, RENEW_PRINCIPAL or RENEW_WITH_INTEREST");
+            } else if (!"PAY_OUT".equals(o.maturityInstruction()) && "RD".equals(product.productType())) {
+                problems.add("a recurring deposit is paid out at maturity; it is not renewed");
             } else if (!"PAY_OUT".equals(o.maturityInstruction())) {
                 if (!Boolean.TRUE.equals(product.autoRenewalAllowed())) problems.add("product " + product.code() + " does not allow renewal at maturity");
                 // NBFC Directions para 17: no renewal without the depositor's express consent, recorded once the deposit
@@ -447,7 +450,7 @@ public class DepositAccountService {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, id, new BigDecimal(o.amount()), o.tenureMonths(), o.tenureDays(), c.today(), rate.ratePercent(), rate.cardRatePercent(),
                 rate.fromAmount(), rate.fromTenure().months(), rate.fromTenure().days(), DepositProductService.addOnsJson(given),
-                p.interestPeriodMonths(), "FD_CUMULATIVE".equals(p.productType()), p.dayCount(), p.rounding(), p.tdsApplicable(),
+                p.interestPeriodMonths(), "FD_CUMULATIVE".equals(p.productType()) || "RD".equals(p.productType()), p.dayCount(), p.rounding(), p.tdsApplicable(),
                 p.prematureAllowed(), p.prematurePenaltyPercent() == null ? null : new BigDecimal(p.prematurePenaltyPercent()),
                 p.prematureMinDays(), o.payoutTo(), o.payoutAccountId() == null ? null : UUID.fromString(o.payoutAccountId()),
                 o.maturityInstruction());
@@ -497,6 +500,7 @@ public class DepositAccountService {
                 case DepositLifecycleService.CLOSE -> lifecycle.applyDepositClosure(r);
                 case DepositLifecycleService.INSTRUCTION -> lifecycle.applyInstruction(r);
                 case DepositLifecycleService.RENEW -> lifecycle.applyRenewal(r);
+                case DepositMoneyService.INSTALMENT -> money.applyInstalment(r);
                 default -> accounts.open(r);
             };
         }
@@ -624,7 +628,8 @@ public class DepositAccountService {
                           FROM jsonb_array_elements(t.add_ons) x)::text,
                        t.interest_period_months, t.cumulative, t.day_count, t.rounding, t.tds_applicable, t.premature_allowed,
                        t.premature_penalty_percent, t.premature_min_days, t.payout_to, t.payout_account_id::text, pay.account_no,
-                       t.maturity_instruction, t.funding_source, fa.account_no, t.funding_reference, t.payout_bank_account_last4, t.payout_bank_ifsc
+                       t.maturity_instruction, t.funding_source, fa.account_no, t.funding_reference, t.payout_bank_account_last4, t.payout_bank_ifsc,
+                       (SELECT p.product_type FROM deposits.account x JOIN deposits.product p ON p.code = x.product_code WHERE x.id = t.account_id)
                   FROM deposits.term_deposit t LEFT JOIN deposits.account pay ON pay.id = t.payout_account_id
                   LEFT JOIN deposits.account fa ON fa.id = t.funding_account_id
                  WHERE t.account_id = ?
@@ -670,8 +675,13 @@ public class DepositAccountService {
                     m.put("funded", start != null);
                     m.put("figuresFrom", from);
                     m.put("figuresMaturityDate", terms.maturity());
-                    m.put("totalInterest", amount(TermDeposit.totalInterest(terms)));
-                    m.put("maturityValue", amount(TermDeposit.maturityValue(terms)));
+                    boolean rd = "RD".equals(rs.getString(30));
+                    m.put("recurring", rd);
+                    // a recurring deposit (P4-5): the principal is the monthly instalment; the figures are for every instalment paid on time
+                    m.put("totalInterest", amount(rd ? RecurringDeposit.totalInterest(principal, rate, tenure.months(), rs.getInt(13), Rounding.valueOf(rs.getString(16)))
+                            : TermDeposit.totalInterest(terms)));
+                    m.put("maturityValue", amount(rd ? RecurringDeposit.maturityValue(principal, rate, tenure.months(), rs.getInt(13), Rounding.valueOf(rs.getString(16)))
+                            : TermDeposit.maturityValue(terms)));
                     return m;
                 }, id);
     }
@@ -699,7 +709,8 @@ public class DepositAccountService {
         }
         m.put("addOns", addOns);
         m.put("interestPeriodMonths", product.interestPeriodMonths());
-        m.put("cumulative", "FD_CUMULATIVE".equals(product.productType()));
+        m.put("cumulative", "FD_CUMULATIVE".equals(product.productType()) || "RD".equals(product.productType()));
+        m.put("recurring", "RD".equals(product.productType()));
         m.put("totalInterest", amount(q.totalInterest()));
         m.put("maturityValue", amount(q.maturityValue()));
         m.put("annualisedYieldPercent", q.annualisedYield().toPlainString());

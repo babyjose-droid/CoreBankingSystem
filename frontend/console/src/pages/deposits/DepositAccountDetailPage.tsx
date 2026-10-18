@@ -7,6 +7,7 @@ import { P, hasPermission } from '../../auth/permissions';
 import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
 import { CasaCloseDialog, ChargesCard, ClosureCard, DepositCloseDialog, INSTRUCTION_LABEL, InstructionDialog, RenewDialog } from './DepositLifecycle';
+import { InstalmentsCard } from './RecurringDeposit';
 import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, InterestCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
 
 type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | 'CLOSE' | 'INSTRUCTION' | 'RENEW' | null;
@@ -29,6 +30,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
   const active = a.status === 'ACTIVE';
   const matured = a.status === 'MATURED';
   const isNbfc = rules.data?.kind === 'NBFC_DEPOSIT';
+  const recurring = !!t?.recurring;
   const beforeMaturity = !!t?.funded && !!t.maturityDate && a.status === 'ACTIVE';
   const actions = (
     <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
@@ -45,7 +47,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {term && a.status === 'BOOKED' && can(P.depositFund) && <Button onClick={() => setAction('LINK')}>Payment link</Button>}
       {term && active && can(P.depositHold) && <Button onClick={() => setAction('HOLD')}>Lien</Button>}
       {term && active && can(P.depositFund) && <Button variant="ghost" onClick={() => setAction('UNFUND')}>Reverse the funding</Button>}
-      {term && beforeMaturity && can(P.depositFund) && <Button onClick={() => setAction('INSTRUCTION')}>Maturity instruction</Button>}
+      {term && beforeMaturity && !recurring && can(P.depositFund) && <Button onClick={() => setAction('INSTRUCTION')}>Maturity instruction</Button>}
       {term && (active || matured) && can(P.depositFund) && <Button variant={matured ? 'primary' : 'ghost'} onClick={() => setAction('CLOSE')}>{matured ? 'Pay out' : 'Close the deposit'}</Button>}
       {term && matured && can(P.depositFund) && <Button onClick={() => setAction('RENEW')}>Renew</Button>}
       {!term && active && can(P.casaTransact) && <Button variant="ghost" onClick={() => setAction('CLOSE')}>Close the account</Button>}
@@ -56,7 +58,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
   return (
     <div className="stack">
       <PageHeader
-        title={`${term ? 'Term deposit' : TYPE_LABEL[a.productType ?? ''] + ' account'} ${a.accountNo}`}
+        title={`${recurring ? 'Recurring deposit' : term ? 'Term deposit' : TYPE_LABEL[a.productType ?? ''] + ' account'} ${a.accountNo}`}
         subtitle={<span>{a.holders?.[0]?.name} · <span className="mono">{a.productCode}</span> {a.productName} (version {a.productVersion})</span>}
         actions={actions}
       />
@@ -85,7 +87,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
             )}
             {t && (
               <>
-                <dt>Amount</dt>
+                <dt>{recurring ? 'Monthly instalment' : 'Amount'}</dt>
                 <dd><MoneyText value={t.principal} /></dd>
                 <dt>Tenure</dt>
                 <dd>{tenureText(t.tenureMonths, t.tenureDays)}</dd>
@@ -114,7 +116,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
               <dt>Total interest</dt>
               <dd><MoneyText value={t.totalInterest} /></dd>
               <dt>Repaid at maturity</dt>
-              <dd><MoneyText value={t.maturityValue} /></dd>
+              <dd><MoneyText value={t.maturityValue} />{recurring && <span className="muted"> if every instalment is paid on time</span>}</dd>
               <dt>Tax at source</dt>
               <dd>{t.tdsApplicable ? 'Deducted as the tax rules require' : 'Not deducted'}</dd>
               <dt>Premature withdrawal</dt>
@@ -145,6 +147,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
           </Card>
         )}
       </div>
+      {recurring && t?.funded && <InstalmentsCard account={a} canPay={can(P.depositFund)} />}
       {((!term && a.nextInterestDate) || (term && t?.funded)) && <InterestCard family={family} accountId={a.id!} />}
       {(!term || a.status !== 'BOOKED') && <MovementsCard family={family} accountId={a.id!} canReverse={can(P.casaTransact)} />}
       {!term && a.status !== 'BOOKED' && <ChargesCard account={a} product={product.data} canLevy={can(P.casaTransact)} />}

@@ -53,7 +53,7 @@ public class DepositProductService {
     static final int MAX_TENURE_MONTHS = 600;
     static final int MAX_TENURE_DAYS = 3660;
     private static final Set<String> CASA_TYPES = Set.of("SAVINGS", "CURRENT");
-    private static final Set<String> TD_TYPES = Set.of("FD_CUMULATIVE", "FD_PAYOUT");
+    private static final Set<String> TD_TYPES = Set.of("FD_CUMULATIVE", "FD_PAYOUT", "RD");
 
     // ---- what the API accepts (openapi.yaml#/components/schemas/DepositProductInput) ---------------------------
     public record BandInput(BigDecimal fromBalance, BigDecimal ratePercent) {}
@@ -70,7 +70,7 @@ public class DepositProductService {
                                Integer maxTenureMonths, Integer maxTenureDays, Integer interestPeriodMonths, List<RateInput> rateCard,
                                List<AddOnInput> addOns, Boolean prematureAllowed, BigDecimal prematurePenaltyPercent,
                                Integer prematureMinDays, Boolean autoRenewalAllowed,
-                               String glLiability, String glInterestExpense, ChargesInput charges) {}
+                               String glLiability, String glInterestExpense, ChargesInput charges, BigDecimal rdLateChargePer100) {}
 
     /** openapi.yaml#/components/schemas/DepositChargesInput: a savings or current product's schedule of charges (P4-4). */
     public record ChargesInput(BigDecimal gstRatePercent, BigDecimal minBalancePercent, BigDecimal minBalanceMax, BigDecimal closureAmount,
@@ -100,7 +100,8 @@ public class DepositProductService {
                           Integer maxTenureMonths, Integer maxTenureDays, Integer interestPeriodMonths, List<Rate> rateCard,
                           List<AddOn> addOns, Boolean prematureAllowed, String prematurePenaltyPercent, Integer prematureMinDays,
                           Boolean autoRenewalAllowed,
-                          String glLiability, String glInterestExpense, Charges charges, String updatedBy, String updatedAt) {}
+                          String glLiability, String glInterestExpense, Charges charges, String rdLateChargePer100, String updatedBy,
+                          String updatedAt) {}
 
     private static final String SELECT = """
             SELECT code, name, family, product_type, status, version, effective_from::text AS effective_from, day_count, rounding,
@@ -124,7 +125,8 @@ public class DepositProductService {
                      'minBalanceMax', charges->>'minBalanceMax', 'closureAmount', charges->>'closureAmount',
                      'closureFreeWithinDays', (charges->>'closureFreeWithinDays')::int, 'closureWithinDays', (charges->>'closureWithinDays')::int,
                      'service', (SELECT coalesce(jsonb_agg(jsonb_build_object('code', x->>'code', 'name', x->>'name', 'amount', x->>'amount') ORDER BY x->>'code'), '[]'::jsonb)
-                                   FROM jsonb_array_elements(coalesce(charges->'service', '[]'::jsonb)) x))::text END AS charges
+                                   FROM jsonb_array_elements(coalesce(charges->'service', '[]'::jsonb)) x))::text END AS charges,
+                   rd_late_charge_per_100::text AS rd_late_charge_per_100
               FROM deposits.product
             """;
 
@@ -199,7 +201,8 @@ public class DepositProductService {
                 addOns == null ? null : List.of(json.read(addOns, AddOn[].class)), bool(rs, "premature_allowed"),
                 DepositRuleSets.plain(rs.getString("premature_penalty_percent")), whole(rs, "premature_min_days"),
                 bool(rs, "auto_renewal_allowed"), rs.getString("gl_liability"), rs.getString("gl_interest_expense"),
-                charges == null ? null : plainCharges(json.read(charges, Charges.class)), rs.getString("updated_by"), rs.getString("updated_at"));
+                charges == null ? null : plainCharges(json.read(charges, Charges.class)), DepositRuleSets.plain(rs.getString("rd_late_charge_per_100")),
+                rs.getString("updated_by"), rs.getString("updated_at"));
     }
 
     private static Charges plainCharges(Charges c) {
@@ -371,7 +374,7 @@ public class DepositProductService {
         boolean casa = CASA.equals(family);
         String type = in.productType() == null ? "" : in.productType().trim().toUpperCase(java.util.Locale.ROOT);
         if (!(casa ? CASA_TYPES : TD_TYPES).contains(type)) {
-            throw ApiException.invalid(casa ? "productType is SAVINGS or CURRENT" : "productType is FD_CUMULATIVE or FD_PAYOUT");
+            throw ApiException.invalid(casa ? "productType is SAVINGS or CURRENT" : "productType is FD_CUMULATIVE, FD_PAYOUT or RD");
         }
         String rounding = in.rounding() == null ? "PAISE_HALF_UP" : in.rounding();
         if (!Set.of("PAISE_HALF_UP", "PAISE_HALF_EVEN", "RUPEE_HALF_UP", "RUPEE_DOWN", "RUPEE_UP").contains(rounding)) {
@@ -393,8 +396,8 @@ public class DepositProductService {
         if (in.minAmount() != null || in.maxAmount() != null || in.rateCard() != null || in.addOns() != null
                 || in.minTenureMonths() != null || in.maxTenureMonths() != null || in.interestPeriodMonths() != null
                 || in.prematureAllowed() != null || in.prematurePenaltyPercent() != null || in.prematureMinDays() != null
-                || in.autoRenewalAllowed() != null) {
-            throw ApiException.invalid("amount and tenure limits, the rate card, add-ons, premature withdrawal and renewal are settings of a term deposit product");
+                || in.autoRenewalAllowed() != null || in.rdLateChargePer100() != null) {
+            throw ApiException.invalid("amount and tenure limits, the rate card, add-ons, premature withdrawal, renewal and the late charge are settings of a term deposit product");
         }
         BigDecimal minBalance = in.minBalance() == null ? BigDecimal.ZERO : in.minBalance();
         money("minBalance", minBalance, true);
@@ -430,7 +433,7 @@ public class DepositProductService {
         return new Product(in.code(), in.name().trim(), CASA, type, "ACTIVE", null, from.toString(),
                 interest ? (dayCount == null ? "ACTUAL_365" : dayCount) : null, rounding, tds,
                 DepositRuleSets.plain(minBalance), interest ? bands : null, bandMode, posting, Boolean.TRUE.equals(in.chequeFacility()),
-                null, null, null, null, null, null, null, null, null, null, null, null, null, liability, expense, charges, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, liability, expense, charges, null, null, null);
     }
 
     /** The schedule as entered: shapes checked here, figures by the engine ({@link DepositCharges#problems}). */
@@ -458,6 +461,16 @@ public class DepositProductService {
                 || in.chequeFacility() != null || in.charges() != null) {
             throw ApiException.invalid("the minimum balance, interest bands, the cheque facility and charges are settings of a savings or current product");
         }
+        boolean rd = "RD".equals(type);
+        if (rd && in.rdLateChargePer100() == null) {
+            throw ApiException.invalid("rdLateChargePer100 is required for a recurring deposit: the charge per Rs 100 of instalment for each month of delay (0 for none)");
+        }
+        if (!rd && in.rdLateChargePer100() != null) throw ApiException.invalid("rdLateChargePer100 is a setting of a recurring deposit product");
+        if (rd && (in.rdLateChargePer100().signum() < 0 || in.rdLateChargePer100().compareTo(BigDecimal.valueOf(100)) > 0
+                || in.rdLateChargePer100().stripTrailingZeros().scale() > 2)) {
+            throw ApiException.invalid("rdLateChargePer100 is from 0 to 100 rupees, with at most two decimals");
+        }
+        if (rd && Boolean.TRUE.equals(in.autoRenewalAllowed())) throw ApiException.invalid("a recurring deposit is paid out at maturity; it is not renewed");
         if (in.minAmount() == null) throw ApiException.invalid("minAmount is required");
         money("minAmount", in.minAmount(), false);
         if (in.maxAmount() != null) money("maxAmount", in.maxAmount(), false);
@@ -500,7 +513,7 @@ public class DepositProductService {
         if (in.prematureMinDays() != null && (in.prematureMinDays() < 0 || in.prematureMinDays() > MAX_TENURE_DAYS)) {
             throw ApiException.invalid("prematureMinDays is from 0 to " + MAX_TENURE_DAYS);
         }
-        String liability = in.glLiability() != null ? in.glLiability() : "2403";
+        String liability = in.glLiability() != null ? in.glLiability() : rd ? "2405" : "2403";
         String expense = in.glInterestExpense() != null ? in.glInterestExpense() : "5107";
         glCode(liability);
         glCode(expense);
@@ -510,7 +523,7 @@ public class DepositProductService {
                 DepositRuleSets.plain(in.minAmount()), DepositRuleSets.plain(in.maxAmount()), minMonths, minDays, maxMonths, maxDays,
                 in.interestPeriodMonths(), card, addOns, in.prematureAllowed() == null || in.prematureAllowed(),
                 DepositRuleSets.plain(in.prematurePenaltyPercent()), in.prematureMinDays(), Boolean.TRUE.equals(in.autoRenewalAllowed()),
-                liability, expense, null, null, null);
+                liability, expense, null, rd ? DepositRuleSets.plain(in.rdLateChargePer100()) : null, null, null);
     }
 
     private static void money(String what, BigDecimal v, boolean zeroAllowed) {
@@ -617,8 +630,8 @@ public class DepositProductService {
                     p.interestPostingMonths(), p.chequeFacility(), decimal(p.minAmount()), decimal(p.maxAmount()), p.minTenureMonths(),
                     p.minTenureDays(), p.maxTenureMonths(), p.maxTenureDays(), p.interestPeriodMonths(), cardJson(p.rateCard()),
                     addOnsJson(p.addOns()), p.prematureAllowed(), decimal(p.prematurePenaltyPercent()), p.prematureMinDays(),
-                    p.autoRenewalAllowed(), p.glLiability(), p.glInterestExpense(), chargesJson(p.charges()), LocalDate.parse(p.effectiveFrom()),
-                    r.id(), r.maker()};
+                    p.autoRenewalAllowed(), p.glLiability(), p.glInterestExpense(), chargesJson(p.charges()), decimal(p.rdLateChargePer100()),
+                    LocalDate.parse(p.effectiveFrom()), r.id(), r.maker()};
             if (existing == null) {
                 List<Object> args = new ArrayList<>(List.of(code, p.family(), p.productType()));
                 args.addAll(java.util.Arrays.asList(values));
@@ -627,8 +640,8 @@ public class DepositProductService {
                             interest_bands, band_mode, interest_posting_months, cheque_facility, min_amount, max_amount, min_tenure_months,
                             min_tenure_days, max_tenure_months, max_tenure_days, interest_period_months, rate_card, add_ons, premature_allowed,
                             premature_penalty_percent, premature_min_days, auto_renewal_allowed, gl_liability, gl_interest_expense,
-                            charges, effective_from, approval_id, updated_by)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)
+                            charges, rd_late_charge_per_100, effective_from, approval_id, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)
                         """, args.toArray());
             } else {
                 List<Object> args = new ArrayList<>(java.util.Arrays.asList(values));
@@ -639,7 +652,8 @@ public class DepositProductService {
                                interest_posting_months = ?, cheque_facility = ?, min_amount = ?, max_amount = ?, min_tenure_months = ?,
                                min_tenure_days = ?, max_tenure_months = ?, max_tenure_days = ?, interest_period_months = ?, rate_card = ?::jsonb,
                                add_ons = ?::jsonb, premature_allowed = ?, premature_penalty_percent = ?, premature_min_days = ?,
-                               auto_renewal_allowed = ?, gl_liability = ?, gl_interest_expense = ?, charges = ?::jsonb, effective_from = ?, approval_id = ?,
+                               auto_renewal_allowed = ?, gl_liability = ?, gl_interest_expense = ?, charges = ?::jsonb, rd_late_charge_per_100 = ?,
+                               effective_from = ?, approval_id = ?,
                                updated_by = ?
                          WHERE code = ?
                         """, args.toArray());

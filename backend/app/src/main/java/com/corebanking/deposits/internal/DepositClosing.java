@@ -62,8 +62,13 @@ final class DepositClosing {
                    String expenseGl, BigDecimal principal, Tenure tenure, LocalDate bookedOn, LocalDate start, LocalDate maturity, BigDecimal rate,
                    int periodMonths, boolean cumulative, DayCount dayCount, Rounding rounding, boolean tds, boolean prematureAllowed,
                    BigDecimal penalty, Integer minDays, String payoutTo, UUID payoutAccountId, String instruction, String bankIfsc, String fundingSource,
-                   Map<String, Object> row) {
+                   Map<String, Object> row, boolean rd) {
         Leg leg() { return new Leg(branch, gl, accountNo); }
+
+        /** The interest credits a deposit has: its periods, or for a recurring deposit (P4-5) its months. */
+        int creditsDue() {
+            return rd ? tenure.months() : TermDeposit.periods(terms()).size();
+        }
 
         boolean funded() { return start != null; }
 
@@ -79,7 +84,7 @@ final class DepositClosing {
                        t.rate_percent::numeric AS rate_percent, t.interest_period_months, t.cumulative, t.day_count, t.rounding, t.tds_applicable,
                        t.premature_allowed, t.premature_penalty_percent::numeric AS premature_penalty_percent, t.premature_min_days, t.payout_to,
                        t.payout_account_id, t.maturity_instruction, t.payout_bank_ifsc, t.payout_bank_name_cipher, t.payout_bank_account_cipher,
-                       t.payout_bank_account_last4, t.funding_source, t.add_ons::text AS add_ons, a.operating_mode, a.nomination_mode
+                       t.payout_bank_account_last4, t.funding_source, t.add_ons::text AS add_ons, a.operating_mode, a.nomination_mode, p.product_type
                   FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id JOIN deposits.product p ON p.code = a.product_code
                  WHERE a.id = ?""" + (lock ? " FOR UPDATE OF a" : ""), id);
         if (rows.isEmpty()) return null;
@@ -93,7 +98,7 @@ final class DepositClosing {
                 Rounding.valueOf((String) r.get("rounding")), Boolean.TRUE.equals(r.get("tds_applicable")), Boolean.TRUE.equals(r.get("premature_allowed")),
                 (BigDecimal) r.get("premature_penalty_percent"), r.get("premature_min_days") == null ? null : ((Number) r.get("premature_min_days")).intValue(),
                 (String) r.get("payout_to"), (UUID) r.get("payout_account_id"), (String) r.get("maturity_instruction"), (String) r.get("payout_bank_ifsc"),
-                (String) r.get("funding_source"), r);
+                (String) r.get("funding_source"), r, "RD".equals(r.get("product_type")));
     }
 
     /** Where a deposit's interest stands. */
@@ -481,7 +486,9 @@ final class DepositClosing {
             if (!nbfc && !d.prematureAllowed() && r != PrematureWithdrawal.Reason.DEATH) {
                 problems.add("product " + d.productCode() + " does not allow premature withdrawal (except on death)");
             }
-            PrematureWithdrawal.Quote q = PrematureWithdrawal.quote(rules, premature(jdbc, d, r, today));
+            PrematureWithdrawal.Quote q = d.rd()
+                    ? PrematureWithdrawal.quote(rules, premature(jdbc, d, r, today), rate -> RecurringDeposits.interestFor(jdbc, d, rate, today))
+                    : PrematureWithdrawal.quote(rules, premature(jdbc, d, r, today));
             if (!q.allowed()) {
                 problems.add(q.refusal());
                 return new DepositQuote("PREMATURE", why, problems, q.basis(), d.principal(), balance, null, null, st.credited(), st.accrued(), null, null,
@@ -497,7 +504,7 @@ final class DepositClosing {
             return new DepositQuote("PREMATURE", why, problems, q.basis(), d.principal(), balance, q.ratePercent(), due, st.credited(), st.accrued(),
                     toCredit, toRecover, BigDecimal.ZERO, null, balance.add(toCredit).subtract(toRecover), d.maturity(), today);
         }
-        int periods = TermDeposit.periods(d.terms()).size();
+        int periods = d.creditsDue();
         if (st.periodsCredited() < periods) {
             problems.add("the last interest of deposit " + d.accountNo() + " is credited by the day-end of " + d.maturity() + "; close it after that day-end");
         }
@@ -538,7 +545,11 @@ final class DepositClosing {
                  WHERE m.account_id = ? AND m.reversed_by IS NULL
                    AND (m.kind = 'INTEREST_PAYOUT' OR (m.kind = 'BANK_TRANSFER_OUT' AND EXISTS (SELECT 1 FROM deposits.gateway_transfer g WHERE g.movement_id = m.id)))
                 """, BigDecimal.class, d.id());
-        return new PrematureWithdrawal.Request(d.terms(), on, reason, "INDIVIDUAL".equals(c.get("customer_type")), total, rateRun,
+        TermDeposit.Terms terms = d.rd()
+                ? new TermDeposit.Terms(RecurringDeposits.paidIn(RecurringDeposits.paid(jdbc, d.id())).max(d.principal()), d.rate(), d.start(), d.maturity(),
+                        d.periodMonths(), true, d.dayCount(), d.rounding())
+                : d.terms();
+        return new PrematureWithdrawal.Request(terms, on, reason, "INDIVIDUAL".equals(c.get("customer_type")), total, rateRun,
                 minimum == null ? d.rate() : minimum, d.penalty() == null ? BigDecimal.ZERO : d.penalty(), d.minDays() == null ? 0 : d.minDays(),
                 true, paidOut);
     }
@@ -623,7 +634,7 @@ final class DepositClosing {
         JdbcTemplate jdbc = b.jdbc();
         Deposit d = deposit(jdbc, id, true);
         if (d == null || !"ACTIVE".equals(d.status()) || d.maturity().isAfter(b.today())) return;
-        if (interest(jdbc, id).periodsCredited() < TermDeposit.periods(d.terms()).size()) return;   // the interest step has not credited it yet
+        if (interest(jdbc, id).periodsCredited() < d.creditsDue()) return;   // the interest step has not credited it yet
         List<String> why = new ArrayList<>();
         if (!"PAY_OUT".equals(d.instruction())) {
             try {
@@ -654,7 +665,9 @@ final class DepositClosing {
         Deposit d = deposit(jdbc, id, true);
         if (d == null || !"ACTIVE".equals(d.status()) || !d.funded()) return;
         if (!jdbc.queryForList("SELECT 1 FROM deposits.maturity_notice WHERE account_id = ? AND maturity_date = ?", id, d.maturity()).isEmpty()) return;
-        BigDecimal expected = TermDeposit.maturityValue(d.terms());
+        // a recurring deposit: the instalments paid, those still to come on time, and the interest on them
+        BigDecimal expected = d.rd() ? RecurringDeposits.maturityValue(d.principal(), d.rate(), d.tenure().months(), d.periodMonths(), d.rounding())
+                : TermDeposit.maturityValue(d.terms());
         jdbc.update("INSERT INTO deposits.maturity_notice (account_id, maturity_date, notice_on, instruction, expected_amount) VALUES (?, ?, ?, ?, ?)",
                 id, d.maturity(), b.today(), d.instruction(), expected);
         Map<String, Object> e = new LinkedHashMap<>();

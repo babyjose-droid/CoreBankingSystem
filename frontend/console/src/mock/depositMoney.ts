@@ -20,13 +20,15 @@ import type {
   DepositTransactionInput,
   DepositTransferInput,
   TermDepositFundingInput,
+  RdInstalmentInput,
+  RdInstalments,
 } from '../api/types';
 import type { CollectionOrder } from '../api/integrationTypes';
 import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
-import { periods } from './deposits';
+import { periods, rdPeriods } from './deposits';
 import { assertWithinLimit } from './limits';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
@@ -78,6 +80,20 @@ export interface MockHoldRequest {
   holdId: string | null;
 }
 
+/** The next instalment of a recurring deposit (P4-5), with its late charge. */
+export interface MockInstalment {
+  depositId: string;
+  depositNo: string;
+  number: number;
+  dueDate: string;
+  amount: string;
+  lateCharge: string;
+  source: string;
+  fromAccountId: string | null;
+  fromAccountNo: string | null;
+  reference: string | null;
+}
+
 export interface MockFunding {
   depositId: string;
   depositNo: string;
@@ -120,6 +136,7 @@ export function depositCheckers(payload: ApprovalPayload, amount: string | null)
   if (payload.kind === 'DEPOSIT_TXN') return payload.txn.type === 'REVERSE' || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
   if (payload.kind === 'DEPOSIT_LIFECYCLE') return 1;
   if (payload.kind === 'DEPOSIT_FUNDING') return payload.funding.reason !== null || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
+  if (payload.kind === 'DEPOSIT_INSTALMENT') return !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
   return null;
 }
 
@@ -252,6 +269,65 @@ function fundingProblems(d: DepositAccount): string[] {
   return out;
 }
 
+const SOURCE_WORD: Record<string, string> = { ACCOUNT: 'from account', CASH: 'in cash', BANK_TRANSFER: 'by bank transfer', GATEWAY: 'through a payment link' };
+const SOURCE_OF: Record<string, string> = Object.fromEntries(Object.entries(SOURCE_WORD).map(([k, v]) => [v, k]));
+
+/** As RecurringDeposit.latePenalty: Rs per 100 of the instalment for each month or part of a month late. */
+export function rdLateCharge(instalment: string, dueDate: string, paidOn: string, per100: string): bigint {
+  if (paidOn <= dueDate) return 0n;
+  let months = 0;
+  while (addMonths(dueDate, months) < paidOn) months += 1;
+  // per100 has at most two decimals: instalment x per100 x months / 100, to the paisa
+  const raw = toUnits(instalment) * toUnits(per100) * BigInt(months);
+  const den = 10000n * 100n * 100n; // to whole paise (100 units), half up
+  return (raw / den + (raw % den * 2n >= den ? 1n : 0n)) * 100n;
+}
+
+/** The instalments of a recurring deposit, from its movements: the funding is instalment 1 (RecurringDeposits.schedule). */
+export function rdSchedule(db: MockDb, d: DepositAccount) {
+  const t = d.termDeposit!;
+  const product = db.deposits.products.find((p) => p.code === d.productCode);
+  const per100 = product?.rdLateChargePer100 ?? '0';
+  const mine = db.deposits.movements.filter((m) => m.accountId === d.id && !m.reversedBy && (m.kind === 'FUNDING' || m.kind === 'RD_INSTALMENT')).sort((x, y) => x.seq! - y.seq!);
+  const paid = mine.map((m) => {
+    const late = db.deposits.movements.find((x) => x.lotId === m.lotId && x.kind === 'RD_LATE_CHARGE');
+    const word = (m.narration ?? '').split(', ')[1] ?? '';
+    return { paidOn: m.businessDate!, lateCharge: late?.amount ?? '0', source: m.kind === 'FUNDING' ? t.fundingSource ?? null : SOURCE_OF[word] ?? null, amount: m.amount! };
+  });
+  const rows: NonNullable<RdInstalments['schedule']> = [];
+  let next: RdInstalments['next'] = null;
+  let overdue = 0;
+  if (t.startDate) {
+    for (let n = 1; n <= (t.tenureMonths ?? 0); n++) {
+      const due = addMonths(t.startDate, n - 1);
+      const p = paid[n - 1];
+      const status = p ? 'PAID' : due < db.businessDate ? 'OVERDUE' : 'DUE';
+      if (status === 'OVERDUE') overdue += 1;
+      rows.push({ number: n, dueDate: due, amount: plain(toUnits(t.principal!)), paidOn: p?.paidOn ?? null, lateCharge: p ? p.lateCharge : null, source: p?.source ?? null, status });
+      if (!p && !next) {
+        const charge = rdLateCharge(t.principal!, due, db.businessDate, per100);
+        next = { number: n, dueDate: due, amount: plain(toUnits(t.principal!)), lateCharge: plain(charge), total: plain(toUnits(t.principal!) + charge),
+          payableNow: d.status === 'ACTIVE' && !!t.maturityDate && db.businessDate < t.maturityDate };
+      }
+    }
+  }
+  const sum = (xs: string[]) => xs.reduce((s, x) => s + toUnits(x), 0n);
+  return { instalment: plain(toUnits(t.principal!)), instalments: t.tenureMonths ?? 0, lateChargePer100: per100, paidCount: paid.length, paidIn: plain(sum(paid.map((p) => p.amount))),
+    lateChargesPaid: plain(sum(paid.map((p) => p.lateCharge))), overdueCount: overdue, next, schedule: rows } satisfies RdInstalments;
+}
+
+function instalmentProblems(db: MockDb, d: DepositAccount, next: RdInstalments['next'], from: DepositAccount | null, total: string): string[] {
+  const out: string[] = [];
+  if (d.status !== 'ACTIVE') out.push(`recurring deposit ${d.accountNo} is ${d.status}; instalments are paid while it is active`);
+  if (!next) out.push(`every instalment of recurring deposit ${d.accountNo} is paid`);
+  else if (!next.payableNow && d.status === 'ACTIVE') out.push(`recurring deposit ${d.accountNo} has reached its maturity date`);
+  if (from) {
+    if (!(from.holders ?? []).some((h) => h.customerId === d.holders?.[0]?.customerId)) out.push(`account ${from.accountNo} is not held by the depositor`);
+    out.push(...movementProblems(db, from, 'DEBIT', total, false).map((x) => `account ${from.accountNo}: ${x}`));
+  }
+  return out;
+}
+
 function fundingReversalProblems(db: MockDb, d: DepositAccount): string[] {
   const m = db.deposits.movements.find((x) => x.accountId === d.id && x.kind === 'FUNDING' && !x.reversedBy);
   if (d.status !== 'ACTIVE' || !m) return [`deposit ${d.accountNo} is ${d.status}; only a funded deposit has a funding to reverse`];
@@ -361,7 +437,7 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
       if (from) problems.push(...movementProblems(db, from, 'DEBIT', f.amount, false).map((x) => `account ${from.accountNo}: ${x}`));
       refuseIfAny('the deposit cannot be funded', problems);
       const lot = uuid();
-      move(db, d, 'FUNDING', 'CREDIT', f.amount, lot, { reference: f.reference, counterpartyAccountNo: from?.accountNo ?? null }, maker, id);
+      move(db, d, 'FUNDING', 'CREDIT', f.amount, lot, { reference: f.reference, counterpartyAccountNo: from?.accountNo ?? null, narration: t.recurring ? 'Instalment 1' : null }, maker, id);
       if (from) move(db, from, 'FUNDING_PAID', 'DEBIT', f.amount, lot, { reference: f.reference, counterpartyAccountNo: d.accountNo }, maker, id);
       const maturity = addDays(addMonths(db.businessDate, t.tenureMonths!), t.tenureDays!);
       Object.assign(t, { startDate: db.businessDate, maturityDate: maturity, funded: true, figuresFrom: db.businessDate, figuresMaturityDate: maturity, fundingSource: f.source as 'CASH',
@@ -371,6 +447,22 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
     }
     approval.appliedRef = d.accountNo!;
     appendAudit(db, at, checker, f.reason !== null ? 'TERM_DEPOSIT_FUNDING_REVERSED' : 'TERM_DEPOSIT_FUNDED', 'TERM_DEPOSIT', d.id!, { accountNo: d.accountNo });
+    return true;
+  }
+  if (p.kind === 'DEPOSIT_INSTALMENT') {
+    const i = p.instalment;
+    const d = findAccount(db, i.depositId, 'TERM_DEPOSIT');
+    const from = i.fromAccountId ? findAccount(db, i.fromAccountId, 'CASA') : null;
+    const next = rdSchedule(db, d).next;
+    if (!next || next.number !== i.number) throw conflict('Conflict', `instalment ${i.number} of deposit ${d.accountNo} is already paid`);
+    const total = plain(toUnits(i.amount) + toUnits(i.lateCharge));
+    refuseIfAny('the instalment cannot be paid', instalmentProblems(db, d, next, from, total));
+    const lot = uuid();
+    const m = move(db, d, 'RD_INSTALMENT', 'CREDIT', i.amount, lot, { reference: i.reference, counterpartyAccountNo: from?.accountNo ?? null, narration: `Instalment ${i.number}, ${SOURCE_WORD[i.source]}` }, maker, id);
+    if (from) move(db, from, 'FUNDING_PAID', 'DEBIT', i.amount, lot, { reference: i.reference, counterpartyAccountNo: d.accountNo }, maker, id);
+    if (from && toUnits(i.lateCharge) > 0n) move(db, from, 'RD_LATE_CHARGE', 'DEBIT', i.lateCharge, lot, { narration: `Late charge on instalment ${i.number} of ${d.accountNo}` }, maker, id);
+    approval.appliedRef = m.id!;
+    appendAudit(db, at, checker, 'RD_INSTALMENT_PAID', 'TERM_DEPOSIT', d.id!, { accountNo: d.accountNo, number: i.number });
     return true;
   }
   return false;
@@ -534,12 +626,15 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       require(user, view);
       const a = findAccount(db, params.id, family);
       const t = a.termDeposit;
-      const schedule = t?.funded && t.startDate && t.maturityDate
+      const schedule = t?.funded && t.startDate && t.recurring
+        ? rdPeriods(t.startDate, t.tenureMonths ?? 0, t.principal!, t.ratePercent!, t.interestPeriodMonths ?? 3, t.rounding ?? 'PAISE_HALF_UP')
+            .map((p) => ({ number: p.number, from: p.from, creditOn: p.to, balance: plain(p.balance), interest: plain(p.interest), status: 'DUE' as const }))
+        : t?.funded && t.startDate && t.maturityDate
         ? periods({ principal: t.principal!, ratePercent: t.ratePercent!, start: t.startDate, maturity: t.maturityDate, periodMonths: t.interestPeriodMonths ?? 0,
             cumulative: !!t.cumulative, dayCount: t.dayCount ?? 'ACTUAL_365', rounding: t.rounding ?? 'PAISE_HALF_UP' })
             .map((p) => ({ number: p.number, from: p.from, creditOn: p.to, balance: plain(p.balance), interest: plain(p.interest), status: 'DUE' as const }))
         : [];
-      return ok({ accruedThrough: null, accrued: '0', credited: '0', lastCreditOn: null,
+      return ok({ accruedThrough: null, accrued: '0', credited: '0', lastCreditOn: null, ...(t?.recurring ? { monthsWorkedOut: 0 } : {}),
         nextCreditDate: family === 'CASA' ? a.nextInterestDate ?? null : schedule[0]?.creditOn ?? null, schedule, events: [] });
     });
     on('GET', `/api/v1/${base}/accounts/{id}/collection-orders`, ({ user, params }) => {
@@ -702,6 +797,40 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
     const funding: MockFunding = { depositId: d.id!, depositNo: d.accountNo!, source: b.source, fromAccountId: from?.id ?? null, fromAccountNo: from?.accountNo ?? null,
       amount: t.principal!, reference, payoutBankAccount: bank, reason: null };
     return propose(user, 'TERM_DEPOSIT', 'FUND', { kind: 'DEPOSIT_FUNDING', funding }, { ...funding }, null, d.id!, t.principal!);
+  });
+
+  on('GET', '/api/v1/deposits/accounts/{id}/instalments', ({ user, params }) => {
+    module('TD');
+    require(user, P.depositView);
+    const d = findAccount(db, params.id, 'TERM_DEPOSIT');
+    if (!d.termDeposit?.recurring) throw notFound(`recurring deposit ${params.id}`);
+    return ok(rdSchedule(db, d));
+  });
+
+  on('POST', '/api/v1/deposits/accounts/{id}/instalments', ({ user, params, body }) => {
+    module('TD');
+    require(user, P.depositFund);
+    const d = findAccount(db, params.id, 'TERM_DEPOSIT');
+    if (!d.termDeposit?.recurring) throw invalid(`deposit ${d.accountNo} is not a recurring deposit; it takes no instalments`);
+    const b = (body ?? {}) as Partial<RdInstalmentInput>;
+    if (!b.source || !['ACCOUNT', 'CASH', 'BANK_TRANSFER'].includes(b.source)) throw invalid('source is one of ACCOUNT, CASH, BANK_TRANSFER');
+    if (d.status === 'BOOKED') throw invalid(`recurring deposit ${d.accountNo} is booked: its first instalment is its funding`);
+    const problems: string[] = [];
+    const reference = text(b.reference, 60, 'reference', problems);
+    if (b.source === 'BANK_TRANSFER' && !reference) problems.push("the bank's reference (UTR) is required for a bank transfer");
+    let from: DepositAccount | null = null;
+    if (b.source === 'ACCOUNT') {
+      if (!b.fromAccountId) problems.push('name the savings or current account the instalment is paid from');
+      else from = findAccount(db, b.fromAccountId, 'CASA');
+    } else if (b.fromAccountId) problems.push('only an instalment from an account names one');
+    const next = rdSchedule(db, d).next;
+    const total = next ? next.total! : '0';
+    problems.push(...instalmentProblems(db, d, next, from, total));
+    refuseIfAny('the instalment cannot be paid', problems);
+    assertWithinLimit(db, user, from ? 'DEPOSIT_DEBIT' : 'DEPOSIT_CREDIT', total, { record: true });
+    const instalment: MockInstalment = { depositId: d.id!, depositNo: d.accountNo!, number: next!.number!, dueDate: next!.dueDate!, amount: next!.amount!, lateCharge: next!.lateCharge!,
+      source: b.source, fromAccountId: from?.id ?? null, fromAccountNo: from?.accountNo ?? null, reference };
+    return propose(user, 'TERM_DEPOSIT', 'INSTALMENT', { kind: 'DEPOSIT_INSTALMENT', instalment }, { ...instalment }, null, d.id!, total);
   });
 
   on('POST', '/api/v1/deposits/accounts/{id}/funding/reverse', ({ user, params, body }) => {

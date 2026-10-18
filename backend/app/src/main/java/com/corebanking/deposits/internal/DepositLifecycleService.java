@@ -535,7 +535,8 @@ public class DepositLifecycleService {
                        n.notice_on, n.expected_amount,
                        (SELECT x.reference FROM deposits.renewal_consent x WHERE x.account_id = a.id AND x.status = 'ACTIVE'),
                        (SELECT e.note FROM deposits.interest_event e WHERE e.account_id = a.id AND e.kind = 'PAYOUT_HELD' ORDER BY e.id DESC LIMIT 1),
-                       t.interest_period_months, t.cumulative, t.day_count, t.rounding
+                       t.interest_period_months, t.cumulative, t.day_count, t.rounding, t.tenure_months,
+                       (SELECT pr.product_type FROM deposits.product pr WHERE pr.code = a.product_code)
                   FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id JOIN customer.customer c ON c.id = a.customer_id
                   LEFT JOIN deposits.account pay ON pay.id = t.payout_account_id
                   LEFT JOIN deposits.maturity_notice n ON n.account_id = a.id AND n.maturity_date = t.maturity_date
@@ -567,7 +568,9 @@ public class DepositLifecycleService {
                     m.put("noticeOn", rs.getObject(17, LocalDate.class));
                     TermDeposit.Terms terms = new TermDeposit.Terms(principal, rate, start, maturity, rs.getInt(21), rs.getBoolean(22),
                             com.corebanking.calc.DayCount.valueOf(rs.getString(23)), com.corebanking.calc.Rounding.valueOf(rs.getString(24)));
-                    m.put("expectedAmount", DepositAccountService.amount(TermDeposit.maturityValue(terms)));
+                    m.put("expectedAmount", DepositAccountService.amount("RD".equals(rs.getString(26))
+                            ? RecurringDeposits.maturityValue(principal, rate, rs.getInt(25), rs.getInt(21), com.corebanking.calc.Rounding.valueOf(rs.getString(24)))
+                            : TermDeposit.maturityValue(terms)));
                     m.put("consentReference", rs.getString(19));
                     m.put("waitingBecause", rs.getString(20));
                     return m;

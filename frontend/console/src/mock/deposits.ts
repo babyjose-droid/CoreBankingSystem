@@ -132,12 +132,17 @@ const BANK_PRODUCTS: DepositProductInput[] = [
   { code: 'FDP01', name: 'Demo fixed deposit, monthly payout (demo data)', productType: 'FD_PAYOUT', minAmount: 5000, minTenureDays: 46, maxTenureMonths: 120, interestPeriodMonths: 1,
     rateCard: card([[0, 0, 46, 5], [0, 6, 0, 6], [0, 12, 0, 6.9], [0, 36, 0, 7]]),
     addOns: [{ code: 'SENIOR_CITIZEN', percent: 0.5 }], prematureAllowed: true, prematurePenaltyPercent: 1, prematureMinDays: 7, autoRenewalAllowed: true },
+  { code: 'RD01', name: 'Demo recurring deposit (demo data)', productType: 'RD', minAmount: 500, minTenureMonths: 6, maxTenureMonths: 120, interestPeriodMonths: 3,
+    rateCard: card([[0, 6, 0, 6.5], [0, 12, 0, 7], [0, 36, 0, 7.1]]), addOns: [{ code: 'SENIOR_CITIZEN', percent: 0.5 }], prematureAllowed: true, prematurePenaltyPercent: 1,
+    prematureMinDays: 7, autoRenewalAllowed: false, glLiability: '2405', rdLateChargePer100: 1.5 },
 ];
 const NBFC_PRODUCTS: DepositProductInput[] = [
   { code: 'FD01', name: 'Demo public deposit, cumulative (demo data)', productType: 'FD_CUMULATIVE', minAmount: 10000, minTenureMonths: 12, maxTenureMonths: 60, interestPeriodMonths: 12,
     rateCard: card([[0, 12, 0, 8.5], [0, 24, 0, 8.75], [0, 36, 0, 9]]), addOns: [{ code: 'SENIOR_CITIZEN', percent: 0.25 }], prematureAllowed: true },
   { code: 'FD02', name: 'Demo public deposit, quarterly payout (demo data)', productType: 'FD_PAYOUT', minAmount: 10000, minTenureMonths: 12, maxTenureMonths: 60, interestPeriodMonths: 3,
     rateCard: card([[0, 12, 0, 8.5], [0, 24, 0, 8.75], [0, 36, 0, 9]]), addOns: [{ code: 'SENIOR_CITIZEN', percent: 0.25 }], prematureAllowed: true },
+  { code: 'RD02', name: 'Demo recurring public deposit (demo data)', productType: 'RD', minAmount: 500, minTenureMonths: 12, maxTenureMonths: 60, interestPeriodMonths: 3,
+    rateCard: card([[0, 12, 0, 8.25], [0, 24, 0, 8.5]]), prematureAllowed: true, autoRenewalAllowed: false, glLiability: '2405', rdLateChargePer100: 1.5 },
 ];
 
 // ---------- rules ----------
@@ -217,6 +222,44 @@ interface Period {
   whole: boolean;
 }
 
+/**
+ * As RecurringDeposit.months (P4-5): month m earns one twelfth of the rate on the instalments held through it and the
+ * interest credited before it; the interest is credited every {@code k} months and at maturity.
+ * {@code held(m)} is the instalments held through month m.
+ */
+export function rdMonths(start: string, tenure: number, ratePercent: string, k: number, rounding: string, upTo: number, held: (m: number) => bigint) {
+  const rate = scaled(ratePercent, 6);
+  const den = 12n * 100n * 1_000_000n;
+  const out: Array<{ number: number; from: string; to: string; balance: bigint; credited: bigint }> = [];
+  let credited = 0n;
+  let pending = 0n;
+  for (let m = 1; m <= upTo; m++) {
+    const balance = held(m) + credited;
+    pending += balance * rate;
+    let credit = 0n;
+    if (m % k === 0 || m === tenure) {
+      credit = roundUnits(pending, den, rounding);
+      credited += credit;
+      pending = 0n;
+    }
+    out.push({ number: m, from: addMonths(start, m - 1), to: addMonths(start, m), balance, credited: credit });
+  }
+  return { months: out, credited, pending: roundUnits(pending, den, rounding) };
+}
+
+/** The interest credits of a recurring deposit paid on time, as periods. */
+export function rdPeriods(start: string, tenure: number, instalment: string, ratePercent: string, k: number, rounding: string): Period[] {
+  const inst = toUnits(instalment);
+  const out: Period[] = [];
+  let from = start;
+  for (const m of rdMonths(start, tenure, ratePercent, k, rounding, tenure, (n) => inst * BigInt(n)).months) {
+    if (m.number % k !== 0 && m.number !== tenure) continue;
+    out.push({ number: out.length + 1, from, to: m.to, balance: m.balance, interest: m.credited, whole: m.number % k === 0 });
+    from = m.to;
+  }
+  return out;
+}
+
 /** As TermDeposit.periods: whole periods earn principal x rate x months / 12; a last part period earns for its days. */
 export function periods(t: Terms): Period[] {
   const out: Period[] = [];
@@ -243,7 +286,7 @@ export function periods(t: Terms): Period[] {
 // ---------- products ----------
 
 const CASA_TYPES = ['SAVINGS', 'CURRENT'];
-const TD_TYPES = ['FD_CUMULATIVE', 'FD_PAYOUT'];
+const TD_TYPES = ['FD_CUMULATIVE', 'FD_PAYOUT', 'RD'];
 
 function money(what: string, v: string | null, zeroAllowed: boolean): void {
   if (v === null) return;
@@ -270,7 +313,7 @@ export function normalise(db: MockDb, family: DepositFamily, b: Partial<DepositP
   if (!input.name?.trim() || input.name.length > 200) throw invalid('name is required (at most 200 characters)');
   const casa = family === 'CASA';
   const type = (input.productType ?? '').toUpperCase();
-  if (!(casa ? CASA_TYPES : TD_TYPES).includes(type)) throw invalid(casa ? 'productType is SAVINGS or CURRENT' : 'productType is FD_CUMULATIVE or FD_PAYOUT');
+  if (!(casa ? CASA_TYPES : TD_TYPES).includes(type)) throw invalid(casa ? 'productType is SAVINGS or CURRENT' : 'productType is FD_CUMULATIVE, FD_PAYOUT or RD');
   const base = {
     code: input.code!,
     name: input.name.trim(),
@@ -285,7 +328,9 @@ export function normalise(db: MockDb, family: DepositFamily, b: Partial<DepositP
   };
   const none = { minBalance: null, interestBands: null, bandMode: null, interestPostingMonths: null, chequeFacility: null, minAmount: null, maxAmount: null,
     minTenureMonths: null, minTenureDays: null, maxTenureMonths: null, maxTenureDays: null, interestPeriodMonths: null, rateCard: null, addOns: null,
-    prematureAllowed: null, prematurePenaltyPercent: null, prematureMinDays: null, autoRenewalAllowed: null };
+    prematureAllowed: null, prematurePenaltyPercent: null, prematureMinDays: null, autoRenewalAllowed: null, rdLateChargePer100: null };
+  const late = plain(input.rdLateChargePer100 ?? null);
+  if (late !== null && type !== 'RD') throw invalid('rdLateChargePer100 is a setting of a recurring deposit product');
   if (casa) {
     if (input.minAmount != null || input.rateCard != null || input.addOns != null || input.interestPeriodMonths != null || input.prematureAllowed != null) {
       throw invalid('amount and tenure limits, the rate card, add-ons, premature withdrawal and renewal are settings of a term deposit product');
@@ -335,12 +380,17 @@ export function normalise(db: MockDb, family: DepositFamily, b: Partial<DepositP
   if (new Set(addOns.map((x) => x.code)).size !== addOns.length) throw invalid('an add-on is listed twice');
   const penalty = plain(input.prematurePenaltyPercent);
   percent('prematurePenaltyPercent', penalty, false);
+  if (type === 'RD') {
+    if (late === null) throw invalid('rdLateChargePer100 is required for a recurring deposit product (0 for no charge)');
+    if (Number(late) < 0 || Number(late) > 100 || (late.split('.')[1] ?? '').length > 2) throw invalid('rdLateChargePer100 is from 0 to 100 rupees per 100, with at most two decimals');
+    if (input.autoRenewalAllowed === true) throw invalid('a recurring deposit is not renewed: it is paid out at maturity');
+  }
   return { ...base, ...none, dayCount: input.dayCount ?? 'ACTUAL_365', tdsApplicable: input.tdsApplicable ?? true, minAmount, maxAmount,
     minTenureMonths: whole('minTenureMonths', input.minTenureMonths, 600), minTenureDays: whole('minTenureDays', input.minTenureDays, 3660),
     maxTenureMonths: whole('maxTenureMonths', input.maxTenureMonths, 600), maxTenureDays: whole('maxTenureDays', input.maxTenureDays, 3660),
     interestPeriodMonths: input.interestPeriodMonths, rateCard, addOns, prematureAllowed: input.prematureAllowed ?? true, prematurePenaltyPercent: penalty,
-    prematureMinDays: input.prematureMinDays ?? null, autoRenewalAllowed: input.autoRenewalAllowed === true,
-    glLiability: input.glLiability ?? '2403', glInterestExpense: input.glInterestExpense ?? '5107' };
+    prematureMinDays: input.prematureMinDays ?? null, autoRenewalAllowed: input.autoRenewalAllowed === true, rdLateChargePer100: type === 'RD' ? late : null,
+    glLiability: input.glLiability ?? (type === 'RD' ? '2405' : '2403'), glInterestExpense: input.glInterestExpense ?? '5107' };
 }
 
 /** A savings or current product's schedule of charges (P4-4), checked as the engine's DepositCharges.problems; null for none. */
@@ -398,6 +448,9 @@ export function productProblems(db: MockDb, p: DepositProduct): string[] {
   const tenuresOk = minRank > 0 && minRank <= maxRank;
   if (minRank === 0) out.push('the shortest and the longest tenure are required, and the shortest must be above zero');
   else if (minRank > maxRank) out.push(`the shortest tenure ${tenureText(p.minTenureMonths!, p.minTenureDays!)} is longer than the longest ${tenureText(p.maxTenureMonths!, p.maxTenureDays!)}`);
+  if (p.productType === 'RD' && ((p.minTenureDays ?? 0) !== 0 || (p.maxTenureDays ?? 0) !== 0 || (p.rateCard ?? []).some((c) => (c.fromDays ?? 0) !== 0))) {
+    out.push('a recurring deposit runs for whole months: its tenures have no days');
+  }
   const period = p.interestPeriodMonths ?? 0;
   const restOk = [1, 3, 6, 12].includes(period) || (period === 0 && p.productType === 'FD_PAYOUT');
   if (!restOk) out.push(p.productType === 'FD_PAYOUT' ? 'interest is paid every 1, 3, 6 or 12 months, or once at maturity (0)' : 'interest is compounded every 1, 3, 6 or 12 months');
@@ -501,6 +554,10 @@ function quote(db: MockDb, p: DepositProduct, amount: string | null, months: num
     problems.push('the tenure is required');
     return { problems, quote: null };
   }
+  if (p.productType === 'RD' && days !== 0) {
+    problems.push('a recurring deposit runs for a whole number of months');
+    return { problems, quote: null };
+  }
   const start = db.businessDate;
   const maturity = addTenure(start, months, days);
   if (maturity < addTenure(start, p.minTenureMonths!, p.minTenureDays!)) {
@@ -542,8 +599,9 @@ function quote(db: MockDb, p: DepositProduct, amount: string | null, months: num
   if (ceiling !== null && Number(ratePercent) > ceiling) problems.push(`the rate ${ratePercent}% is above the ceiling of ${ceiling}%`);
   if (maxNominees !== null && nominees > maxNominees) problems.push(`${nominees} nominees named; at most ${maxNominees} allowed`);
   if (problems.length) return { problems, quote: null };
-  const terms: Terms = { principal: amount, ratePercent, start, maturity, periodMonths: p.interestPeriodMonths!, cumulative: p.productType === 'FD_CUMULATIVE', dayCount: p.dayCount!, rounding: p.rounding! };
-  return { problems, quote: { product: p, cell, addOns: given, ratePercent, start, maturity, periods: periods(terms) } };
+  const terms: Terms = { principal: amount, ratePercent, start, maturity, periodMonths: p.interestPeriodMonths!, cumulative: p.productType !== 'FD_PAYOUT', dayCount: p.dayCount!, rounding: p.rounding! };
+  const ps = p.productType === 'RD' ? rdPeriods(start, months, amount, ratePercent, p.interestPeriodMonths!, p.rounding!) : periods(terms);
+  return { problems, quote: { product: p, cell, addOns: given, ratePercent, start, maturity, periods: ps } };
 }
 
 const taxYearStarting = (iso: string) => (Number(iso.slice(5, 7)) >= 4 ? Number(iso.slice(0, 4)) : Number(iso.slice(0, 4)) - 1);
@@ -579,13 +637,17 @@ function previewOf(db: MockDb, q: Quote, amount: string, months: number, days: n
     }
   }
   const years = daysBetween(q.start, q.maturity) / (p.dayCount === 'ACTUAL_360' ? 360 : 365);
+  const rd = p.productType === 'RD';
+  const paidIn = rd ? principal * BigInt(months) : principal;
+  // a recurring deposit: the simple rate on the average amount deposited, instalment x (n+1)/2 over n months
+  const yieldPercent = rd ? ((Number(total) * 1200) / (Number(principal) * ((months * (months + 1)) / 2))).toFixed(2) : ((Number(total) / Number(principal) / years) * 100).toFixed(2);
   const insured = rule(db, 'insured');
   return {
     productCode: p.code, productVersion: p.version ?? 1, amount, tenureMonths: months, tenureDays: days, startDate: q.start, maturityDate: q.maturity,
     ratePercent: q.ratePercent, cardRatePercent: q.cell.ratePercent, cardFromAmount: q.cell.fromAmount, cardFromMonths: q.cell.fromMonths, cardFromDays: q.cell.fromDays,
-    addOns: q.addOns, interestPeriodMonths: p.interestPeriodMonths!, cumulative: p.productType === 'FD_CUMULATIVE',
-    totalInterest: fromUnits(total), maturityValue: fromUnits(p.productType === 'FD_CUMULATIVE' ? principal + total : principal),
-    annualisedYieldPercent: ((Number(total) / Number(principal) / years) * 100).toFixed(2),
+    addOns: q.addOns, interestPeriodMonths: p.interestPeriodMonths!, cumulative: p.productType !== 'FD_PAYOUT', recurring: rd,
+    totalInterest: fromUnits(total), maturityValue: fromUnits(p.productType !== 'FD_PAYOUT' ? paidIn + total : principal),
+    annualisedYieldPercent: yieldPercent,
     periods: q.periods.map((x) => ({ number: x.number, from: x.from, to: x.to, balance: fromUnits(x.balance), interest: fromUnits(x.interest), whole: x.whole })),
     tdsApplicable: p.tdsApplicable === true, tax, totalTax: p.tdsApplicable ? fromUnits(totalTax) : null,
     taxNote: p.tdsApplicable ? "Tax is worked out on the interest of this deposit alone. The depositor's other deposits and a declaration on file change what is deducted." : null,
@@ -747,12 +809,13 @@ function openAccount(db: MockDb, o: MockOpening, q: Quote | null, maker: string,
     account.termDeposit = {
       principal: o.amount!, tenureMonths: o.tenureMonths!, tenureDays: o.tenureDays!, bookedOn: db.businessDate, startDate: null, maturityDate: null,
       ratePercent: q.ratePercent, cardRatePercent: q.cell.ratePercent, cardFromAmount: q.cell.fromAmount, cardFromMonths: q.cell.fromMonths, cardFromDays: q.cell.fromDays,
-      addOns: q.addOns, interestPeriodMonths: product.interestPeriodMonths!, cumulative: product.productType === 'FD_CUMULATIVE', dayCount: product.dayCount!,
+      addOns: q.addOns, interestPeriodMonths: product.interestPeriodMonths!, cumulative: product.productType !== 'FD_PAYOUT', recurring: product.productType === 'RD', dayCount: product.dayCount!,
       rounding: product.rounding, tdsApplicable: product.tdsApplicable === true, prematureAllowed: product.prematureAllowed === true,
       prematurePenaltyPercent: product.prematurePenaltyPercent ?? null, prematureMinDays: product.prematureMinDays ?? null,
       payoutTo: o.payoutTo as 'CASA' | 'BANK_ACCOUNT', payoutAccountId: o.payoutAccountId, payoutAccountNo: pay?.accountNo ?? null,
       maturityInstruction: o.maturityInstruction as 'PAY_OUT', funded: false, figuresFrom: q.start, figuresMaturityDate: q.maturity,
-      totalInterest: fromUnits(total), maturityValue: fromUnits(product.productType === 'FD_CUMULATIVE' ? toUnits(o.amount!) + total : toUnits(o.amount!)),
+      totalInterest: fromUnits(total),
+      maturityValue: fromUnits(product.productType === 'RD' ? toUnits(o.amount!) * BigInt(o.tenureMonths!) + total : product.productType === 'FD_CUMULATIVE' ? toUnits(o.amount!) + total : toUnits(o.amount!)),
     };
   }
   db.deposits.accounts.unshift(account);

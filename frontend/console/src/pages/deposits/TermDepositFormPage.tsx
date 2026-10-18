@@ -26,6 +26,12 @@ export function PreviewCard({ q }: { q: TermDepositPreview }) {
           <dd><DateText value={q.startDate} /></dd>
           <dt>Matures on</dt>
           <dd data-testid="preview-maturity"><DateText value={q.maturityDate} /></dd>
+          {q.recurring && (
+            <>
+              <dt>Monthly instalment</dt>
+              <dd data-testid="preview-instalment"><MoneyText value={q.amount} /> × {q.tenureMonths}, the first on funding</dd>
+            </>
+          )}
           <dt>Total interest</dt>
           <dd><MoneyText value={q.totalInterest} /></dd>
           <dt>Repaid at maturity</dt>
@@ -43,6 +49,7 @@ export function PreviewCard({ q }: { q: TermDepositPreview }) {
             </>
           )}
         </dl>
+        {q.recurring && <p className="muted" style={{ marginBottom: 0, fontSize: 12 }}>The figures assume every instalment is paid on its due date; an instalment paid late earns from the month after and pays a late charge.</p>}
         {q.taxNote && <p className="muted" style={{ marginBottom: 0, fontSize: 12 }}>{q.taxNote}</p>}
       </div>
       <Table
@@ -88,14 +95,15 @@ export function TermDepositFormPage() {
   const own = useDepositAccounts('CASA', { customerId: depositor?.id, status: 'ACTIVE' }, modules.casa && !!depositor?.id);
   const active = (products.data ?? []).filter((p) => p.status === 'ACTIVE');
   const product = active.find((p) => p.code === productCode);
+  const rd = product?.productType === 'RD';
   const renewalNeedsConsent = ruleValue(rules.data, 'td.renewal-needs-consent') === 1;
   const changed = () => (preview.reset(), book.reset());
 
   const input = (): TermDepositInput => ({
-    productCode, amount, tenureMonths: Number(months || 0), tenureDays: Number(days || 0), addOns,
+    productCode, amount, tenureMonths: Number(months || 0), tenureDays: rd ? 0 : Number(days || 0), addOns,
     customerId: depositor?.id ?? null, jointHolders: holders.slice(1).map((h) => h.id!), branchCode: branch,
     operatingMode: mode as TermDepositInput['operatingMode'], nominationMode: nomination as TermDepositInput['nominationMode'], nominees: nomineesInput(nomination, nominees),
-    payoutTo: payoutAccount ? 'CASA' : 'BANK_ACCOUNT', payoutAccountId: payoutAccount || null, maturityInstruction: instruction as TermDepositInput['maturityInstruction'],
+    payoutTo: payoutAccount ? 'CASA' : 'BANK_ACCOUNT', payoutAccountId: payoutAccount || null, maturityInstruction: (rd ? 'PAY_OUT' : instruction) as TermDepositInput['maturityInstruction'],
   });
   const termsEntered = !!productCode && /^\d+(\.\d{1,2})?$/.test(amount) && Number(months || 0) + Number(days || 0) > 0;
 
@@ -110,9 +118,9 @@ export function TermDepositFormPage() {
             onChange={(e) => (setProductCode(e.target.value), setAddOns([]), setInstruction('PAY_OUT'), changed())}
             options={active.map((p) => ({ value: p.code ?? '', label: `${p.code} — ${p.name}` }))}
             hint={product ? `${TYPE_LABEL[product.productType ?? '']}; ${tenureText(product.minTenureMonths, product.minTenureDays)} to ${tenureText(product.maxTenureMonths, product.maxTenureDays)}; from ${Number(product.minAmount).toLocaleString('en-IN')}` : undefined} />
-          <Input label="Amount" required numeric value={amount} onChange={(e) => (setAmount(e.target.value.replace(/[^0-9.]/g, '')), changed())} />
+          <Input label={rd ? 'Monthly instalment' : 'Amount'} required numeric value={amount} onChange={(e) => (setAmount(e.target.value.replace(/[^0-9.]/g, '')), changed())} />
           <Input label="Tenure: months" numeric value={months} onChange={(e) => (setMonths(e.target.value.replace(/[^0-9]/g, '')), changed())} />
-          <Input label="Tenure: days" numeric value={days} onChange={(e) => (setDays(e.target.value.replace(/[^0-9]/g, '')), changed())} />
+          {!rd && <Input label="Tenure: days" numeric value={days} onChange={(e) => (setDays(e.target.value.replace(/[^0-9]/g, '')), changed())} />}
           <Select label="Branch" required value={branch} onChange={(e) => setBranch(e.target.value)}
             options={(branches.data ?? []).filter((b) => (me.branches ?? []).includes(b.code)).map((b) => ({ value: b.code, label: `${b.code} — ${b.name}` }))} />
           {(product?.addOns ?? []).map((a) => (
@@ -120,7 +128,12 @@ export function TermDepositFormPage() {
               onChange={(e) => (setAddOns(e.target.checked ? [...addOns, a.code ?? ''] : addOns.filter((x) => x !== a.code)), changed())} />
           ))}
         </div>
-        {product && <p className="muted" style={{ marginBottom: 0 }}>Interest is {product.productType === 'FD_CUMULATIVE' ? 'compounded' : 'paid out'} {(PERIOD_LABEL[product.interestPeriodMonths ?? 0] ?? '').toLowerCase()}.</p>}
+        {product && (
+          <p className="muted" style={{ marginBottom: 0 }}>
+            Interest is {product.productType === 'FD_PAYOUT' ? 'paid out' : 'compounded'} {(PERIOD_LABEL[product.interestPeriodMonths ?? 0] ?? '').toLowerCase()}.
+            {rd && ` The first instalment funds the deposit; the rest fall due on the same day each month, with a late charge of Rs ${product.rdLateChargePer100} per 100 a month after it.`}
+          </p>
+        )}
       </Card>
       <HoldersCard holders={holders} onChange={(h) => (setHolders(h), setPayoutAccount(''), changed())} mode={mode} onMode={setMode} />
       <NomineesCard mode={nomination} onMode={(m) => (setNomination(m), changed())} rows={nominees} onChange={(r) => (setNominees(r), changed())} max={ruleValue(rules.data, 'nominees.max')} />
@@ -139,7 +152,7 @@ export function TermDepositFormPage() {
             onChange={(e) => (setInstruction(e.target.value), changed())}
             options={[
               { value: 'PAY_OUT', label: 'Pay out' },
-              ...(product?.autoRenewalAllowed && !renewalNeedsConsent
+              ...(product?.autoRenewalAllowed && !renewalNeedsConsent && !rd
                 ? [{ value: 'RENEW_PRINCIPAL', label: 'Renew the principal, pay out the interest' }, { value: 'RENEW_WITH_INTEREST', label: 'Renew the principal with the interest' }]
                 : []),
             ]}

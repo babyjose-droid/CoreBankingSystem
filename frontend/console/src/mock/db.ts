@@ -1,4 +1,4 @@
-import type { MockDeclarationRequest, MockFunding, MockHoldRequest, MockTxn } from './depositMoney';
+import type { MockDeclarationRequest, MockFunding, MockHoldRequest, MockInstalment, MockTxn } from './depositMoney';
 import type { DepositsDb, MockOpening } from './deposits';
 import type { DepositProduct } from '../api/types';
 import type {
@@ -133,6 +133,7 @@ export type ApprovalPayload =
   | { kind: 'DEPOSIT_TXN'; txn: MockTxn }
   | { kind: 'DEPOSIT_HOLD'; hold: MockHoldRequest }
   | { kind: 'DEPOSIT_FUNDING'; funding: MockFunding }
+  | { kind: 'DEPOSIT_INSTALMENT'; instalment: MockInstalment }
   | { kind: 'DEPOSIT_LIFECYCLE'; op: 'CHARGE' | 'CASA_CLOSE' | 'TD_CLOSE' | 'INSTRUCTION' | 'RENEW'; accountId: string; data: Record<string, unknown> }
   | { kind: 'TDS_DECLARATION'; declaration: MockDeclarationRequest };
 

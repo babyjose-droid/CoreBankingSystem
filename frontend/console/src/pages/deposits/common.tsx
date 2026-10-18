@@ -9,6 +9,7 @@ export const TYPE_LABEL: Record<string, string> = {
   CURRENT: 'Current',
   FD_CUMULATIVE: 'Fixed deposit, cumulative',
   FD_PAYOUT: 'Fixed deposit, interest paid out',
+  RD: 'Recurring deposit',
 };
 export const PERIOD_LABEL: Record<number, string> = { 0: 'Once, at maturity', 1: 'Monthly', 3: 'Quarterly', 6: 'Half-yearly', 12: 'Yearly' };
 export const OPERATING_MODES = [

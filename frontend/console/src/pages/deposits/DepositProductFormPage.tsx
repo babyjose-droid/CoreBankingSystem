@@ -50,6 +50,8 @@ interface Form {
   penalty: string;
   prematureMinDays: string;
   renewal: boolean;
+  /** A recurring deposit's late charge per Rs 100 a month (P4-5). */
+  lateCharge: string;
   glLiability: string;
   glInterestExpense: string;
 }
@@ -68,7 +70,7 @@ function blank(family: DepositFamily): Form {
     minBalance: '0', cheque: false, bands: [{ from: '0', rate: '' }], bandMode: 'WHOLE_BALANCE', posting: '3',
     gst: '18', minPercent: '', minMax: '', closure: '', closureFree: '14', closureUntil: '', service: [],
     minAmount: '', maxAmount: '', minMonths: '12', minDays: '0', maxMonths: '60', maxDays: '0', period: '3',
-    amounts: [a], tenures: [t], rates: {}, addOns: [], premature: true, penalty: '', prematureMinDays: '', renewal: false,
+    amounts: [a], tenures: [t], rates: {}, addOns: [], premature: true, penalty: '', prematureMinDays: '', renewal: false, lateCharge: '',
     glLiability: '', glInterestExpense: '',
   };
 }
@@ -102,7 +104,7 @@ function fromProduct(p: DepositProduct): Form {
     period: String(p.interestPeriodMonths ?? 3), amounts: amounts.length ? amounts : base.amounts, tenures: tenures.length ? tenures : base.tenures, rates,
     addOns: (p.addOns ?? []).map((a) => ({ code: a.code ?? '', percent: a.percent ?? '' })), premature: p.prematureAllowed !== false,
     penalty: p.prematurePenaltyPercent ?? '', prematureMinDays: p.prematureMinDays === null || p.prematureMinDays === undefined ? '' : String(p.prematureMinDays),
-    renewal: p.autoRenewalAllowed === true, glLiability: p.glLiability ?? '', glInterestExpense: p.glInterestExpense ?? '',
+    renewal: p.autoRenewalAllowed === true, lateCharge: p.rdLateChargePer100 ?? '', glLiability: p.glLiability ?? '', glInterestExpense: p.glInterestExpense ?? '',
   };
 }
 
@@ -136,7 +138,8 @@ function toInput(family: DepositFamily, f: Form, prematureFixed: boolean): Depos
     interestPeriodMonths: Number(f.period) as DepositProductInput['interestPeriodMonths'], rateCard,
     addOns: f.addOns.filter((a) => a.code || a.percent).map((a) => ({ code: a.code, percent: a.percent })), prematureAllowed: f.premature,
     ...(!prematureFixed && f.premature ? { ...(f.penalty !== '' ? { prematurePenaltyPercent: f.penalty } : {}), ...(f.prematureMinDays !== '' ? { prematureMinDays: Number(f.prematureMinDays) } : {}) } : {}),
-    autoRenewalAllowed: f.renewal, ...(f.glInterestExpense.trim() ? { glInterestExpense: f.glInterestExpense.trim() } : {}),
+    autoRenewalAllowed: f.productType === 'RD' ? false : f.renewal, ...(f.productType === 'RD' ? { rdLateChargePer100: f.lateCharge } : {}),
+    ...(f.glInterestExpense.trim() ? { glInterestExpense: f.glInterestExpense.trim() } : {}),
   };
 }
 
@@ -174,6 +177,7 @@ export function DepositProductFormPage() {
   if (existing.error) return <ErrorBanner error={existing.error} />;
   if (!f) return <Spinner />;
   const casa = family === 'CASA';
+  const rd = f.productType === 'RD';
   const set = (patch: Partial<Form>) => (setF({ ...f, ...patch }), check.reset(), propose.reset());
   const prematureFixed = ruleValue(rules.data, 'td.premature.rate-cut-percent') !== null;
   const ceiling = ruleValue(rules.data, 'td.max-rate-percent');
@@ -185,7 +189,8 @@ export function DepositProductFormPage() {
   const errors = {
     code: !/^[A-Z0-9]{2,12}$/.test(f.code) ? '2 to 12 capital letters or digits' : null,
     name: !f.name.trim() ? 'Required' : null,
-    minAmount: !casa && !/^\d+(\.\d{1,2})?$/.test(f.minAmount) ? 'Enter the smallest deposit' : null,
+    minAmount: !casa && !/^\d+(\.\d{1,2})?$/.test(f.minAmount) ? (rd ? 'Enter the smallest instalment' : 'Enter the smallest deposit') : null,
+    lateCharge: rd && !/^\d{1,3}(\.\d{1,2})?$/.test(f.lateCharge) ? 'Enter the late charge (0 for none)' : null,
   };
   const valid = Object.values(errors).every((e) => !e);
   const input = () => toInput(family, casa && !showBands ? { ...f, bands: [] } : f, prematureFixed);
@@ -207,10 +212,15 @@ export function DepositProductFormPage() {
             label="Type"
             disabled={editing}
             value={f.productType}
-            onChange={(e) => set({ productType: e.target.value, ...(e.target.value === 'FD_CUMULATIVE' && f.period === '0' ? { period: '3' } : {}) })}
+            onChange={(e) => set({
+              productType: e.target.value,
+              ...(e.target.value !== 'FD_PAYOUT' && f.period === '0' ? { period: '3' } : {}),
+              ...(e.target.value === 'RD' ? { renewal: false, minDays: '0', maxDays: '0', tenures: f.tenures.map((t) => ({ ...t, days: '0' })) } : {}),
+            })}
             options={casa
               ? [{ value: 'SAVINGS', label: 'Savings account' }, { value: 'CURRENT', label: 'Current account' }]
-              : [{ value: 'FD_CUMULATIVE', label: 'Fixed deposit, cumulative (interest added to the deposit)' }, { value: 'FD_PAYOUT', label: 'Fixed deposit, interest paid out' }]}
+              : [{ value: 'FD_CUMULATIVE', label: 'Fixed deposit, cumulative (interest added to the deposit)' }, { value: 'FD_PAYOUT', label: 'Fixed deposit, interest paid out' },
+                 { value: 'RD', label: 'Recurring deposit (a fixed instalment every month)' }]}
           />
           {casa ? (
             <>
@@ -219,8 +229,12 @@ export function DepositProductFormPage() {
             </>
           ) : (
             <>
-              <Input label="Smallest deposit" required numeric value={f.minAmount} onChange={(e) => set({ minAmount: decimal(e.target.value) })} error={touched ? errors.minAmount : null} />
-              <Input label="Largest deposit" numeric hint="Empty for no limit" value={f.maxAmount} onChange={(e) => set({ maxAmount: decimal(e.target.value) })} />
+              <Input label={rd ? 'Smallest monthly instalment' : 'Smallest deposit'} required numeric value={f.minAmount} onChange={(e) => set({ minAmount: decimal(e.target.value) })} error={touched ? errors.minAmount : null} />
+              <Input label={rd ? 'Largest monthly instalment' : 'Largest deposit'} numeric hint="Empty for no limit" value={f.maxAmount} onChange={(e) => set({ maxAmount: decimal(e.target.value) })} />
+              {rd && (
+                <Input label="Late charge: Rs per 100 of the instalment, per month late" required numeric value={f.lateCharge} onChange={(e) => set({ lateCharge: decimal(e.target.value) })}
+                  error={touched ? errors.lateCharge : null} hint="For each month or part of a month; 0 for none. Goes to charge income" />
+              )}
             </>
           )}
         </div>
@@ -291,11 +305,11 @@ export function DepositProductFormPage() {
           <Card title="Tenure and interest">
             <div className="form-grid">
               <Input label="Shortest tenure: months" numeric value={f.minMonths} onChange={(e) => set({ minMonths: digits(e.target.value) })} hint={minTenure !== null ? `Rule set: at least ${minTenure} months` : undefined} />
-              <Input label="Shortest tenure: days" numeric value={f.minDays} onChange={(e) => set({ minDays: digits(e.target.value) })} />
+              {!rd && <Input label="Shortest tenure: days" numeric value={f.minDays} onChange={(e) => set({ minDays: digits(e.target.value) })} />}
               <Input label="Longest tenure: months" numeric value={f.maxMonths} onChange={(e) => set({ maxMonths: digits(e.target.value) })} hint={maxTenure !== null ? `Rule set: at most ${maxTenure} months` : undefined} />
-              <Input label="Longest tenure: days" numeric value={f.maxDays} onChange={(e) => set({ maxDays: digits(e.target.value) })} />
+              {!rd && <Input label="Longest tenure: days" numeric value={f.maxDays} onChange={(e) => set({ maxDays: digits(e.target.value) })} />}
               <Select
-                label={f.productType === 'FD_CUMULATIVE' ? 'Interest is compounded' : 'Interest is paid out'}
+                label={f.productType === 'FD_PAYOUT' ? 'Interest is paid out' : 'Interest is compounded'}
                 value={f.period}
                 onChange={(e) => set({ period: e.target.value })}
                 options={[...(f.productType === 'FD_PAYOUT' ? [0] : []), 1, 3, 6, 12].map((m) => ({ value: String(m), label: PERIOD_LABEL[m] }))}
@@ -303,7 +317,11 @@ export function DepositProductFormPage() {
               <Select label="Day count" value={f.dayCount} onChange={(e) => set({ dayCount: e.target.value })} options={[{ value: 'ACTUAL_365', label: 'Actual/365' }, { value: 'ACTUAL_360', label: 'Actual/360' }, { value: 'ACTUAL_ACTUAL', label: 'Actual/actual' }]} />
               <Select label="Rounding of each interest credit" value={f.rounding} onChange={(e) => set({ rounding: e.target.value })} options={['PAISE_HALF_UP', 'PAISE_HALF_EVEN', 'RUPEE_HALF_UP', 'RUPEE_DOWN', 'RUPEE_UP'].map((r) => ({ value: r, label: r.replace(/_/g, ' ').toLowerCase() }))} />
               <Checkbox label="Deduct tax at source from interest" checked={f.tds} onChange={(e) => set({ tds: e.target.checked })} />
-              <Checkbox label="Renewal at maturity may be chosen" checked={f.renewal} onChange={(e) => set({ renewal: e.target.checked })} />
+              {rd ? (
+                <p className="muted" style={{ margin: 0 }}>A recurring deposit runs for whole months, earns on the instalments held each month, and is paid out at maturity; it is never renewed.</p>
+              ) : (
+                <Checkbox label="Renewal at maturity may be chosen" checked={f.renewal} onChange={(e) => set({ renewal: e.target.checked })} />
+              )}
             </div>
           </Card>
 
@@ -316,7 +334,7 @@ export function DepositProductFormPage() {
               <table className="table" aria-label="Rate card">
                 <thead>
                   <tr>
-                    <th scope="col">Tenure from (months, days)</th>
+                    <th scope="col">{rd ? 'Tenure from (months)' : 'Tenure from (months, days)'}</th>
                     {f.amounts.map((a, ai) => (
                       <th scope="col" key={a.id}>
                         <div className="row" style={{ gap: 4 }}>
@@ -334,7 +352,7 @@ export function DepositProductFormPage() {
                       <th scope="row">
                         <div className="row" style={{ gap: 4 }}>
                           <Input label={`Tenure step ${ti + 1}: months`} labelHidden numeric placeholder="Months" style={{ width: 80 }} value={t.value} onChange={(e) => set({ tenures: f.tenures.map((x) => (x.id === t.id ? { ...x, value: digits(e.target.value) } : x)) })} />
-                          <Input label={`Tenure step ${ti + 1}: days`} labelHidden numeric placeholder="Days" style={{ width: 70 }} value={t.days} onChange={(e) => set({ tenures: f.tenures.map((x) => (x.id === t.id ? { ...x, days: digits(e.target.value) } : x)) })} />
+                          {!rd && (<Input label={`Tenure step ${ti + 1}: days`} labelHidden numeric placeholder="Days" style={{ width: 70 }} value={t.days} onChange={(e) => set({ tenures: f.tenures.map((x) => (x.id === t.id ? { ...x, days: digits(e.target.value) } : x)) })} />)}
                           {f.tenures.length > 1 && <Button size="sm" aria-label={`Remove tenure step ${ti + 1}`} onClick={() => set({ tenures: f.tenures.filter((x) => x.id !== t.id) })}>×</Button>}
                         </div>
                       </th>
@@ -382,7 +400,7 @@ export function DepositProductFormPage() {
 
       <Card title="General ledger">
         <div className="form-grid">
-          <Input label="Deposits (liability head)" className="mono" value={f.glLiability} onChange={(e) => set({ glLiability: e.target.value.trim() })} placeholder={casa ? (f.productType === 'SAVINGS' ? '2401' : '2402') : '2403'} hint="Empty for the standard head" />
+          <Input label="Deposits (liability head)" className="mono" value={f.glLiability} onChange={(e) => set({ glLiability: e.target.value.trim() })} placeholder={casa ? (f.productType === 'SAVINGS' ? '2401' : '2402') : rd ? '2405' : '2403'} hint="Empty for the standard head" />
           {(!casa || showBands) && <Input label="Interest (expense head)" className="mono" value={f.glInterestExpense} onChange={(e) => set({ glInterestExpense: e.target.value.trim() })} placeholder={casa ? '5108' : '5107'} hint="Empty for the standard head" />}
         </div>
       </Card>

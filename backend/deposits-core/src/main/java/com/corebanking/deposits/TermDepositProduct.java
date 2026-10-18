@@ -19,7 +19,13 @@ public final class TermDepositProduct {
         /** Interest is added to the deposit at each rest and paid with the principal at maturity. */
         FD_CUMULATIVE,
         /** Interest is paid out at each rest, or once at maturity. */
-        FD_PAYOUT
+        FD_PAYOUT,
+        /**
+         * Recurring deposit (P4-5): a monthly instalment for a whole number of months; interest on the monthly balance,
+         * added to the deposit at each rest, paid with the instalments at maturity. The amount limits are those of the
+         * instalment; never renewed.
+         */
+        RD
     }
 
     /**
@@ -43,7 +49,7 @@ public final class TermDepositProduct {
             addOns = addOns == null ? List.of() : List.copyOf(addOns);
         }
 
-        public boolean cumulative() { return type == Type.FD_CUMULATIVE; }
+        public boolean cumulative() { return type == Type.FD_CUMULATIVE || type == Type.RD; }
 
         public DepositRateTable rateTable() { return new DepositRateTable(rates, addOns); }
     }
@@ -107,6 +113,12 @@ public final class TermDepositProduct {
             }
         }
         prematureProblems(rules, s, amountsOk, out);
+        if (s.type() == Type.RD) {
+            if (tenuresOk && (s.minTenure().days() != 0 || s.maxTenure().days() != 0)) out.add("a recurring deposit runs for whole months: its tenures have no days");
+            if (s.rates().stream().anyMatch(c -> c != null && c.fromTenure() != null && c.fromTenure().days() != 0)) {
+                out.add("a recurring deposit's rate table has tenure steps in whole months");
+            }
+        }
         return new ArrayList<>(out);
     }
 

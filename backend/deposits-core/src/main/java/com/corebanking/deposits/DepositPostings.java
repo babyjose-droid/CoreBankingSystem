@@ -31,6 +31,8 @@ import java.util.Objects;
  *     closure payout      Dr the account (its whole balance)         Cr cash / bank / payout in transit / another account
  *     interest recovered  Dr the term deposit                        Cr the product's interest expense head
  *     renewal             Dr the matured deposit                     Cr the new deposit
+ *   recurring deposits (P4-5):
+ *     instalment          Dr account / cash / bank (instalment + late charge)   Cr the deposit, Cr charge income (late charge)
  * </pre>
  * The reversal of any of them is the mirror lot ({@link TransactionLot#reversal}).
  */
@@ -53,6 +55,7 @@ public final class DepositPostings {
     public static final String CLOSURE = "DEPOSIT_CLOSURE";
     public static final String INTEREST_RECOVERY = "DEPOSIT_INTEREST_RECOVERY";
     public static final String RENEWAL = "DEPOSIT_RENEWAL";
+    public static final String RD_INSTALMENT = "DEPOSIT_RD_INSTALMENT";
 
     /** Where the proceeds of a closure go. */
     public enum PayTo { ACCOUNT, CASH, BANK_TRANSFER, GATEWAY }
@@ -307,5 +310,34 @@ public final class DepositPostings {
                 .debit(matured.branch(), matured.gl(), matured.accountNo(), amount, "Renewed as " + renewed.accountNo())
                 .credit(renewed.branch(), renewed.gl(), renewed.accountNo(), amount, "Renewal of " + matured.accountNo())
                 .build();
+    }
+
+    /**
+     * A recurring deposit instalment, with the charge for paying it late (no GST: open item P4-21), from a savings or
+     * current account of the depositor, in cash or by a bank transfer. Inter-branch legs when the paying account is
+     * held elsewhere.
+     *
+     * @param from the paying account; only for {@link FundingSource#ACCOUNT}
+     */
+    public TransactionLot rdInstalment(Leg deposit, BigDecimal instalment, BigDecimal lateCharge, String incomeGl, FundingSource source, Leg from,
+                                       String reference, int number) {
+        positive(instalment);
+        Objects.requireNonNull(source, "source");
+        BigDecimal late = lateCharge == null ? BigDecimal.ZERO : lateCharge;
+        if (late.signum() < 0) throw new IllegalArgumentException("a late charge cannot be negative");
+        BigDecimal total = instalment.add(late);
+        String what = "Instalment " + number + " of recurring deposit " + deposit.accountNo();
+        var b = lot(RD_INSTALMENT, reference);
+        switch (source) {
+            case ACCOUNT -> {
+                if (from == null) throw new IllegalArgumentException("an instalment from an account names the account");
+                b.debit(from.branch(), from.gl(), from.accountNo(), total, what + (late.signum() > 0 ? " with its late charge" : ""));
+            }
+            case CASH -> b.debit(deposit.branch(), heads.cash(), heads.cash(), total, "Cash for " + what);
+            case BANK_TRANSFER, GATEWAY -> b.debit(deposit.branch(), heads.bankIn(), heads.bankIn(), total, "Bank transfer for " + what);
+        }
+        b.credit(deposit.branch(), deposit.gl(), deposit.accountNo(), instalment, "Instalment " + number);
+        if (late.signum() > 0) b.credit(deposit.branch(), incomeGl, incomeGl, late, "Late charge on " + what);
+        return b.build();
     }
 }

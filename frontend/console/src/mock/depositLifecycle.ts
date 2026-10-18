@@ -13,9 +13,9 @@ import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
-import { activeHolds, balanceOf, findAccount, move, plain, refuseIfAny, text } from './depositMoney';
+import { activeHolds, balanceOf, findAccount, move, plain, rdSchedule, refuseIfAny, text } from './depositMoney';
 import { BANK_RULES, NBFC_DEPOSIT_RULES } from './depositRules';
-import { addMonths, periods } from './deposits';
+import { addMonths, periods, rdMonths } from './deposits';
 import { HttpProblem, PROBLEM_BASE } from './problems';
 
 export interface MockCharge {
@@ -157,9 +157,20 @@ function rateForPeriodRun(db: MockDb, d: DepositAccount, on: string): string | n
 }
 const addDaysIso = (iso: string, days: number) => new Date(Date.parse(iso + 'T00:00:00Z') + days * 86_400_000).toISOString().slice(0, 10);
 
-function interestAt(d: DepositAccount, end: string, rate: string): bigint {
+function interestAt(db: MockDb, d: DepositAccount, end: string, rate: string): bigint {
   const t = d.termDeposit!;
   if (Number(rate) === 0 || end <= t.startDate!) return 0n;
+  if (t.recurring) {
+    // RecurringDeposit.interestFor: whole months run, each on the instalments paid by the day it began
+    const tenure = t.tenureMonths ?? 0;
+    let run = 0;
+    while (run < tenure && addMonths(t.startDate!, run + 1) <= end) run += 1;
+    if (run === 0) return 0n;
+    const paid = (rdSchedule(db, d).schedule ?? []).filter((r) => r.paidOn);
+    const held = (m: number) => paid.filter((r) => r.paidOn! <= addMonths(t.startDate!, m - 1)).reduce((s, r) => s + toUnits(r.amount!), 0n);
+    const r = rdMonths(t.startDate!, tenure, rate, t.interestPeriodMonths ?? 3, t.rounding ?? 'PAISE_HALF_UP', run, held);
+    return r.credited + r.pending;
+  }
   return periods({ principal: t.principal!, ratePercent: rate, start: t.startDate!, maturity: end, periodMonths: t.interestPeriodMonths!, cumulative: t.cumulative === true,
     dayCount: t.dayCount!, rounding: t.rounding! }).reduce((s, x) => s + x.interest, 0n);
 }
@@ -177,7 +188,7 @@ function depositQuote(db: MockDb, d: DepositAccount, asked: string | null): Depo
     out.kind = 'MATURITY';
     out.reason = 'MATURITY';
     out.rate = t.ratePercent!;
-    out.due = interestAt(d, t.maturityDate!, t.ratePercent!);
+    out.due = interestAt(db, d, t.maturityDate!, t.ratePercent!);
     out.basis = 'paid at maturity on the contracted rate; no deposit day-end runs in mock mode, so no overdue interest';
     return out;
   }
@@ -241,7 +252,7 @@ function depositQuote(db: MockDb, d: DepositAccount, asked: string | null): Depo
       out.basis = `rate for the period run ${base}% less penalty ${penalty} points`;
     }
   }
-  out.due = interestAt(d, today, out.rate!);
+  out.due = interestAt(db, d, today, out.rate!);
   return out;
 }
 

@@ -432,5 +432,51 @@ Charges, the minimum balance, closing accounts, closing a term deposit before ma
 ### Not verified here
 - **Gradle and Spring** and the real EOD scheduling; the live stack (`p4-4-smoke.py`).
 
-### Next: P4-5
-Recurring deposits with late charge, standing instructions (including a sweep to a loan instalment), loan against a deposit. Next tenant migration: V35; next control migration: V5.
+## Increment P4-5: recurring deposits
+
+A recurring deposit is a term deposit product of type RD: the amount booked is the monthly instalment, the first instalment is the funding, and each month earns on the instalments held through it.
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `RecurringDeposit`: the monthly product with quarterly (the product's period) compounding. Month m runs from the start date plus m-1 months to plus m months and earns one twelfth of the rate on the instalments paid by the day it began and the interest credited before it; interest is credited at each compounding month and at maturity. The same method gives the booking preview (every instalment on its due date), the day-end (`dayEnd`, on the instalments actually paid) and a premature closure (`interestFor`: whole months run, at the rate allowed). `latePenalty`: Rs per 100 of the instalment for each month or part of a month late.
+- `TermDepositProduct`: type RD, cumulative; its tenures and rate card have no days. `TermDepositBooking`: the RD quote (periods, total interest, maturity value, the yield on the average amount deposited); a tenure with days is refused. `PrematureWithdrawal.quote` takes the interest calculation, so a recurring deposit closes early on its own method. `DepositPostings.rdInstalment`: the instalment into the deposit and the late charge to charge income, inter-branch when the paying account is elsewhere.
+- Worked figures (Python decimal, in `RecurringDepositTest`): 1,000 a month for 12 months at 7% credits 35.00, 88.11, 142.15 and 197.14; 462.40 in all; 12,462.40 at maturity; yield 7.11%.
+
+**Tenant database** (`V35__recurring_deposits.sql`)
+- Product type RD with `rd_late_charge_per_100` (required for RD, refused otherwise); an RD is cumulative, runs for whole months, is paid out at maturity and is never renewed (`guard_rd_product`, `guard_term_deposit`).
+- Movements RD_INSTALMENT (credit, only into an active recurring deposit before its maturity date) and RD_LATE_CHARGE (debit on the paying account).
+- `deposits.rd_instalment`: one row per instalment, in order, never more than the tenure, the amount equal to the instalment, due on the start date plus n-1 months, tied to its movement (the funding for instalment 1); marked reversed only after its movement is. A deferred check at commit and `deposits.rd_problems()` keep the instalments and the movements in agreement.
+- Approval rule TERM_DEPOSIT / INSTALMENT: at once below 2,00,000, a checker from it (as a funding).
+
+**Application**
+- `RecurringDeposits`: the instalments held each month, the schedule (paid, overdue, due, the next with today's late charge), the day-end step and recording an instalment.
+- Day-end step "Recurring deposit interest (monthly)" after the term deposit step (which now leaves RDs out): each month is worked out when it ends, booked, and credited on the compounding months with tax at source as any credit.
+- `GET /deposits/accounts/{id}/instalments` (deposit:view) and `POST /deposits/accounts/{id}/instalments` (deposit:fund): the next instalment from a savings or current account of the depositor, in cash or by bank transfer with its UTR, with its late charge. Funding records instalment 1 (also through a payment link); reversing the funding marks it reversed.
+- Premature closure, maturity, the maturity list and notices use the RD figures: principal paid in is the instalments paid; the maturity value is what the deposit holds.
+- Demo products: RD01 on demo-bank (500 a month up, 6 to 120 months, 6.5/7/7.1%, senior +0.5, penalty 1 point, 7 days, late charge 1.50) and RD02 on demo-nbfc-d (12 to 60 months, 8.25/8.5%, the NBFC rules on premature repayment).
+
+**Console**
+- Product form: the recurring type, the late charge, no tenure days and no renewal; product page shows the late charge.
+- Booking: "Monthly instalment", whole months, paid out at maturity; the preview says the figures assume every instalment on time.
+- Deposit page: "Recurring deposit"; an Instalments card (paid, next with today's late charge, overdue, the schedule) with Pay instalment; the interest card explains the monthly working-out.
+- Mock mode: RD products, the quote, instalments with the late charge and premature closure on the RD method; no day-end, so no interest is credited by itself.
+
+### Choices made in this increment (to confirm: open item P4-21)
+- **No GST on the late charge**: it is treated as a penalty for late payment, not a supply (to confirm with the tax adviser).
+- **Interest is booked monthly** when each month ends, not accrued daily; credited every compounding period and at maturity.
+- **A late instalment earns from the month after** it is paid; an advance instalment (paid before its due date) is allowed and earns from the month that begins after it is paid.
+- **Nothing happens by itself on missed instalments**: no closure, no default notice; the schedule shows them overdue.
+- **Never renewed**: paid out at maturity to the account or bank account named at booking.
+
+### Tests
+- **Engine:** 8 new tests in `RecurringDepositTest`; 469 pass across the engine modules.
+- **Tenant database:** 26 checks in the new `deposits_recurring_test.sql`; all tenant and control suites pass.
+- **Application services:** in the build sandbox, with the real approval flow and real day-end runs: 37 checks on a bank (the product through a checker, booking refused with days or a renewal, the preview, funding as instalment 1, an instalment on time and one late with its charge to income, the first quarter's 29.17 credited by the day-end once, a premature closure at 6% recovering 4.17 and paying 3,025.00) and 12 on a deposit-taking NBFC (12 months at least, the 3-month lock-in, no interest before six months); the P4-4 scenarios still pass (68 and 23).
+- **Console:** 7 new tests; 322 pass, typecheck and build clean.
+- **API contract:** 2 new operations; lint clean; every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring** and the real EOD scheduling; the live stack (`p4-5-smoke.py`).
+
+### Next: P4-5b
+Standing instructions (a transfer, a sweep to a loan instalment, a recurring deposit instalment) and a loan against a deposit. Next tenant migration: V36; next control migration: V5.

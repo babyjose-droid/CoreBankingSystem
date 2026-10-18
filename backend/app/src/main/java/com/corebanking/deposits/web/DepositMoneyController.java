@@ -115,6 +115,20 @@ class DepositMoneyController {
         return ApprovalView.of(money.proposeFunding(id, in, key));
     }
 
+    @GetMapping("/deposits/accounts/{id}/instalments")
+    @PreAuthorize("hasAuthority('deposit:view')")
+    Map<String, Object> instalments(@PathVariable UUID id) {
+        return money.instalments(id);
+    }
+
+    @PostMapping("/deposits/accounts/{id}/instalments")
+    @PreAuthorize("hasAuthority('deposit:fund')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> payInstalment(@PathVariable UUID id, @RequestBody DepositMoneyService.InstalmentInput in,
+                                      @RequestHeader(value = KEY, required = false) String key) {
+        return ApprovalView.of(money.proposeInstalment(id, in, key));
+    }
+
     @PostMapping("/deposits/accounts/{id}/funding/reverse")
     @PreAuthorize("hasAuthority('deposit:fund')")
     @ResponseStatus(HttpStatus.ACCEPTED)

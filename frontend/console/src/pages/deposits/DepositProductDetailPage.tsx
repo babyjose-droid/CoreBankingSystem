@@ -160,8 +160,16 @@ export function DepositProductDetailPage() {
               )
             ) : (
               <>
-                <dt>{p.productType === 'FD_CUMULATIVE' ? 'Compounded' : 'Paid out'}</dt>
+                <dt>{p.productType === 'FD_PAYOUT' ? 'Paid out' : 'Compounded'}</dt>
                 <dd>{PERIOD_LABEL[p.interestPeriodMonths ?? 0]}</dd>
+                {p.productType === 'RD' && (
+                  <>
+                    <dt>Instalments</dt>
+                    <dd>Monthly, from {Number(p.minAmount).toLocaleString('en-IN')}; each month earns on the instalments held through it</dd>
+                    <dt>Late charge</dt>
+                    <dd data-testid="product-late-charge">Rs {p.rdLateChargePer100} per Rs 100 for each month or part of a month late</dd>
+                  </>
+                )}
                 <dt>Add-ons</dt>
                 <dd data-testid="product-addons">{(p.addOns ?? []).length ? (p.addOns ?? []).map((a) => `${a.code} ${Number(a.percent) > 0 ? '+' : ''}${a.percent}%`).join(', ') : 'None'}</dd>
                 <dt>Premature withdrawal</dt>

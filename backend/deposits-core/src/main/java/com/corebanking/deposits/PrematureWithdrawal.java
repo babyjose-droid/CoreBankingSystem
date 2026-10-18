@@ -51,6 +51,16 @@ public final class PrematureWithdrawal {
 
     public static Quote quote(DepositRules rules, Request r) {
         TermDeposit.Terms t = r.terms();
+        return quote(rules, r, rate -> TermDeposit.totalInterest(t.endedOn(r.on(), rate)));
+    }
+
+    /**
+     * The same rules with the interest at the allowed rate worked out by {@code interestAt} (P4-5: a recurring
+     * deposit earns on its monthly balances, not on a principal). {@code r.terms().principal()} is what the depositor
+     * has paid in.
+     */
+    public static Quote quote(DepositRules rules, Request r, java.util.function.Function<BigDecimal, BigDecimal> interestAt) {
+        TermDeposit.Terms t = r.terms();
         if (!r.on().isAfter(t.start())) return refuse("a deposit cannot be closed on or before its start date");
         if (!r.on().isBefore(t.maturity())) return refuse("the deposit has matured; pay it as a maturity");
 
@@ -88,7 +98,7 @@ public final class PrematureWithdrawal {
                         + (waived ? ", penalty waived on death" : " less penalty " + plain(penalty) + " points");
             }
         }
-        BigDecimal due = rate.signum() == 0 ? zero(t) : TermDeposit.totalInterest(t.endedOn(r.on(), rate));
+        BigDecimal due = rate.signum() == 0 ? zero(t) : interestAt.apply(rate);
         return settle(t, t.principal(), rate, due, r.interestPaidOut(), basis);
     }
 

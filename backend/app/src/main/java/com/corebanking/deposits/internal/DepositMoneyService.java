@@ -70,6 +70,7 @@ public class DepositMoneyService implements DepositOperations {
     static final String REVERSE = "REVERSE";
     static final String FUND = "FUND";
     static final String REVERSE_FUNDING = "REVERSE_FUNDING";
+    static final String INSTALMENT = "INSTALMENT";
     static final Set<String> TXN_TYPES = Set.of(CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT);
     static final Set<String> HOLD_KINDS = Set.of("DEBIT_FREEZE", "CREDIT_FREEZE", "TOTAL_FREEZE", "LIEN");
     private static final String NAME_AAD = "deposits.bank_account.holder_name";
@@ -96,6 +97,13 @@ public class DepositMoneyService implements DepositOperations {
 
     /** openapi.yaml#/components/schemas/TermDepositFundingInput. */
     public record FundingInput(String source, UUID fromAccountId, String reference, BankAccountInput payoutBankAccount) {}
+
+    /** openapi.yaml#/components/schemas/RdInstalmentInput: the next instalment of a recurring deposit, paid from an account, in cash or by a bank transfer. */
+    public record InstalmentInput(String source, UUID fromAccountId, String reference) {}
+
+    /** What an instalment request carries; the late charge is worked out again on the day it is applied. */
+    public record Instalment(String depositId, String depositNo, int number, String dueDate, String amount, String lateCharge, String source,
+                             String fromAccountId, String fromAccountNo, String reference, String limitType) {}
 
     /** A bank account as an approval request carries it: the holder and the number sealed, the rest in clear. */
     public record SealedBankAccount(String holderNameSealed, String accountNumberSealed, String last4, String ifsc) {}
@@ -456,6 +464,7 @@ public class DepositMoneyService implements DepositOperations {
             DepositAccountService.refuseIfAny("the funding cannot be reversed", fundingReversalProblems(d, td));
             Movement m = movement((UUID) td.get("funding_movement_id"));
             reverseLot(m, f.reason(), r.id(), r.maker());
+            RecurringDeposits.fundingReversed(jdbc, m.id());
             reverseAccruedInterest(d, f.reason());
             jdbc.update("""
                     UPDATE deposits.term_deposit SET start_date = NULL, maturity_date = NULL, funding_source = NULL, funding_account_id = NULL,
@@ -498,8 +507,114 @@ public class DepositMoneyService implements DepositOperations {
                 bank == null ? null : Base64.getDecoder().decode(bank.accountNumberSealed()), bank == null ? null : bank.last4(),
                 bank == null ? null : bank.ifsc(), d.id());
         jdbc.update("UPDATE deposits.account SET status = 'ACTIVE' WHERE id = ?", d.id());
+        // after the start date is set: instalment 1 falls due on it
+        RecurringDeposits.recordFunding(jdbc, d.id(), principal, today, f.source(), funding, r.id(), r.maker());
         checkNow();
         return d.accountNo();
+    }
+
+    // ================================================================================================ recurring deposit instalments (P4-5)
+
+    /** The instalments of a recurring deposit: the schedule, what is paid and overdue, and what the next one takes today. */
+    public Map<String, Object> instalments(UUID depositId) {
+        Account d = account(depositId, DepositProductService.TERM_DEPOSIT, true);
+        if (!RecurringDeposits.isRd(jdbc, d.id())) throw ApiException.notFound("recurring deposit " + depositId);
+        return RecurringDeposits.schedule(jdbc, d.id(), days.requireOpen());
+    }
+
+    /** Why the next instalment of a recurring deposit cannot be paid today, from {@code from} (null: cash or a bank transfer). */
+    private List<String> instalmentProblems(Account d, Map<String, Object> next, Account from, BigDecimal total) {
+        List<String> out = new ArrayList<>();
+        if (!"ACTIVE".equals(d.status())) out.add("recurring deposit " + d.accountNo() + " is " + d.status() + "; instalments are paid while it is active");
+        if (next == null) out.add("every instalment of recurring deposit " + d.accountNo() + " is paid");
+        else if (!Boolean.TRUE.equals(next.get("payableNow")) && "ACTIVE".equals(d.status())) out.add("recurring deposit " + d.accountNo() + " has reached its maturity date");
+        for (String p : movementProblems(d, Direction.CREDIT, total, false)) out.add("deposit " + d.accountNo() + ": " + p);
+        if (from != null) {
+            if (!holds(from.id(), d.customerId())) out.add("account " + from.accountNo() + " is not held by the depositor");
+            for (String p : movementProblems(from, Direction.DEBIT, total, false)) out.add("account " + from.accountNo() + ": " + p);
+        }
+        return out;
+    }
+
+    /**
+     * Proposes paying the next instalment of a recurring deposit, with its late charge if it is paid after its due date:
+     * from a savings or current account of the depositor, in cash or by a bank transfer (with its UTR). Posts at once
+     * below the tenant's threshold, like a funding.
+     */
+    @Transactional
+    public ApprovalRequest proposeInstalment(UUID depositId, InstalmentInput in, String idempotencyKey) {
+        Account d = account(depositId, DepositProductService.TERM_DEPOSIT, true);
+        if (!RecurringDeposits.isRd(jdbc, d.id())) throw ApiException.invalid("deposit " + d.accountNo() + " is not a recurring deposit; it takes no instalments");
+        if (in == null || in.source() == null || !Set.of("ACCOUNT", "CASH", "BANK_TRANSFER").contains(in.source())) {
+            throw ApiException.invalid("source is one of ACCOUNT, CASH, BANK_TRANSFER");
+        }
+        if ("BOOKED".equals(d.status())) throw ApiException.invalid("recurring deposit " + d.accountNo() + " is booked: its first instalment is its funding");
+        List<String> problems = new ArrayList<>();
+        String reference = text(in.reference(), 60, "reference", problems);
+        if ("BANK_TRANSFER".equals(in.source()) && reference == null) problems.add("the bank's reference (UTR) is required for a bank transfer");
+        Account from = null;
+        if ("ACCOUNT".equals(in.source())) {
+            if (in.fromAccountId() == null) problems.add("name the savings or current account the instalment is paid from");
+            else from = account(in.fromAccountId(), DepositProductService.CASA, false);
+        } else if (in.fromAccountId() != null) {
+            problems.add("only an instalment from an account names one");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> next = (Map<String, Object>) RecurringDeposits.schedule(jdbc, d.id(), days.requireOpen()).get("next");
+        BigDecimal amount = next == null ? BigDecimal.ZERO : new BigDecimal((String) next.get("amount"));
+        BigDecimal late = next == null ? BigDecimal.ZERO : new BigDecimal((String) next.get("lateCharge"));
+        problems.addAll(instalmentProblems(d, next, from, amount.add(late)));
+        DepositAccountService.refuseIfAny("the instalment cannot be paid", problems);
+        String limitType = from != null ? "DEPOSIT_DEBIT" : "DEPOSIT_CREDIT";
+        limits.require(limitType, AmountLimitService.MAKE, amount.add(late), d.accountNo());
+        Instalment i = new Instalment(d.id().toString(), d.accountNo(), (Integer) next.get("number"), String.valueOf(next.get("dueDate")),
+                DepositRuleSets.plain(amount), DepositRuleSets.plain(late), in.source(), from == null ? null : from.id().toString(),
+                from == null ? null : from.accountNo(), reference, limitType);
+        return approvals.propose(DepositAccountService.TD_ENTITY, INSTALMENT, d.id().toString(), toMap(i), null, amount.add(late), d.branch(), idempotencyKey);
+    }
+
+    /** Pays an approved instalment; returns the id of the movement into the deposit. */
+    String applyInstalment(ApprovalRequest r) {
+        Instalment i = convert(r.payload(), Instalment.class);
+        Account d = account(UUID.fromString(i.depositId()), DepositProductService.TERM_DEPOSIT, false);
+        Account from = i.fromAccountId() == null ? null : account(UUID.fromString(i.fromAccountId()), DepositProductService.CASA, false);
+        return payInstalment(d, from, i.source(), i.reference(), i.number(), r.id(), r.maker()).toString();
+    }
+
+    /**
+     * Pays the next instalment of a recurring deposit now: the lot, the movements and the instalment record. The late
+     * charge is the one due today. {@code expected}: the instalment number the request was raised for (0: any).
+     */
+    UUID payInstalment(Account d, Account from, String source, String reference, int expected, UUID approvalId, String maker) {
+        LocalDate today = days.requireOpen();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> next = (Map<String, Object>) RecurringDeposits.schedule(jdbc, d.id(), today).get("next");
+        if (next != null && expected > 0 && ((Integer) next.get("number")) != expected) {
+            throw ApiException.conflict("instalment " + expected + " of recurring deposit " + d.accountNo() + " is already paid");
+        }
+        BigDecimal amount = next == null ? BigDecimal.ZERO : new BigDecimal((String) next.get("amount"));
+        BigDecimal late = next == null ? BigDecimal.ZERO : new BigDecimal((String) next.get("lateCharge"));
+        DepositAccountService.refuseIfAny("the instalment cannot be paid", instalmentProblems(d, next, from, amount.add(late)));
+        int number = (Integer) next.get("number");
+        String ref = reference == null ? d.accountNo() + "/" + number : reference;
+        FundingSource fs = from != null ? FundingSource.ACCOUNT : "BANK_TRANSFER".equals(source) ? FundingSource.BANK_TRANSFER : FundingSource.CASH;
+        TransactionLot lot = new DepositPostings(heads(), today).rdInstalment(d.leg(), amount, late, DepositClosing.chargeHeads(jdbc).income(), fs,
+                from == null ? null : from.leg(), ref, number);
+        postings.post(lot, CurrentUser.username());
+        UUID in = insertMovement(d.id(), "RD_INSTALMENT", "CREDIT", amount, lot.id(), reference, "Instalment " + number, from == null ? null : from.id(), null,
+                approvalId, maker);
+        if (from != null) {
+            insertMovement(from.id(), "FUNDING_PAID", "DEBIT", amount, lot.id(), reference, "Instalment " + number + " of " + d.accountNo(), d.id(), null,
+                    approvalId, maker);
+            if (late.signum() > 0) {
+                insertMovement(from.id(), "RD_LATE_CHARGE", "DEBIT", late, lot.id(), reference, "Late charge, instalment " + number + " of " + d.accountNo(),
+                        d.id(), null, approvalId, maker);
+            }
+        }
+        RecurringDeposits.record(jdbc, d.id(), number, LocalDate.parse(String.valueOf(next.get("dueDate"))), amount, late, today, source, in, lot.id(),
+                approvalId, maker);
+        checkNow();
+        return in;
     }
 
     // ================================================================================================ the gateway (DepositOperations)
@@ -621,6 +736,7 @@ public class DepositMoneyService implements DepositOperations {
                  WHERE account_id = ?
                 """, today, tenure.addTo(today), funding, ref, a.id());
         jdbc.update("UPDATE deposits.account SET status = 'ACTIVE' WHERE id = ?", a.id());
+        RecurringDeposits.recordFunding(jdbc, a.id(), principal, today, "GATEWAY", funding, null, CurrentUser.username());
         checkNow();
         return funding;
     }
@@ -698,7 +814,28 @@ public class DepositMoneyService implements DepositOperations {
             Map<String, Object> t = jdbc.queryForMap(DepositEod.TERMS, accountId);
             List<Map<String, Object>> schedule = new ArrayList<>();
             String next = null;
-            if (t.get("start_date") != null) {
+            boolean rd = RecurringDeposits.isRd(jdbc, accountId);
+            if (t.get("start_date") != null && rd) {
+                // a recurring deposit (P4-5): the credits of a deposit paid on time; months worked out by the day-end so far
+                int months = jdbc.queryForObject("SELECT tenure_months FROM deposits.term_deposit WHERE account_id = ?", Integer.class, accountId);
+                int done = s == null ? 0 : ((Number) s.get("periods_credited")).intValue();
+                TermDeposit.Terms terms = DepositEod.terms(t);
+                int k = terms.periodMonths();
+                for (TermDeposit.Period p : com.corebanking.deposits.RecurringDeposit.periods(terms.start(), months, terms.principal(), terms.ratePercent(), k,
+                        terms.rounding())) {
+                    int lastMonth = Math.min(p.number() * k, months);
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("number", p.number());
+                    row.put("from", p.from().toString());
+                    row.put("creditOn", p.to().toString());
+                    row.put("balance", DepositRuleSets.plain(p.balance()));
+                    row.put("interest", DepositRuleSets.plain(p.interest()));
+                    row.put("status", lastMonth <= done ? "CREDITED" : "DUE");
+                    if (next == null && lastMonth > done) next = p.to().toString();
+                    schedule.add(row);
+                }
+                m.put("monthsWorkedOut", done);
+            } else if (t.get("start_date") != null) {
                 int credited = s == null ? 0 : ((Number) s.get("periods_credited")).intValue();
                 for (TermDeposit.Period p : TermDeposit.periods(DepositEod.terms(t))) {
                     Map<String, Object> row = new LinkedHashMap<>();
@@ -893,8 +1030,10 @@ public class DepositMoneyService implements DepositOperations {
 
     /** Runs the deferred checks of tenant V30 now, so a refusal is this request's answer; then defers them again. */
     private void checkNow() {
-        jdbc.execute("SET CONSTRAINTS deposits.movement_matches_lot, deposits.movement_funded, deposits.account_funded, deposits.term_deposit_funded IMMEDIATE");
-        jdbc.execute("SET CONSTRAINTS deposits.movement_matches_lot, deposits.movement_funded, deposits.account_funded, deposits.term_deposit_funded DEFERRED");
+        jdbc.execute("SET CONSTRAINTS deposits.movement_matches_lot, deposits.movement_funded, deposits.account_funded, deposits.term_deposit_funded,"
+                + " deposits.movement_rd_instalment IMMEDIATE");
+        jdbc.execute("SET CONSTRAINTS deposits.movement_matches_lot, deposits.movement_funded, deposits.account_funded, deposits.term_deposit_funded,"
+                + " deposits.movement_rd_instalment DEFERRED");
     }
 
     // ================================================================================================ data

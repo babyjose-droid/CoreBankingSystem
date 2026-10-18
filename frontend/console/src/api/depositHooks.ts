@@ -24,6 +24,8 @@ import type {
   DepositTransactionInput,
   DepositTransferInput,
   TermDepositFundingInput,
+  RdInstalmentInput,
+  RdInstalments,
   DepositAccountSummary,
   DepositCollectionOrderInput,
   DepositFamily,
@@ -176,7 +178,7 @@ export function useBookTermDeposit() {
 function useMoneyInvalidation() {
   const qc = useQueryClient();
   return () => {
-    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote'])
+    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote', 'rd-instalments'])
       qc.invalidateQueries({ queryKey: [key] });
   };
 }
@@ -270,6 +272,25 @@ export function useFundTermDeposit(id: string) {
   const done = useMoneyInvalidation();
   return useMutation({
     mutationFn: (body: TermDepositFundingInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/fund', { params: { path: { id } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+/** The instalments of a recurring deposit (P4-5). */
+export function useRdInstalments(id: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['rd-instalments', id],
+    queryFn: () => unwrap<RdInstalments>(api.GET('/api/v1/deposits/accounts/{id}/instalments', { params: { path: { id: id! } } }) as never),
+    enabled: !!id && enabled,
+  });
+}
+
+export function usePayRdInstalment(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: RdInstalmentInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/instalments', { params: { path: { id } }, body }) as never),
     onSuccess: done,
   });
 }

@@ -4311,6 +4311,42 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/instalments:
+    get:
+      tags: [Deposits]
+      operationId: getRdInstalments
+      summary: The instalments of a recurring deposit, paid and to pay
+      description: Module TD. Permission deposit:view. 404 for a deposit that is not a recurring deposit, or outside the caller's branch scope.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RdInstalments' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeRdInstalment
+      summary: Propose paying the next instalment of a recurring deposit (maker-checker)
+      description: >-
+        Module TD. Permission deposit:fund. P4-5. The next instalment in order, with its late charge (Rs per 100 per month or part
+        of a month) when paid after its due date; the late charge goes to charge income. Posts at once below the tenant's threshold
+        (2,00,000 on the demo rules) and waits for a checker from it. 422: a deposit booked and not funded (its first instalment is
+        its funding), not active, at or past its maturity date, all instalments paid, a bank transfer without its UTR, an account
+        not held by the depositor or without the money.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RdInstalmentInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/accounts/{id}/funding/reverse:
     post:
       tags: [Deposits]
@@ -6464,7 +6500,7 @@ components:
       properties:
         code: { type: string, pattern: '^[A-Z0-9]{2,12}$' }
         name: { type: string, maxLength: 200 }
-        productType: { type: string, enum: [SAVINGS, CURRENT, FD_CUMULATIVE, FD_PAYOUT] }
+        productType: { type: string, enum: [SAVINGS, CURRENT, FD_CUMULATIVE, FD_PAYOUT, RD], description: 'RD - a recurring deposit (P4-5): the amount is the monthly instalment' }
         effectiveFrom: { type: [string, 'null'], format: date, description: Defaults to the business date }
         dayCount: { type: [string, 'null'], enum: [ACTUAL_365, ACTUAL_360, ACTUAL_ACTUAL, null], description: Default ACTUAL_365 }
         rounding: { type: [string, 'null'], enum: [PAISE_HALF_UP, PAISE_HALF_EVEN, RUPEE_HALF_UP, RUPEE_DOWN, RUPEE_UP, null], description: Default PAISE_HALF_UP }
@@ -6487,9 +6523,15 @@ components:
         prematurePenaltyPercent: { type: [number, string, 'null'], description: 'Points taken off the rate for the period run. Left out where the rule set fixes the rate (deposit-taking NBFC)' }
         prematureMinDays: { type: [integer, 'null'], minimum: 0, description: 'No interest when the deposit ran for fewer days. Left out where the rule set fixes it' }
         autoRenewalAllowed: { type: [boolean, 'null'], description: Default false }
-        glLiability: { type: [string, 'null'], description: 'Default 2401 savings, 2402 current, 2403 term deposits' }
+        glLiability: { type: [string, 'null'], description: 'Default 2401 savings, 2402 current, 2403 term deposits, 2405 recurring deposits' }
         glInterestExpense: { type: [string, 'null'], description: 'Default 5108 savings, 5107 term deposits' }
         charges: { oneOf: [ { $ref: '#/components/schemas/DepositChargesInput' }, { type: 'null' } ], description: 'Savings and current: the schedule of charges (P4-4); none for no charges' }
+        rdLateChargePer100:
+          type: [number, string, 'null']
+          description: >-
+            RD only, and required for it (P4-5): rupees charged for every Rs 100 of an instalment paid late, for each month or part
+            of a month of delay (0 to 100, two decimals; 0 for no charge). A recurring deposit runs for whole months, is paid out at
+            maturity and is never renewed.
     DepositChargesInput:
       type: object
       description: A savings or current product's schedule of charges. Amounts before GST.
@@ -6517,7 +6559,7 @@ components:
         code: { type: string }
         name: { type: string }
         family: { type: string, enum: [CASA, TERM_DEPOSIT] }
-        productType: { type: string, enum: [SAVINGS, CURRENT, FD_CUMULATIVE, FD_PAYOUT] }
+        productType: { type: string, enum: [SAVINGS, CURRENT, FD_CUMULATIVE, FD_PAYOUT, RD], description: 'RD - a recurring deposit (P4-5): the amount is the monthly instalment' }
         status: { type: string, enum: [ACTIVE, WITHDRAWN] }
         version: { type: [integer, 'null'] }
         effectiveFrom: { type: string, format: date }
@@ -6561,6 +6603,7 @@ components:
         autoRenewalAllowed: { type: [boolean, 'null'] }
         glLiability: { type: string }
         glInterestExpense: { type: [string, 'null'] }
+        rdLateChargePer100: { type: [string, 'null'], description: 'RD only: the late charge per Rs 100 a month (P4-5)' }
         charges:
           type: [object, 'null']
           description: The schedule of charges (savings and current); amounts are decimal strings
@@ -6657,6 +6700,7 @@ components:
         addOns: { type: array, items: { $ref: '#/components/schemas/DepositAddOnGiven' } }
         interestPeriodMonths: { type: integer }
         cumulative: { type: boolean }
+        recurring: { type: boolean, description: 'A recurring deposit (P4-5): amount is the monthly instalment; the figures assume every instalment is paid on its due date' }
         totalInterest: { $ref: '#/components/schemas/Money' }
         maturityValue: { $ref: '#/components/schemas/Money', description: 'Repaid at maturity before tax: the principal, plus all interest when cumulative' }
         annualisedYieldPercent: { type: string }
@@ -6737,6 +6781,47 @@ components:
         fromAccountId: { type: [string, 'null'], format: uuid, description: 'The paying savings or current account (ACCOUNT only)' }
         reference: { type: [string, 'null'], maxLength: 60, description: 'The bank''s UTR (required for BANK_TRANSFER), or a receipt number' }
         payoutBankAccount: { $ref: '#/components/schemas/BankAccountInput', description: Required when the deposit is paid out to a bank account }
+    RdInstalmentInput:
+      type: object
+      required: [source]
+      description: The next instalment of a recurring deposit, with its late charge when it is paid after its due date.
+      properties:
+        source: { type: string, enum: [ACCOUNT, CASH, BANK_TRANSFER] }
+        fromAccountId: { type: [string, 'null'], format: uuid, description: 'ACCOUNT only: a savings or current account held by the depositor; the instalment and the late charge are debited to it' }
+        reference: { type: [string, 'null'], maxLength: 60, description: 'The bank''s UTR (required for BANK_TRANSFER), or a slip number' }
+    RdInstalments:
+      type: object
+      description: The instalments of a recurring deposit (P4-5). Amounts are decimal strings.
+      properties:
+        instalment: { type: string }
+        instalments: { type: integer, description: The tenure in months }
+        lateChargePer100: { type: string }
+        paidCount: { type: integer }
+        paidIn: { type: string, description: The instalments paid in so far }
+        lateChargesPaid: { type: string }
+        overdueCount: { type: integer, description: Instalments past their due date and not paid }
+        next:
+          type: [object, 'null']
+          description: The next instalment to pay; null once all are paid
+          properties:
+            number: { type: integer }
+            dueDate: { type: string, format: date }
+            amount: { type: string }
+            lateCharge: { type: string, description: What paying it today would charge }
+            total: { type: string }
+            payableNow: { type: boolean, description: 'false once the deposit is not active or has reached its maturity date' }
+        schedule:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              dueDate: { type: string, format: date }
+              amount: { type: string }
+              paidOn: { type: [string, 'null'], format: date }
+              lateCharge: { type: [string, 'null'] }
+              source: { type: [string, 'null'] }
+              status: { type: string, enum: [PAID, OVERDUE, DUE] }
     DepositMovement:
       type: object
       properties:
@@ -6744,7 +6829,7 @@ components:
         seq: { type: integer, description: The order movements were made in }
         businessDate: { type: string, format: date }
         valueDate: { type: string, format: date }
-        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL], description: 'INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4)' }
+        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL, RD_INSTALMENT, RD_LATE_CHARGE], description: 'INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)' }
         direction: { type: string, enum: [DEBIT, CREDIT] }
         amount: { $ref: '#/components/schemas/Money' }
         balanceAfter: { $ref: '#/components/schemas/Money' }
@@ -6773,9 +6858,10 @@ components:
         taxDeducted: { $ref: '#/components/schemas/Money', description: 'Tax deducted at source from the interest so far (P4-3b)' }
         lastCreditOn: { type: [string, 'null'], format: date }
         nextCreditDate: { type: [string, 'null'], format: date }
+        monthsWorkedOut: { type: [integer, 'null'], description: 'A recurring deposit (P4-5): the months whose interest the day-end has worked out' }
         schedule:
           type: array
-          description: A term deposit's interest periods; empty for a savings or current account
+          description: 'A term deposit''s interest periods; empty for a savings or current account. For a recurring deposit, the credits if every instalment is paid on time'
           items:
             type: object
             properties:
@@ -7131,6 +7217,7 @@ components:
         addOns: { type: array, items: { $ref: '#/components/schemas/DepositAddOnGiven' } }
         interestPeriodMonths: { type: integer }
         cumulative: { type: boolean }
+        recurring: { type: boolean, description: 'A recurring deposit (P4-5): principal is the monthly instalment; totalInterest and maturityValue assume every instalment is paid on time' }
         dayCount: { type: string }
         rounding: { type: string }
         tdsApplicable: { type: boolean }

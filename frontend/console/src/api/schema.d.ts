@@ -3990,6 +3990,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/deposits/accounts/{id}/instalments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The instalments of a recurring deposit, paid and to pay
+         * @description Module TD. Permission deposit:view. 404 for a deposit that is not a recurring deposit, or outside the caller's branch scope.
+         */
+        get: operations["getRdInstalments"];
+        put?: never;
+        /**
+         * Propose paying the next instalment of a recurring deposit (maker-checker)
+         * @description Module TD. Permission deposit:fund. P4-5. The next instalment in order, with its late charge (Rs per 100 per month or part of a month) when paid after its due date; the late charge goes to charge income. Posts at once below the tenant's threshold (2,00,000 on the demo rules) and waits for a checker from it. 422: a deposit booked and not funded (its first instalment is its funding), not active, at or past its maturity date, all instalments paid, a bank transfer without its UTR, an account not held by the depositor or without the money.
+         */
+        post: operations["proposeRdInstalment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/deposits/accounts/{id}/funding/reverse": {
         parameters: {
             query?: never;
@@ -6407,8 +6431,11 @@ export interface components {
         DepositProductInput: {
             code: string;
             name: string;
-            /** @enum {string} */
-            productType: "SAVINGS" | "CURRENT" | "FD_CUMULATIVE" | "FD_PAYOUT";
+            /**
+             * @description RD - a recurring deposit (P4-5): the amount is the monthly instalment
+             * @enum {string}
+             */
+            productType: "SAVINGS" | "CURRENT" | "FD_CUMULATIVE" | "FD_PAYOUT" | "RD";
             /**
              * Format: date
              * @description Defaults to the business date
@@ -6464,12 +6491,14 @@ export interface components {
             prematureMinDays?: number | null;
             /** @description Default false */
             autoRenewalAllowed?: boolean | null;
-            /** @description Default 2401 savings, 2402 current, 2403 term deposits */
+            /** @description Default 2401 savings, 2402 current, 2403 term deposits, 2405 recurring deposits */
             glLiability?: string | null;
             /** @description Default 5108 savings, 5107 term deposits */
             glInterestExpense?: string | null;
             /** @description Savings and current: the schedule of charges (P4-4); none for no charges */
             charges?: components["schemas"]["DepositChargesInput"] | null;
+            /** @description RD only, and required for it (P4-5): rupees charged for every Rs 100 of an instalment paid late, for each month or part of a month of delay (0 to 100, two decimals; 0 for no charge). A recurring deposit runs for whole months, is paid out at maturity and is never renewed. */
+            rdLateChargePer100?: number | string | null;
         };
         /** @description A savings or current product's schedule of charges. Amounts before GST. */
         DepositChargesInput: {
@@ -6497,8 +6526,11 @@ export interface components {
             name?: string;
             /** @enum {string} */
             family?: "CASA" | "TERM_DEPOSIT";
-            /** @enum {string} */
-            productType?: "SAVINGS" | "CURRENT" | "FD_CUMULATIVE" | "FD_PAYOUT";
+            /**
+             * @description RD - a recurring deposit (P4-5): the amount is the monthly instalment
+             * @enum {string}
+             */
+            productType?: "SAVINGS" | "CURRENT" | "FD_CUMULATIVE" | "FD_PAYOUT" | "RD";
             /** @enum {string} */
             status?: "ACTIVE" | "WITHDRAWN";
             version?: number | null;
@@ -6536,6 +6568,8 @@ export interface components {
             autoRenewalAllowed?: boolean | null;
             glLiability?: string;
             glInterestExpense?: string | null;
+            /** @description RD only: the late charge per Rs 100 a month (P4-5) */
+            rdLateChargePer100?: string | null;
             /** @description The schedule of charges (savings and current); amounts are decimal strings */
             charges?: {
                 gstRatePercent?: string;
@@ -6661,6 +6695,8 @@ export interface components {
             addOns?: components["schemas"]["DepositAddOnGiven"][];
             interestPeriodMonths?: number;
             cumulative?: boolean;
+            /** @description A recurring deposit (P4-5): amount is the monthly instalment; the figures assume every instalment is paid on its due date */
+            recurring?: boolean;
             totalInterest?: components["schemas"]["Money"];
             /** @description Repaid at maturity before tax: the principal, plus all interest when cumulative */
             maturityValue?: components["schemas"]["Money"];
@@ -6750,6 +6786,55 @@ export interface components {
             /** @description Required when the deposit is paid out to a bank account */
             payoutBankAccount?: components["schemas"]["BankAccountInput"];
         };
+        /** @description The next instalment of a recurring deposit, with its late charge when it is paid after its due date. */
+        RdInstalmentInput: {
+            /** @enum {string} */
+            source: "ACCOUNT" | "CASH" | "BANK_TRANSFER";
+            /**
+             * Format: uuid
+             * @description ACCOUNT only: a savings or current account held by the depositor; the instalment and the late charge are debited to it
+             */
+            fromAccountId?: string | null;
+            /** @description The bank's UTR (required for BANK_TRANSFER), or a slip number */
+            reference?: string | null;
+        };
+        /** @description The instalments of a recurring deposit (P4-5). Amounts are decimal strings. */
+        RdInstalments: {
+            instalment?: string;
+            /** @description The tenure in months */
+            instalments?: number;
+            lateChargePer100?: string;
+            paidCount?: number;
+            /** @description The instalments paid in so far */
+            paidIn?: string;
+            lateChargesPaid?: string;
+            /** @description Instalments past their due date and not paid */
+            overdueCount?: number;
+            /** @description The next instalment to pay; null once all are paid */
+            next?: {
+                number?: number;
+                /** Format: date */
+                dueDate?: string;
+                amount?: string;
+                /** @description What paying it today would charge */
+                lateCharge?: string;
+                total?: string;
+                /** @description false once the deposit is not active or has reached its maturity date */
+                payableNow?: boolean;
+            } | null;
+            schedule?: {
+                number?: number;
+                /** Format: date */
+                dueDate?: string;
+                amount?: string;
+                /** Format: date */
+                paidOn?: string | null;
+                lateCharge?: string | null;
+                source?: string | null;
+                /** @enum {string} */
+                status?: "PAID" | "OVERDUE" | "DUE";
+            }[];
+        };
         DepositMovement: {
             /** Format: uuid */
             id?: string;
@@ -6760,10 +6845,10 @@ export interface components {
             /** Format: date */
             valueDate?: string;
             /**
-             * @description INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4)
+             * @description INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)
              * @enum {string}
              */
-            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL";
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL" | "RD_INSTALMENT" | "RD_LATE_CHARGE";
             /** @enum {string} */
             direction?: "DEBIT" | "CREDIT";
             amount?: components["schemas"]["Money"];
@@ -6810,7 +6895,9 @@ export interface components {
             lastCreditOn?: string | null;
             /** Format: date */
             nextCreditDate?: string | null;
-            /** @description A term deposit's interest periods; empty for a savings or current account */
+            /** @description A recurring deposit (P4-5): the months whose interest the day-end has worked out */
+            monthsWorkedOut?: number | null;
+            /** @description A term deposit's interest periods; empty for a savings or current account. For a recurring deposit, the credits if every instalment is paid on time */
             schedule?: {
                 number?: number;
                 /** Format: date */
@@ -7227,6 +7314,8 @@ export interface components {
             addOns?: components["schemas"]["DepositAddOnGiven"][];
             interestPeriodMonths?: number;
             cumulative?: boolean;
+            /** @description A recurring deposit (P4-5): principal is the monthly instalment; totalInterest and maturityValue assume every instalment is paid on time */
+            recurring?: boolean;
             dayCount?: string;
             rounding?: string;
             tdsApplicable?: boolean;
@@ -12983,6 +13072,50 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TermDepositFundingInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getRdInstalments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RdInstalments"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeRdInstalment: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RdInstalmentInput"];
             };
         };
         responses: {

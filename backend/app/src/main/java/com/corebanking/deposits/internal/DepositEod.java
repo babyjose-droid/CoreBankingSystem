@@ -73,7 +73,7 @@ class DepositEod implements EodStepProvider {
     @Override
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-        return List.of(savings(jdbc, tx), termDeposits(jdbc, tx), maturities(jdbc, tx), notices(jdbc, tx), minimumBalances(jdbc, tx));
+        return List.of(savings(jdbc, tx), termDeposits(jdbc, tx), recurringDeposits(jdbc, tx), maturities(jdbc, tx), notices(jdbc, tx), minimumBalances(jdbc, tx));
     }
 
     /** The last calendar day this business date closes: the day before the next working day. */
@@ -260,12 +260,35 @@ class DepositEod implements EodStepProvider {
                 through = through(jdbc, ctx.businessDate());
                 return jdbc.queryForList("""
                         SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
-                         WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.start_date IS NOT NULL ORDER BY a.account_no
+                          JOIN deposits.product p ON p.code = a.product_code
+                         WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.start_date IS NOT NULL AND p.product_type <> 'RD' ORDER BY a.account_no
                         """, String.class);
             }
 
             @Override void each(EodEngine.Context ctx, UUID id) {
                 depositDayEnd(books, outbox, rules, through, id);
+            }
+        };
+    }
+
+    /** Recurring deposits (P4-5): each month that has ended is booked on the instalments held through it; each rest and maturity credited. */
+    private EodEngine.ItemStep recurringDeposits(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            private LocalDate through;
+
+            @Override public String name() { return "Recurring deposit interest (monthly)"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                through = through(jdbc, ctx.businessDate());
+                return jdbc.queryForList("""
+                        SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
+                          JOIN deposits.product p ON p.code = a.product_code
+                         WHERE a.family = 'TERM_DEPOSIT' AND a.status = 'ACTIVE' AND t.start_date IS NOT NULL AND p.product_type = 'RD' ORDER BY a.account_no
+                        """, String.class);
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                RecurringDeposits.dayEnd(books, rules, through, id);
             }
         };
     }
