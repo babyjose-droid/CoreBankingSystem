@@ -49,6 +49,28 @@ class LoanOperationsService implements LoanOperations {
     }
 
     @Override
+    public Terms terms(UUID loanId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT loan_no, customer_id, branch_code, status, sanctioned_amount::numeric AS sanctioned, rate::numeric AS rate, open_date,
+                       tenor_months FROM lending.loan_account WHERE id = ?
+                """, loanId);
+        if (rows.isEmpty()) throw ApiException.notFound("loan " + loanId);
+        Map<String, Object> r = rows.get(0);
+        LocalDate maturity = ((java.sql.Date) r.get("open_date")).toLocalDate().plusMonths(((Number) r.get("tenor_months")).longValue());
+        String collection = null;
+        if ("ACTIVE".equals(r.get("status"))) {
+            LoanAccount a = store.read(jdbc, loanId).account();
+            if (a != null) {
+                collection = a.params().gl().collectionBank();
+                List<Instalment> future = a.futureSchedule();
+                if (!future.isEmpty()) maturity = future.get(future.size() - 1).dueDate();
+            }
+        }
+        return new Terms(loanId, (String) r.get("loan_no"), (UUID) r.get("customer_id"), (String) r.get("branch_code"), (String) r.get("status"),
+                ((BigDecimal) r.get("sanctioned")).stripTrailingZeros(), ((BigDecimal) r.get("rate")).stripTrailingZeros(), maturity, collection);
+    }
+
+    @Override
     public LoanRef findByNo(String loanNo) {
         List<Map<String, Object>> rows = jdbc.queryForList(REF + " WHERE loan_no = ?", loanNo);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + loanNo);

@@ -40,6 +40,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li><b>Term deposit interest</b> (P4-3): every funded deposit accrues day by day; on each credit date the period's
  *       interest is credited to the deposit, and a deposit that pays its interest out pays it at once to the savings
  *       or current account named at booking, or to the depositor's bank account through the payment gateway.</li>
+ *   <li><b>Pledges</b> (P4-5b): a deposit pledged for a loan that is now closed or cancelled is released.</li>
  *   <li><b>Maturity</b> (P4-4): a deposit that has reached its maturity date is paid out or renewed as instructed;
  *       when that cannot be done it waits as MATURED, to be paid when claimed ({@link DepositClosing#mature}).</li>
  *   <li><b>Maturity notices</b> (P4-4): a deposit maturing within the notice period is noticed once, and the depositor
@@ -73,7 +74,8 @@ class DepositEod implements EodStepProvider {
     @Override
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-        return List.of(savings(jdbc, tx), termDeposits(jdbc, tx), recurringDeposits(jdbc, tx), maturities(jdbc, tx), notices(jdbc, tx), minimumBalances(jdbc, tx));
+        return List.of(savings(jdbc, tx), termDeposits(jdbc, tx), recurringDeposits(jdbc, tx), pledges(jdbc, tx), maturities(jdbc, tx), notices(jdbc, tx),
+                minimumBalances(jdbc, tx));
     }
 
     /** The last calendar day this business date closes: the day before the next working day. */
@@ -426,6 +428,21 @@ class DepositEod implements EodStepProvider {
     }
 
     // ================================================================================================ lifecycle (P4-4)
+
+    /** P4-5b: a deposit pledged for a loan is freed once the loan is closed or cancelled, before maturities are paid. */
+    private EodEngine.ItemStep pledges(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            @Override public String name() { return "Pledges of closed loans released"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                return DepositPledges.releasable(jdbc);
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID holdId) {
+                DepositPledges.release(jdbc, holdId, USER);
+            }
+        };
+    }
 
     private EodEngine.ItemStep maturities(JdbcTemplate jdbc, TransactionTemplate tx) {
         return new AccountStep(jdbc, tx) {

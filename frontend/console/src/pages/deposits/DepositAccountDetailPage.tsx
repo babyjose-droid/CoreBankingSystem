@@ -8,9 +8,10 @@ import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spi
 import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
 import { CasaCloseDialog, ChargesCard, ClosureCard, DepositCloseDialog, INSTRUCTION_LABEL, InstructionDialog, RenewDialog } from './DepositLifecycle';
 import { InstalmentsCard } from './RecurringDeposit';
+import { PledgeDialog, StandingInstructionsCard } from './StandingInstructions';
 import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, InterestCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
 
-type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | 'CLOSE' | 'INSTRUCTION' | 'RENEW' | null;
+type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | 'CLOSE' | 'INSTRUCTION' | 'RENEW' | 'PLEDGE' | null;
 const SOURCE: Record<string, string> = { ACCOUNT: 'From account', CASH: 'In cash', BANK_TRANSFER: 'By bank transfer', GATEWAY: 'Through a payment link' };
 
 export function DepositAccountDetailPage({ family }: { family: DepositFamily }) {
@@ -46,6 +47,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {term && a.status === 'BOOKED' && can(P.depositFund) && <Button variant="primary" onClick={() => setAction('FUND')}>Fund the deposit</Button>}
       {term && a.status === 'BOOKED' && can(P.depositFund) && <Button onClick={() => setAction('LINK')}>Payment link</Button>}
       {term && active && can(P.depositHold) && <Button onClick={() => setAction('HOLD')}>Lien</Button>}
+      {term && active && can(P.depositHold) && <Button onClick={() => setAction('PLEDGE')}>Pledge for a loan</Button>}
       {term && active && can(P.depositFund) && <Button variant="ghost" onClick={() => setAction('UNFUND')}>Reverse the funding</Button>}
       {term && beforeMaturity && !recurring && can(P.depositFund) && <Button onClick={() => setAction('INSTRUCTION')}>Maturity instruction</Button>}
       {term && (active || matured) && can(P.depositFund) && <Button variant={matured ? 'primary' : 'ghost'} onClick={() => setAction('CLOSE')}>{matured ? 'Pay out' : 'Close the deposit'}</Button>}
@@ -149,6 +151,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       </div>
       {recurring && t?.funded && <InstalmentsCard account={a} canPay={can(P.depositFund)} />}
       {((!term && a.nextInterestDate) || (term && t?.funded)) && <InterestCard family={family} accountId={a.id!} />}
+      {(!term || recurring) && a.status !== 'BOOKED' && modules.casa && <StandingInstructionsCard account={a} canGive={can(P.casaTransact)} />}
       {(!term || a.status !== 'BOOKED') && <MovementsCard family={family} accountId={a.id!} canReverse={can(P.casaTransact)} />}
       {!term && a.status !== 'BOOKED' && <ChargesCard account={a} product={product.data} canLevy={can(P.casaTransact)} />}
       <PaymentLinksCard family={family} accountId={a.id!} />
@@ -191,6 +194,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {action === 'CLOSE' && (term ? <DepositCloseDialog account={a} isNbfc={isNbfc} onClose={() => setAction(null)} /> : <CasaCloseDialog account={a} onClose={() => setAction(null)} />)}
       {action === 'INSTRUCTION' && <InstructionDialog account={a} isNbfc={isNbfc} renewalAllowed={product.data?.autoRenewalAllowed === true} onClose={() => setAction(null)} />}
       {action === 'RENEW' && <RenewDialog account={a} isNbfc={isNbfc} onClose={() => setAction(null)} />}
+      {action === 'PLEDGE' && <PledgeDialog account={a} onClose={() => setAction(null)} />}
       {action === 'LINK' && <PaymentLinkDialog family={family} account={a} onClose={() => setAction(null)} />}
     </div>
   );

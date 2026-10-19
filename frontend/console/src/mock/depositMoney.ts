@@ -29,6 +29,7 @@ import { P } from '../auth/permissions';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
 import { periods, rdPeriods } from './deposits';
+import { pledgeReleaseProblems } from './depositStanding';
 import { assertWithinLimit } from './limits';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
@@ -269,7 +270,8 @@ function fundingProblems(d: DepositAccount): string[] {
   return out;
 }
 
-const SOURCE_WORD: Record<string, string> = { ACCOUNT: 'from account', CASH: 'in cash', BANK_TRANSFER: 'by bank transfer', GATEWAY: 'through a payment link' };
+const SOURCE_WORD: Record<string, string> = { ACCOUNT: 'from account', CASH: 'in cash', BANK_TRANSFER: 'by bank transfer', GATEWAY: 'through a payment link',
+  STANDING_INSTRUCTION: 'by standing instruction' };
 const SOURCE_OF: Record<string, string> = Object.fromEntries(Object.entries(SOURCE_WORD).map(([k, v]) => [v, k]));
 
 /** As RecurringDeposit.latePenalty: Rs per 100 of the instalment for each month or part of a month late. */
@@ -390,6 +392,7 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
     if (h.holdId) {
       const hold = db.deposits.holds.find((x) => x.id === h.holdId);
       if (!hold || hold.status !== 'ACTIVE') throw conflict('Conflict', 'the hold is already released');
+      refuseIfAny('the hold cannot be released', pledgeReleaseProblems(db, hold));
       Object.assign(hold, { status: 'RELEASED', releasedOn: db.businessDate, releasedBy: maker, releaseReason: h.reason });
       approval.appliedRef = hold.id!;
     } else {
@@ -618,7 +621,8 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       module(mod);
       require(user, view);
       findAccount(db, params.id, family);
-      return ok(db.deposits.holds.filter((h) => h.accountId === params.id).sort((x, y) => (x.status === y.status ? 0 : x.status === 'ACTIVE' ? -1 : 1)).map(({ accountId: _a, ...h }) => h));
+      return ok(db.deposits.holds.filter((h) => h.accountId === params.id).sort((x, y) => (x.status === y.status ? 0 : x.status === 'ACTIVE' ? -1 : 1))
+        .map(({ accountId: _a, ...h }) => (h.loanId ? { ...h, loanStatus: db.loans.find((l) => l.id === h.loanId)?.state.status ?? h.loanStatus } : h)));
     });
     // P4-3: there is no deposit day-end in mock mode, so nothing is accrued; a term deposit shows its interest periods
     on('GET', `/api/v1/${base}/accounts/{id}/interest`, ({ user, params }) => {
@@ -702,6 +706,7 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
       const a = findAccount(db, h.accountId, family);
       const problems: string[] = [];
       if (h.status !== 'ACTIVE') problems.push('the hold is already released');
+      problems.push(...pledgeReleaseProblems(db, h));
       const reason = text(((body ?? {}) as { reason?: string }).reason, 500, 'reason', problems);
       if (!reason) problems.push('a reason is required');
       refuseIfAny('the hold cannot be released', problems);

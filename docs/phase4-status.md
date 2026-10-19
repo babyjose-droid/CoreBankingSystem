@@ -432,6 +432,10 @@ Charges, the minimum balance, closing accounts, closing a term deposit before ma
 ### Not verified here
 - **Gradle and Spring** and the real EOD scheduling; the live stack (`p4-4-smoke.py`).
 
+### Verified after the push (19-Oct-2026)
+- **Local stack.** `33a94ca` built; V34 applied. (A first build failed downloading jars from Maven Central; the rebuild worked.)
+- **Live test** (`p4-4-smoke.py`): 40 of 40. Charges with GST invoice and credit note, a savings closure, a maturity instruction and the maturities list, a premature closure, the NBFC lock-in and consent to renew, the trial balance on both tenants. Not yet run with `--eod`.
+
 ## Increment P4-5: recurring deposits
 
 A recurring deposit is a term deposit product of type RD: the amount booked is the monthly instalment, the first instalment is the funding, and each month earns on the instalments held through it.
@@ -478,5 +482,60 @@ A recurring deposit is a term deposit product of type RD: the amount booked is t
 ### Not verified here
 - **Gradle and Spring** and the real EOD scheduling; the live stack (`p4-5-smoke.py`).
 
-### Next: P4-5b
-Standing instructions (a transfer, a sweep to a loan instalment, a recurring deposit instalment) and a loan against a deposit. Next tenant migration: V36; next control migration: V5.
+### Verified after the push (19-Oct-2026)
+- **Local stack.** `cf57e9e` built; V35 applied; RD01 and RD02 seeded on the demo tenants.
+- **Live test** (`p4-5-smoke.py`): 23 of 24. The preview (462.40 interest, 12,462.40 at maturity), the booking refusals, funding as instalment 1, an instalment paid in advance from savings, the statement, the interest view, the trial balance on both tenants. The one failure was the script's: a deposit closed on its start date is refused for that reason before the NBFC lock-in is looked at (script corrected). The day-end interest step not yet run live (`--eod`).
+
+## Increment P4-5b: standing instructions and loans against deposits
+
+A savings or current account pays on its own: a fixed amount to another account, a loan's instalments, a recurring deposit's instalments. A term deposit secures a loan through a pledge.
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `StandingInstructionDates`: a payment falls due on its date and is tried again each day for the retry days (3), then left; a transfer every 1, 3, 6 or 12 months from its start date (a month without the day takes its last day).
+- `DepositLoans`: whether the deposits pledged secure a loan: at most a percentage of their value, a rate a spread above the highest deposit rate, none in a lock-in after a deposit is taken, the loan not running past a deposit's maturity. A deposit-taking NBFC's rule set fixes them (para 36(2): 75%, 2 points, 3 months); a bank lends on its own policy (settings `deposits.loan.max-percent` 90 and `deposits.loan.spread-percent` 1, placeholders).
+
+**Lending** (`LoanOperations.terms`): what a pledge and a standing instruction need of a loan: status, borrower, branch, amount sanctioned, rate, the date of its last instalment, and the head a repayment is received in.
+
+**Tenant database** (`V36__standing_instructions_and_pledges.sql`)
+- `deposits.standing_instruction` (TRANSFER, LOAN_INSTALMENT, RD_INSTALMENT; numbered SI00000001…): given on an active savings or current account, from the business date; a transfer to an active savings or current account with its amount and frequency; a loan of a holder of the account, sanctioned or active, one instruction per loan; an active recurring deposit with a holder in common, one per deposit. It never changes; it is cancelled with a reason, or ends by itself.
+- `deposits.standing_instruction_run`: one DONE per date paid, tied to the debit of its own kind (TRANSFER_OUT, LOAN_REPAYMENT, FUNDING_PAID) and its lot; one FAILED per date and business day an attempt failed, counting the attempts, with the reason.
+- Movement LOAN_REPAYMENT (a debit on a savings or current account; a term deposit takes none).
+- The job STANDING_INSTRUCTIONS (every 15 minutes; built in, on).
+- A pledge: `deposits.account_hold.loan_id`. Only a lien of an amount, only on a term deposit of the borrower, only for a sanctioned or active loan; one pledge per deposit; released only once the loan is closed or cancelled.
+
+**Application**
+- `StandingInstructions`: given and cancelled through a checker (`STANDING_INSTRUCTION` CREATE / CANCEL). Carried out by the job and right after end of day opens the next date (`EodListener`). Each payment in its own transaction with the instruction locked, whole or not at all, made by the system with no approval request:
+  - a transfer as a staff transfer is;
+  - a loan instalment: the account debited and the loan's collection head credited in the loan's branch, then `LoanOperations.postRepayment` in the same transaction, so the loan takes the repayment from that head (channel SI, reference the instruction's number). What is paid is what the loan says is due on the date: its demand, or the coming instalment less any advance held;
+  - a recurring deposit instalment through the instalment code of P4-5, with its late charge, recorded as paid by standing instruction.
+  An instruction ends when its end date and retry days have passed, the paying account is not active, the loan is closed, cancelled or written off, or the recurring deposit has nothing more to pay.
+- `DepositPledges`: the quote (the deposits pledged for the loan with this one, the most that may be lent, the lowest rate, every reason it cannot be), the pledge through a checker (`DEPOSIT_HOLD` PLEDGE, a lien of the deposit's balance naming the loan), the deposits pledged for a loan; a release asked for while the loan is open is refused.
+- Day-end step "Pledges of closed loans released", before maturities.
+- API: `GET`/`POST /casa/standing-instructions`, `GET /casa/standing-instructions/{id}`, `POST /casa/standing-instructions/{id}/cancel`, `GET /deposits/accounts/{id}/pledge-quote`, `POST /deposits/accounts/{id}/pledge`, `GET /deposits/pledges`. No new permission (casa:view, casa:transact, deposit:view, deposit:hold).
+
+**Console**
+- Savings and current account page: a Standing instructions card (also on a recurring deposit paid by one), New standing instruction, each instruction with its payments and attempts and Cancel.
+- Term deposit page: Pledge for a loan, with the quote; the Liens card names the loan. Loan page: Deposits pledged.
+- Mock mode: standing instructions carried out by the job's Run now; pledges; a pledge of a closed loan is released by hand (no deposit day-end in mock mode).
+
+### Choices made in this increment (to confirm: open item P4-22)
+- **Retry**: a payment not made on its date is tried on every run for 3 more days (a setting), then left; nothing is charged for a failed instruction.
+- **Whole or nothing**: a loan instalment is not part-paid from what the account has.
+- **Order**: instructions run in the order they were given; no priority between a loan and a transfer from the same account.
+- **A bank's loan against deposits**: up to 90% of the deposits at least 1 point above their rate (placeholder policy).
+- **The pledge** liens the deposit's balance on the day it is placed; interest credited later is not added to it.
+- **Not built: setting a deposit off against a loan in default** (closing the deposit and paying the loan from it), and renewing a pledged deposit at maturity: it waits as MATURED until the loan is closed.
+
+### Tests
+- **Engine:** 3 new tests (`StandingInstructionsAndLoansTest`); 105 pass in `deposits-core`.
+- **Tenant database:** 36 checks in the new `deposits_standing_test.sql`; all tenant and control suites pass (the platform suite now counts 7 housekeeping jobs).
+- **Application services:** in the build sandbox, with real loans (created, KFS accepted, disbursed through a checker), real approvals and real day-ends of lending and deposits: 46 checks on a bank (a monthly transfer paid once a date and given up after its retry days, a failed attempt recorded and counted and paid the next day, a recurring deposit's instalment paid on its due date, a loan instalment swept from savings on its due date with the loan taking it and not falling overdue, a fixed deposit pledged within the bank's policy and kept from closure, a release refused while the loan is open, the loan pre-closed and the pledge released by the day-end, the loan's instruction ended) and 10 on a deposit-taking NBFC (the 3-month lock-in, 75%, 2 points). The P4-4 and P4-5 scenarios still pass (68, 23, 37, 12).
+- **Console:** 7 new tests; 329 pass, typecheck and build clean.
+- **API contract:** 7 new operations; lint clean; every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring**: the job and the `EodListener` as Spring schedules them; the live stack (`p4-5b-smoke.py`). The demo tenants may have no loan for a depositor: the smoke then checks the instructions and skips the pledge quote.
+
+### Next: P4-6
+Cheques (cheque book, stop payment, a clearing simulator), dormant, inoperative and unclaimed accounts, the NBFC register of deposits and the 1.5 × NOF cap. Next tenant migration: V37; next control migration: V5.

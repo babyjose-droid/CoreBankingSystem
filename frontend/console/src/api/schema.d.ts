@@ -3658,6 +3658,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/standing-instructions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The standing instructions an account pays or is paid by, or that pay a loan
+         * @description Module CASA. Permission casa:view. One of accountId and loanId is required. Active first, newest first.
+         */
+        get: operations["listStandingInstructions"];
+        put?: never;
+        /**
+         * Propose a standing instruction (maker-checker)
+         * @description Module CASA. Permission casa:transact. P4-5b. A checker approves it. The job STANDING_INSTRUCTIONS (every 15 minutes, and right after end of day) carries it out: each payment from its date, whole or not at all, tried again for the retry days (setting deposits.si.retry-days, 3) when it cannot be made. 422 with every reason it cannot be given.
+         */
+        post: operations["proposeStandingInstruction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/standing-instructions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A standing instruction with its runs
+         * @description Module CASA. Permission casa:view. 404 outside the caller's branch scope.
+         */
+        get: operations["getStandingInstruction"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/standing-instructions/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose cancelling a standing instruction, with a reason (maker-checker)
+         * @description Module CASA. Permission casa:transact. A checker approves it; nothing more is paid under it.
+         */
+        post: operations["proposeStandingInstructionCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/pledge-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What pledging a term deposit for a loan would give, and why it cannot be
+         * @description Module TD. Permission deposit:view. P4-5b.
+         */
+        get: operations["getPledgeQuote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/pledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose pledging a term deposit for a loan (maker-checker)
+         * @description Module TD. Permission deposit:hold. P4-5b. A lien of the deposit's balance that names the loan. At a deposit-taking NBFC the loan is at most 75% of the deposits pledged, at least 2 points above their rate, and none within three months of a deposit; at a bank the tenant's policy applies (deposits.loan.max-percent, deposits.loan.spread-percent). The loan does not run past a deposit's maturity. The pledge is released once the loan is closed (by the day-end, or a staff release).
+         */
+        post: operations["proposeDepositPledge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/pledges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The deposits pledged for a loan
+         * @description Module TD. Permission deposit:view. 404 for a loan outside the caller's branch scope.
+         */
+        get: operations["listLoanPledges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/casa/transfers": {
         parameters: {
             query?: never;
@@ -6247,7 +6371,7 @@ export interface components {
             code?: string;
             name?: string;
             /** @enum {string} */
-            kind?: "REPORT" | "DASHBOARD_REFRESH" | "KYC_EXPIRY" | "CONSENT_EXPIRY" | "EXPORT_CLEANUP" | "USAGE_SNAPSHOT" | "DEFERRED_RECEIPTS";
+            kind?: "REPORT" | "DASHBOARD_REFRESH" | "KYC_EXPIRY" | "CONSENT_EXPIRY" | "EXPORT_CLEANUP" | "USAGE_SNAPSHOT" | "DEFERRED_RECEIPTS" | "STANDING_INSTRUCTIONS";
             /** @description Six-field cron in IST */
             schedule?: string | null;
             enabled?: boolean;
@@ -6845,10 +6969,10 @@ export interface components {
             /** Format: date */
             valueDate?: string;
             /**
-             * @description INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)
+             * @description LOAN_REPAYMENT: a loan instalment paid by a standing instruction (P4-5b). INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)
              * @enum {string}
              */
-            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL" | "RD_INSTALMENT" | "RD_LATE_CHARGE";
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL" | "RD_INSTALMENT" | "RD_LATE_CHARGE" | "LOAN_REPAYMENT";
             /** @enum {string} */
             direction?: "DEBIT" | "CREDIT";
             amount?: components["schemas"]["Money"];
@@ -7025,6 +7149,159 @@ export interface components {
             releasedOn?: string | null;
             releasedBy?: string | null;
             releaseReason?: string | null;
+            /**
+             * Format: uuid
+             * @description A pledge (P4-5b): the loan the deposit secures
+             */
+            loanId?: string | null;
+            loanNo?: string | null;
+            /** @description The pledge is released once the loan is CLOSED or CANCELLED */
+            loanStatus?: string | null;
+        };
+        /** @description TRANSFER needs toAccountId (a savings or current account), amount and everyMonths. LOAN_INSTALMENT needs loanId (a loan of a holder of the paying account) and pays what falls due on each instalment date. RD_INSTALMENT needs toAccountId (an active recurring deposit with a holder in common) and pays each instalment, with its late charge when late. */
+        StandingInstructionInput: {
+            /**
+             * Format: uuid
+             * @description The active savings or current account that pays
+             */
+            fromAccountId: string;
+            /** @enum {string} */
+            kind: "TRANSFER" | "LOAN_INSTALMENT" | "RD_INSTALMENT";
+            /** Format: uuid */
+            toAccountId?: string | null;
+            /** Format: uuid */
+            loanId?: string | null;
+            /** @description TRANSFER only */
+            amount?: number | string | null;
+            /**
+             * @description TRANSFER only: paid on the start date and every this many months after
+             * @enum {integer|null}
+             */
+            everyMonths?: 1 | 3 | 6 | 12 | null;
+            /**
+             * Format: date
+             * @description Default the business date; not before it
+             */
+            startOn?: string | null;
+            /**
+             * Format: date
+             * @description None for no end; an instruction also ends when there is nothing more to pay
+             */
+            endOn?: string | null;
+            narration?: string | null;
+        };
+        StandingInstruction: {
+            /** Format: uuid */
+            id?: string;
+            instructionNo?: string;
+            /** @enum {string} */
+            kind?: "TRANSFER" | "LOAN_INSTALMENT" | "RD_INSTALMENT";
+            /** Format: uuid */
+            fromAccountId?: string;
+            fromAccountNo?: string;
+            /** Format: uuid */
+            toAccountId?: string | null;
+            toAccountNo?: string | null;
+            /** Format: uuid */
+            loanId?: string | null;
+            loanNo?: string | null;
+            amount?: string | null;
+            everyMonths?: number | null;
+            /** Format: date */
+            startOn?: string;
+            /** Format: date */
+            endOn?: string | null;
+            narration?: string | null;
+            /** @enum {string} */
+            status?: "ACTIVE" | "CANCELLED" | "ENDED";
+            createdBy?: string;
+            /** Format: date */
+            closedOn?: string | null;
+            closedBy?: string | null;
+            /** @description Why it was cancelled, or why it ended by itself (the end date passed, the loan closed …) */
+            closeReason?: string | null;
+            /**
+             * Format: date
+             * @description The latest date a payment was made for
+             */
+            lastPaidFor?: string | null;
+            paidCount?: number;
+        };
+        StandingInstructionDetail: components["schemas"]["StandingInstruction"] & {
+            /** @description The latest 100: one DONE per date paid; one FAILED per date and business day an attempt failed, with how many attempts */
+            runs?: {
+                /** Format: date */
+                forDate?: string;
+                /** Format: date */
+                businessDate?: string;
+                /** @enum {string} */
+                status?: "DONE" | "FAILED";
+                amount?: string | null;
+                reason?: string | null;
+                attempts?: number;
+                /** Format: uuid */
+                movementId?: string | null;
+                /** Format: uuid */
+                loanTxnId?: string | null;
+            }[];
+        };
+        DepositPledgeInput: {
+            /**
+             * Format: uuid
+             * @description A sanctioned or active loan of a holder of the deposit
+             */
+            loanId: string;
+            /** @description The sanction letter or loan agreement */
+            reason: string;
+        };
+        /** @description What pledging the deposit for the loan would give: the deposits pledged for the loan with this one, the most that may be lent against them and the lowest rate the loan may carry, and every reason the pledge cannot be placed. Nothing changes. */
+        PledgeQuote: {
+            /** Format: uuid */
+            depositId?: string;
+            depositNo?: string;
+            /** Format: uuid */
+            loanId?: string;
+            loanNo?: string;
+            loanStatus?: string;
+            sanctioned?: string;
+            loanRatePercent?: string;
+            /** Format: date */
+            loanMaturity?: string;
+            /** @description The lien placed on this deposit (its balance) */
+            lien?: string;
+            maxPercent?: string;
+            spreadPercent?: string;
+            lockInMonths?: number;
+            maxLoan?: string;
+            minRatePercent?: string;
+            deposits?: {
+                depositNo?: string;
+                value?: string;
+                ratePercent?: string;
+                /** Format: date */
+                maturityDate?: string | null;
+                thisOne?: boolean;
+            }[];
+            problems?: string[];
+        };
+        LoanPledge: {
+            /** Format: uuid */
+            holdId?: string;
+            /** Format: uuid */
+            depositId?: string;
+            depositNo?: string;
+            amount?: string;
+            /** @enum {string} */
+            status?: "ACTIVE" | "RELEASED";
+            /** Format: date */
+            placedOn?: string;
+            /** Format: date */
+            releasedOn?: string | null;
+            reason?: string;
+            depositRatePercent?: string;
+            /** Format: date */
+            depositMaturity?: string | null;
+            depositStatus?: string;
         };
         DepositAccountSummary: {
             /** Format: uuid */
@@ -12663,6 +12940,162 @@ export interface operations {
         };
         responses: {
             202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listStandingInstructions: {
+        parameters: {
+            query?: {
+                accountId?: string;
+                loanId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandingInstruction"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeStandingInstruction: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StandingInstructionInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getStandingInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandingInstructionDetail"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeStandingInstructionCancel: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getPledgeQuote: {
+        parameters: {
+            query: {
+                loanId: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PledgeQuote"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeDepositPledge: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositPledgeInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLoanPledges: {
+        parameters: {
+            query: {
+                loanId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanPledge"][];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };

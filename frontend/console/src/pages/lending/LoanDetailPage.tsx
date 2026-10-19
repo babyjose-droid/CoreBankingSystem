@@ -15,6 +15,8 @@ import { LoanDocumentsTab, LoanPartiesTab } from './LoanDocuments';
 import { LoanActionDialog, type LoanAction } from './loanActions';
 import { amendmentKindLabel } from './restructuring';
 import { FloatingRateCard } from './rateResets';
+import { LoanPledgesCard } from '../deposits/StandingInstructions';
+import { useDepositModules } from '../deposits/common';
 
 const REVERSIBLE = new Set(['REPAYMENT', 'PREPAYMENT', 'FEE_CHARGE', 'WAIVER', 'PRECLOSURE', 'CANCELLATION', 'AMENDMENT']);
 /** Rate changes made by the day-end under the contract: no maker or checker. */
@@ -23,6 +25,7 @@ const SYSTEM_KINDS = new Set(['RATE_RESET', 'RATE_STEP']);
 export function LoanDetailPage() {
   const { id } = useParams();
   const me = useMe().data!;
+  const deposits = useDepositModules();
   const day = useBusinessDay();
   const businessDate = day.data?.businessDate ?? me.businessDate;
   const q = useLoan(id);
@@ -124,6 +127,7 @@ export function LoanDetailPage() {
       )}
       <LoanSummaryStats loan={loan} coolingOffEnd={inCoolingOff ? coolingOffEnd : null} />
       <FloatingRateCard loan={loan} />
+      {deposits.td && loan.id && <LoanPledgesCard loanId={loan.id} />}
       {customDefs.length > 0 && Object.keys(loan.custom ?? {}).length > 0 && (
         <Card title="Additional details">
           <CustomFieldValues defs={customDefs} values={loan.custom as Record<string, unknown>} />

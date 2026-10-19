@@ -25,8 +25,20 @@ public interface LoanOperations {
     /** @param charged false when the product has no fee for a bounce; {@code note} says so */
     record BounceCharge(boolean charged, String feeCode, String note) {}
 
+    /**
+     * What a loan secured by deposits, or paid by a standing instruction, needs to know (P4-5b).
+     *
+     * @param maturity     the due date of the last instalment (of the schedule while sanctioned)
+     * @param collectionGl the head a repayment is received in; null while the loan is not active
+     */
+    record Terms(UUID loanId, String loanNo, UUID customerId, String branch, String status, BigDecimal sanctioned, BigDecimal ratePercent,
+                 LocalDate maturity, String collectionGl) {}
+
     /** @throws com.corebanking.platform.ApiException 404 when there is no such loan */
     LoanRef find(UUID loanId);
+
+    /** @throws com.corebanking.platform.ApiException 404 when there is no such loan */
+    Terms terms(UUID loanId);
 
     LoanRef findByNo(String loanNo);
 

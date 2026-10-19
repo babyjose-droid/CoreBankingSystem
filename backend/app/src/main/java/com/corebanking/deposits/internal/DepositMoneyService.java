@@ -354,6 +354,7 @@ public class DepositMoneyService implements DepositOperations {
         Account a = account((UUID) hold.get("account_id"), family, true);
         List<String> problems = new ArrayList<>();
         if (!"ACTIVE".equals(hold.get("status"))) problems.add("the hold is already released");
+        problems.addAll(DepositPledges.releaseProblems(jdbc, holdId));
         String reason = in == null ? null : text(in.reason(), 500, "reason", problems);
         if (reason == null) problems.add("a reason is required");
         DepositAccountService.refuseIfAny("the hold cannot be released", problems);
@@ -615,6 +616,56 @@ public class DepositMoneyService implements DepositOperations {
                 approvalId, maker);
         checkNow();
         return in;
+    }
+
+    // ================================================================================================ standing instructions (P4-5b)
+
+    /** What a standing instruction paid: the debit to the paying account, its lot and the amount debited. */
+    record Paid(UUID movementId, UUID lotId, BigDecimal amount) {}
+
+    /** A transfer made by a standing instruction: as a staff transfer, by the system, with no approval request. */
+    Paid siTransfer(Account from, Account to, BigDecimal amount, String reference, String narration) {
+        List<String> problems = new ArrayList<>(movementProblems(from, Direction.DEBIT, amount, false));
+        for (String p : movementProblems(to, Direction.CREDIT, amount, false)) problems.add("account " + to.accountNo() + ": " + p);
+        DepositAccountService.refuseIfAny("the transfer cannot be made", problems);
+        TransactionLot lot = new DepositPostings(heads(), days.requireOpen()).transfer(from.leg(), to.leg(), amount, reference, narration);
+        postings.post(lot, CurrentUser.username());
+        UUID out = insertMovement(from.id(), "TRANSFER_OUT", "DEBIT", amount, lot.id(), reference, narration, to.id(), null, null, CurrentUser.username());
+        insertMovement(to.id(), "TRANSFER_IN", "CREDIT", amount, lot.id(), reference, narration, from.id(), null, null, CurrentUser.username());
+        checkNow();
+        return new Paid(out, lot.id(), amount);
+    }
+
+    /**
+     * The deposit side of a loan instalment paid by a standing instruction: the paying account is debited and the loan's
+     * collection head credited, in the loan's branch. The loan then takes the repayment from that head
+     * ({@link com.corebanking.lending.LoanOperations#postRepayment}), in the same transaction.
+     */
+    Paid siLoanRepayment(Account from, com.corebanking.lending.LoanOperations.Terms loan, BigDecimal amount, String reference, String narration) {
+        if (loan.collectionGl() == null) throw ApiException.conflict("loan " + loan.loanNo() + " is " + loan.status() + "; it takes no repayment");
+        DepositAccountService.refuseIfAny("the instalment cannot be paid", movementProblems(from, Direction.DEBIT, amount, false));
+        Leg collection = new Leg(loan.branch(), loan.collectionGl(), loan.collectionGl());
+        TransactionLot lot = new DepositPostings(heads(), days.requireOpen()).transfer(from.leg(), collection, amount, reference, narration);
+        postings.post(lot, CurrentUser.username());
+        UUID out = insertMovement(from.id(), "LOAN_REPAYMENT", "DEBIT", amount, lot.id(), reference, narration, null, null, null, CurrentUser.username());
+        checkNow();
+        return new Paid(out, lot.id(), amount);
+    }
+
+    /** The next instalment of a recurring deposit, paid by a standing instruction from a savings or current account. */
+    Paid siRdInstalment(Account from, Account rd, String reference) {
+        UUID in = payInstalment(rd, from, "STANDING_INSTRUCTION", reference, 0, null, CurrentUser.username());
+        Map<String, Object> m = jdbc.queryForMap("""
+                SELECT o.id, o.lot_id, (SELECT coalesce(sum(x.amount), 0) FROM deposits.movement x WHERE x.lot_id = o.lot_id AND x.account_id = o.account_id)::numeric AS paid
+                  FROM deposits.movement o JOIN deposits.movement i ON i.lot_id = o.lot_id
+                 WHERE i.id = ? AND o.account_id = ? AND o.kind = 'FUNDING_PAID'
+                """, in, from.id());
+        return new Paid((UUID) m.get("id"), (UUID) m.get("lot_id"), (BigDecimal) m.get("paid"));
+    }
+
+    /** Why the paying account cannot pay this amount now; empty when it can. */
+    List<String> debitProblems(Account from, BigDecimal amount) {
+        return movementProblems(from, Direction.DEBIT, amount, false);
     }
 
     // ================================================================================================ the gateway (DepositOperations)
@@ -915,8 +966,10 @@ public class DepositMoneyService implements DepositOperations {
     public List<Map<String, Object>> holdList(String family, UUID accountId) {
         account(accountId, family, true);
         return jdbc.query("""
-                SELECT id, kind, amount, reason, reference, status, placed_on, placed_by, released_on, released_by, release_reason
-                  FROM deposits.account_hold WHERE account_id = ? ORDER BY status = 'ACTIVE' DESC, created_at DESC
+                SELECT h.id, h.kind, h.amount, h.reason, h.reference, h.status, h.placed_on, h.placed_by, h.released_on, h.released_by, h.release_reason,
+                       h.loan_id::text, l.loan_no, l.status
+                  FROM deposits.account_hold h LEFT JOIN lending.loan_account l ON l.id = h.loan_id
+                 WHERE h.account_id = ? ORDER BY h.status = 'ACTIVE' DESC, h.created_at DESC
                 """, (rs, i) -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("id", rs.getString(1));
@@ -930,6 +983,9 @@ public class DepositMoneyService implements DepositOperations {
                     m.put("releasedOn", rs.getObject(9, LocalDate.class));
                     m.put("releasedBy", rs.getString(10));
                     m.put("releaseReason", rs.getString(11));
+                    m.put("loanId", rs.getString(12));
+                    m.put("loanNo", rs.getString(13));
+                    m.put("loanStatus", rs.getString(14));
                     return m;
                 }, accountId);
     }
@@ -949,7 +1005,7 @@ public class DepositMoneyService implements DepositOperations {
     // ================================================================================================ checks
 
     /** Why money may not move in this direction on this account; empty when it may. */
-    private List<String> movementProblems(Account a, Direction d, BigDecimal amount, boolean correction) {
+    List<String> movementProblems(Account a, Direction d, BigDecimal amount, boolean correction) {
         List<String> out = new ArrayList<>();
         if (DepositProductService.CASA.equals(a.family()) && !"ACTIVE".equals(a.status())) out.add("account " + a.accountNo() + " is " + a.status());
         if (amount == null) {
@@ -1029,7 +1085,7 @@ public class DepositMoneyService implements DepositOperations {
     }
 
     /** Runs the deferred checks of tenant V30 now, so a refusal is this request's answer; then defers them again. */
-    private void checkNow() {
+    void checkNow() {
         jdbc.execute("SET CONSTRAINTS deposits.movement_matches_lot, deposits.movement_funded, deposits.account_funded, deposits.term_deposit_funded,"
                 + " deposits.movement_rd_instalment IMMEDIATE");
         jdbc.execute("SET CONSTRAINTS deposits.movement_matches_lot, deposits.movement_funded, deposits.account_funded, deposits.term_deposit_funded,"
@@ -1042,7 +1098,7 @@ public class DepositMoneyService implements DepositOperations {
      * An account of the family (any family when null). With {@code scoped}, it must be in the caller's branches;
      * outside them it is not found.
      */
-    private Account account(UUID id, String family, boolean scoped) {
+    Account account(UUID id, String family, boolean scoped) {
         if (id == null) throw ApiException.invalid("the account is required");
         List<Account> rows = jdbc.query("""
                 SELECT a.id, a.account_no, a.family, a.status, a.branch_code, p.gl_liability, a.customer_id
@@ -1069,7 +1125,7 @@ public class DepositMoneyService implements DepositOperations {
                         rs.getBigDecimal(5), rs.getObject(6, UUID.class), rs.getObject(7, UUID.class)), lotId);
     }
 
-    private BigDecimal balance(UUID accountId) {
+    BigDecimal balance(UUID accountId) {
         List<BigDecimal> b = jdbc.queryForList("SELECT balance FROM deposits.account_balance WHERE account_id = ?", BigDecimal.class, accountId);
         return b.isEmpty() ? BigDecimal.ZERO : b.get(0);
     }
@@ -1079,7 +1135,7 @@ public class DepositMoneyService implements DepositOperations {
                 (rs, i) -> new Hold(AccountHolds.Kind.valueOf(rs.getString(1)), rs.getBigDecimal(2), rs.getString(3)), accountId);
     }
 
-    private boolean holds(UUID accountId, UUID customerId) {
+    boolean holds(UUID accountId, UUID customerId) {
         return !jdbc.queryForList("SELECT 1 FROM deposits.account_holder WHERE account_id = ? AND customer_id = ?", accountId, customerId).isEmpty();
     }
 
@@ -1099,7 +1155,7 @@ public class DepositMoneyService implements DepositOperations {
                 """, depositId);
     }
 
-    private UUID insertMovement(UUID accountId, String kind, String direction, BigDecimal amount, UUID lotId, String reference, String narration,
+    UUID insertMovement(UUID accountId, String kind, String direction, BigDecimal amount, UUID lotId, String reference, String narration,
                                 UUID counterparty, SealedBankAccount party, UUID approvalId, String maker) {
         UUID id = UUID.randomUUID();
         LocalDate today = days.requireOpen();
@@ -1116,7 +1172,7 @@ public class DepositMoneyService implements DepositOperations {
     }
 
     /** The settlement heads from the tenant's settings (tenant V30), with the starter chart's as defaults. */
-    private DepositPostings.Heads heads() {
+    DepositPostings.Heads heads() {
         return headsOf(jdbc);
     }
 
@@ -1188,13 +1244,17 @@ public class DepositMoneyService implements DepositOperations {
     @Service
     static class HoldApplier implements ApprovalApplier {
         private final DepositMoneyService money;
+        private final DepositPledges pledges;
 
-        HoldApplier(@Lazy DepositMoneyService money) {
+        HoldApplier(@Lazy DepositMoneyService money, @Lazy DepositPledges pledges) {
             this.money = money;
+            this.pledges = pledges;
         }
 
         @Override public String entityType() { return HOLD_ENTITY; }
 
-        @Override public String apply(ApprovalRequest r) { return money.applyHold(r); }
+        @Override public String apply(ApprovalRequest r) {
+            return DepositPledges.PLEDGE.equals(r.action()) ? pledges.apply(r) : money.applyHold(r);
+        }
     }
 }

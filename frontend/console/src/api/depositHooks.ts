@@ -25,6 +25,12 @@ import type {
   DepositTransferInput,
   TermDepositFundingInput,
   RdInstalmentInput,
+  StandingInstruction,
+  StandingInstructionDetail,
+  StandingInstructionInput,
+  DepositPledgeInput,
+  PledgeQuote,
+  LoanPledge,
   RdInstalments,
   DepositAccountSummary,
   DepositCollectionOrderInput,
@@ -178,7 +184,7 @@ export function useBookTermDeposit() {
 function useMoneyInvalidation() {
   const qc = useQueryClient();
   return () => {
-    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote', 'rd-instalments'])
+    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote', 'rd-instalments', 'standing-instructions', 'standing-instruction', 'loan-pledges', 'pledge-quote'])
       qc.invalidateQueries({ queryKey: [key] });
   };
 }
@@ -502,5 +508,73 @@ export function useDepositMaturities(from: string | null, to: string | null) {
     queryKey: ['deposit-maturities', from, to],
     queryFn: () =>
       unwrap<DepositMaturity[]>(api.GET('/api/v1/deposits/maturities', { params: { query: { ...(from ? { from } : {}), ...(to ? { to } : {}) } } }) as never),
+  });
+}
+
+// ---- standing instructions and pledges (P4-5b) ----------------------------------------------------------------
+
+export function useStandingInstructions(f: { accountId?: string; loanId?: string }, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['standing-instructions', f.accountId ?? null, f.loanId ?? null],
+    queryFn: () =>
+      unwrap<StandingInstruction[]>(api.GET('/api/v1/casa/standing-instructions', { params: { query: { accountId: f.accountId, loanId: f.loanId } } }) as never),
+    enabled: enabled && !!(f.accountId || f.loanId),
+  });
+}
+
+export function useStandingInstruction(id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['standing-instruction', id],
+    queryFn: () => unwrap<StandingInstructionDetail>(api.GET('/api/v1/casa/standing-instructions/{id}', { params: { path: { id: id! } } }) as never),
+    enabled: !!id,
+  });
+}
+
+export function useProposeStandingInstruction() {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: StandingInstructionInput) => unwrap<Approval>(api.POST('/api/v1/casa/standing-instructions', { body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useCancelStandingInstruction(id: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (reason: string) =>
+      unwrap<Approval>(api.POST('/api/v1/casa/standing-instructions/{id}/cancel', { params: { path: { id } }, body: { reason } }) as never),
+    onSuccess: done,
+  });
+}
+
+export function usePledgeQuote(depositId: string | undefined, loanId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['pledge-quote', depositId, loanId],
+    queryFn: () =>
+      unwrap<PledgeQuote>(api.GET('/api/v1/deposits/accounts/{id}/pledge-quote', { params: { path: { id: depositId! }, query: { loanId: loanId! } } }) as never),
+    enabled: !!depositId && !!loanId,
+  });
+}
+
+export function useProposePledge(depositId: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: DepositPledgeInput) => unwrap<Approval>(api.POST('/api/v1/deposits/accounts/{id}/pledge', { params: { path: { id: depositId } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useLoanPledges(loanId: string | undefined, enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['loan-pledges', loanId],
+    queryFn: () => unwrap<LoanPledge[]>(api.GET('/api/v1/deposits/pledges', { params: { query: { loanId: loanId! } } }) as never),
+    enabled: enabled && !!loanId,
   });
 }

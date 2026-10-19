@@ -3963,6 +3963,124 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/standing-instructions:
+    get:
+      tags: [Deposits]
+      operationId: listStandingInstructions
+      summary: The standing instructions an account pays or is paid by, or that pay a loan
+      description: Module CASA. Permission casa:view. One of accountId and loanId is required. Active first, newest first.
+      parameters:
+        - { name: accountId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: loanId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/StandingInstruction' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeStandingInstruction
+      summary: Propose a standing instruction (maker-checker)
+      description: >-
+        Module CASA. Permission casa:transact. P4-5b. A checker approves it. The job STANDING_INSTRUCTIONS (every 15 minutes, and
+        right after end of day) carries it out: each payment from its date, whole or not at all, tried again for the retry days
+        (setting deposits.si.retry-days, 3) when it cannot be made. 422 with every reason it cannot be given.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StandingInstructionInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/standing-instructions/{id}:
+    get:
+      tags: [Deposits]
+      operationId: getStandingInstruction
+      summary: A standing instruction with its runs
+      description: Module CASA. Permission casa:view. 404 outside the caller's branch scope.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StandingInstructionDetail' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/standing-instructions/{id}/cancel:
+    post:
+      tags: [Deposits]
+      operationId: proposeStandingInstructionCancel
+      summary: Propose cancelling a standing instruction, with a reason (maker-checker)
+      description: Module CASA. Permission casa:transact. A checker approves it; nothing more is paid under it.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/pledge-quote:
+    get:
+      tags: [Deposits]
+      operationId: getPledgeQuote
+      summary: What pledging a term deposit for a loan would give, and why it cannot be
+      description: Module TD. Permission deposit:view. P4-5b.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: loanId, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PledgeQuote' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/pledge:
+    post:
+      tags: [Deposits]
+      operationId: proposeDepositPledge
+      summary: Propose pledging a term deposit for a loan (maker-checker)
+      description: >-
+        Module TD. Permission deposit:hold. P4-5b. A lien of the deposit's balance that names the loan. At a deposit-taking NBFC
+        the loan is at most 75% of the deposits pledged, at least 2 points above their rate, and none within three months of a
+        deposit; at a bank the tenant's policy applies (deposits.loan.max-percent, deposits.loan.spread-percent). The loan does
+        not run past a deposit's maturity. The pledge is released once the loan is closed (by the day-end, or a staff release).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepositPledgeInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/pledges:
+    get:
+      tags: [Deposits]
+      operationId: listLoanPledges
+      summary: The deposits pledged for a loan
+      description: Module TD. Permission deposit:view. 404 for a loan outside the caller's branch scope.
+      parameters:
+        - { name: loanId, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LoanPledge' } }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/casa/transfers:
     post:
       tags: [Deposits]
@@ -6331,7 +6449,7 @@ components:
       properties:
         code: { type: string }
         name: { type: string }
-        kind: { type: string, enum: [REPORT, DASHBOARD_REFRESH, KYC_EXPIRY, CONSENT_EXPIRY, EXPORT_CLEANUP, USAGE_SNAPSHOT, DEFERRED_RECEIPTS] }
+        kind: { type: string, enum: [REPORT, DASHBOARD_REFRESH, KYC_EXPIRY, CONSENT_EXPIRY, EXPORT_CLEANUP, USAGE_SNAPSHOT, DEFERRED_RECEIPTS, STANDING_INSTRUCTIONS] }
         schedule: { type: [string, 'null'], description: Six-field cron in IST }
         enabled: { type: boolean }
         parameters: { type: object, additionalProperties: true }
@@ -6829,7 +6947,7 @@ components:
         seq: { type: integer, description: The order movements were made in }
         businessDate: { type: string, format: date }
         valueDate: { type: string, format: date }
-        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL, RD_INSTALMENT, RD_LATE_CHARGE], description: 'INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)' }
+        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL, RD_INSTALMENT, RD_LATE_CHARGE, LOAN_REPAYMENT], description: 'LOAN_REPAYMENT: a loan instalment paid by a standing instruction (P4-5b). INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)' }
         direction: { type: string, enum: [DEBIT, CREDIT] }
         amount: { $ref: '#/components/schemas/Money' }
         balanceAfter: { $ref: '#/components/schemas/Money' }
@@ -6969,6 +7087,120 @@ components:
         releasedOn: { type: [string, 'null'], format: date }
         releasedBy: { type: [string, 'null'] }
         releaseReason: { type: [string, 'null'] }
+        loanId: { type: [string, 'null'], format: uuid, description: 'A pledge (P4-5b): the loan the deposit secures' }
+        loanNo: { type: [string, 'null'] }
+        loanStatus: { type: [string, 'null'], description: 'The pledge is released once the loan is CLOSED or CANCELLED' }
+    StandingInstructionInput:
+      type: object
+      required: [fromAccountId, kind]
+      description: >-
+        TRANSFER needs toAccountId (a savings or current account), amount and everyMonths. LOAN_INSTALMENT needs loanId (a loan of a
+        holder of the paying account) and pays what falls due on each instalment date. RD_INSTALMENT needs toAccountId (an active
+        recurring deposit with a holder in common) and pays each instalment, with its late charge when late.
+      properties:
+        fromAccountId: { type: string, format: uuid, description: The active savings or current account that pays }
+        kind: { type: string, enum: [TRANSFER, LOAN_INSTALMENT, RD_INSTALMENT] }
+        toAccountId: { type: [string, 'null'], format: uuid }
+        loanId: { type: [string, 'null'], format: uuid }
+        amount: { type: [number, string, 'null'], description: TRANSFER only }
+        everyMonths: { type: [integer, 'null'], enum: [1, 3, 6, 12, null], description: 'TRANSFER only: paid on the start date and every this many months after' }
+        startOn: { type: [string, 'null'], format: date, description: Default the business date; not before it }
+        endOn: { type: [string, 'null'], format: date, description: 'None for no end; an instruction also ends when there is nothing more to pay' }
+        narration: { type: [string, 'null'], maxLength: 200 }
+    StandingInstruction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        instructionNo: { type: string }
+        kind: { type: string, enum: [TRANSFER, LOAN_INSTALMENT, RD_INSTALMENT] }
+        fromAccountId: { type: string, format: uuid }
+        fromAccountNo: { type: string }
+        toAccountId: { type: [string, 'null'], format: uuid }
+        toAccountNo: { type: [string, 'null'] }
+        loanId: { type: [string, 'null'], format: uuid }
+        loanNo: { type: [string, 'null'] }
+        amount: { type: [string, 'null'] }
+        everyMonths: { type: [integer, 'null'] }
+        startOn: { type: string, format: date }
+        endOn: { type: [string, 'null'], format: date }
+        narration: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, CANCELLED, ENDED] }
+        createdBy: { type: string }
+        closedOn: { type: [string, 'null'], format: date }
+        closedBy: { type: [string, 'null'] }
+        closeReason: { type: [string, 'null'], description: 'Why it was cancelled, or why it ended by itself (the end date passed, the loan closed …)' }
+        lastPaidFor: { type: [string, 'null'], format: date, description: The latest date a payment was made for }
+        paidCount: { type: integer }
+    StandingInstructionDetail:
+      allOf:
+        - { $ref: '#/components/schemas/StandingInstruction' }
+        - type: object
+          properties:
+            runs:
+              type: array
+              description: 'The latest 100: one DONE per date paid; one FAILED per date and business day an attempt failed, with how many attempts'
+              items:
+                type: object
+                properties:
+                  forDate: { type: string, format: date }
+                  businessDate: { type: string, format: date }
+                  status: { type: string, enum: [DONE, FAILED] }
+                  amount: { type: [string, 'null'] }
+                  reason: { type: [string, 'null'] }
+                  attempts: { type: integer }
+                  movementId: { type: [string, 'null'], format: uuid }
+                  loanTxnId: { type: [string, 'null'], format: uuid }
+    DepositPledgeInput:
+      type: object
+      required: [loanId, reason]
+      properties:
+        loanId: { type: string, format: uuid, description: A sanctioned or active loan of a holder of the deposit }
+        reason: { type: string, maxLength: 500, description: 'The sanction letter or loan agreement' }
+    PledgeQuote:
+      type: object
+      description: >-
+        What pledging the deposit for the loan would give: the deposits pledged for the loan with this one, the most that may be lent
+        against them and the lowest rate the loan may carry, and every reason the pledge cannot be placed. Nothing changes.
+      properties:
+        depositId: { type: string, format: uuid }
+        depositNo: { type: string }
+        loanId: { type: string, format: uuid }
+        loanNo: { type: string }
+        loanStatus: { type: string }
+        sanctioned: { type: string }
+        loanRatePercent: { type: string }
+        loanMaturity: { type: string, format: date }
+        lien: { type: string, description: The lien placed on this deposit (its balance) }
+        maxPercent: { type: string }
+        spreadPercent: { type: string }
+        lockInMonths: { type: integer }
+        maxLoan: { type: string }
+        minRatePercent: { type: string }
+        deposits:
+          type: array
+          items:
+            type: object
+            properties:
+              depositNo: { type: string }
+              value: { type: string }
+              ratePercent: { type: string }
+              maturityDate: { type: [string, 'null'], format: date }
+              thisOne: { type: boolean }
+        problems: { type: array, items: { type: string } }
+    LoanPledge:
+      type: object
+      properties:
+        holdId: { type: string, format: uuid }
+        depositId: { type: string, format: uuid }
+        depositNo: { type: string }
+        amount: { type: string }
+        status: { type: string, enum: [ACTIVE, RELEASED] }
+        placedOn: { type: string, format: date }
+        releasedOn: { type: [string, 'null'], format: date }
+        reason: { type: string }
+        depositRatePercent: { type: string }
+        depositMaturity: { type: [string, 'null'], format: date }
+        depositStatus: { type: string }
     DepositAccountSummary:
       type: object
       properties:

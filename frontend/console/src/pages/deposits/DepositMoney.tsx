@@ -43,6 +43,7 @@ const KIND_LABEL: Record<string, string> = {
   RENEWAL: 'Renewed into a new deposit',
   RD_INSTALMENT: 'Instalment',
   RD_LATE_CHARGE: 'Late charge on an instalment',
+  LOAN_REPAYMENT: 'Loan instalment (standing instruction)',
 };
 const HOLD_LABEL: Record<string, string> = { DEBIT_FREEZE: 'Debit freeze', CREDIT_FREEZE: 'Credit freeze', TOTAL_FREEZE: 'Total freeze', LIEN: 'Lien' };
 const GATEWAY: Record<string, { label: string; tone: 'info' | 'ok' | 'warn' }> = {
@@ -181,7 +182,7 @@ export function HoldsCard({ family, accountId, canRelease }: { family: DepositFa
           columns={[
             { key: 'kind', header: 'Hold', render: (h) => HOLD_LABEL[h.kind ?? ''] },
             { key: 'amount', header: 'Amount', numeric: true, render: (h) => (h.amount ? <MoneyText value={h.amount} /> : '—') },
-            { key: 'reason', header: 'Reason', render: (h) => <span>{h.reason}{h.reference && <span className="muted"> · {h.reference}</span>}</span> },
+            { key: 'reason', header: 'Reason', render: (h) => <span>{h.loanNo && <strong>Pledged for loan {h.loanNo} ({h.loanStatus?.toLowerCase()}). </strong>}{h.reason}{h.reference && !h.loanNo && <span className="muted"> · {h.reference}</span>}</span> },
             { key: 'placed', header: 'Placed', render: (h) => <span><DateText value={h.placedOn} /> <span className="muted">by {h.placedBy}</span></span> },
             { key: 'status', header: 'Status', render: (h) => (h.status === 'ACTIVE' ? 'In force' : <span>Released <DateText value={h.releasedOn} /><span className="muted"> · {h.releaseReason}</span></span>) },
             {

@@ -398,9 +398,9 @@ SELECT pg_temp.check((SELECT business_date FROM platform.business_day) = '2026-1
 -- =========================================================================================================
 -- Job catalogue
 -- =========================================================================================================
-SELECT pg_temp.check((SELECT count(*) FROM platform.job_definition WHERE kind <> 'REPORT') = 6
+SELECT pg_temp.check((SELECT count(*) FROM platform.job_definition WHERE kind <> 'REPORT') = 7
                      AND (SELECT bool_and(enabled AND schedule IS NOT NULL AND built_in) FROM platform.job_definition WHERE kind <> 'REPORT'),
-                     'J1 six housekeeping jobs are seeded, scheduled and on');
+                     'J1 seven housekeeping jobs (standing instructions from V36) are seeded, scheduled and on');
 SELECT pg_temp.check((SELECT count(*) FROM platform.job_definition WHERE kind = 'REPORT') = (SELECT count(*) FROM reporting.report_definition)
                      AND (SELECT bool_and(NOT enabled AND schedule IS NULL AND parameters ->> 'reportCode' = substr(code, 8))
                             FROM platform.job_definition WHERE kind = 'REPORT'),

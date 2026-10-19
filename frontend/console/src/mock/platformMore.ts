@@ -2,6 +2,7 @@
  * Platform completion (P2-7) in the mock API: custom fields, login sessions, the job catalogue, support access and
  * receipts accepted during end of day (deferred receipts).
  */
+import { runStandingInstructions } from './depositStanding';
 import type { CustomField, CustomFieldInput, DeferredReceipt, Job, JobRun, JobScheduleInput, LoginSession, SupportAccess } from '../api/types';
 import type { DemoUser } from '../auth/demoUsers';
 import { DEMO_USERS } from '../auth/demoUsers';
@@ -158,6 +159,7 @@ export function seedPlatformMore(db: MockDb, seedAt: string, now: number) {
     job('CONSENT_EXPIRY', 'Expire consents past their date', 'CONSENT_EXPIRY', '0 45 6 * * *'),
     job('EXPORT_CLEANUP', 'Remove report files past retention', 'EXPORT_CLEANUP', '0 0 2 * * 0'),
     job('USAGE_SNAPSHOT', 'Usage snapshot for billing', 'USAGE_SNAPSHOT', '0 0 1 1 * *'),
+    job('STANDING_INSTRUCTIONS', 'Carry out standing instructions due', 'STANDING_INSTRUCTIONS', '0 */15 * * * *', true),
     job('REPORT_DPD_AGEING', 'Report: DPD ageing', 'REPORT', '0 0 6 * * *', false, { period: 'BUSINESS_DATE', parameters: {}, emailTo: 'credit@demo-nbfc.example' }),
     job('REPORT_COLLECTIONS', 'Report: Collections', 'REPORT', '0 0 7 1 * *', true, { period: 'PREVIOUS_MONTH', parameters: {}, emailTo: 'collections@demo-nbfc.example' }),
   ];
@@ -391,6 +393,7 @@ export function registerPlatformMoreRoutes(db: MockDb, r: PlatformMoreRouter) {
     const now = nowIso();
     const run: JobRun = { id: uuid(), jobCode: j.code, origin: 'MANUAL', scheduledFor: null, requestedBy: user.username, status: 'COMPLETED', startedAt: now, finishedAt: now, processed: 0, failed: 0, error: null, artifact: null };
     if (j.kind === 'DEFERRED_RECEIPTS') Object.assign(run, bookDeferredReceipts(db, now));
+    else if (j.kind === 'STANDING_INSTRUCTIONS') Object.assign(run, runStandingInstructions(db, now));
     else if (j.kind === 'KYC_EXPIRY') run.processed = db.kycDocuments.filter((d) => d.meta.expiryDate && d.meta.expiryDate < db.businessDate).length;
     else if (j.kind === 'CONSENT_EXPIRY') run.processed = db.consents.filter((c) => c.status === 'ACTIVE' && c.expiresAt && c.expiresAt <= now).length;
     else if (j.kind === 'REPORT') Object.assign(run, { processed: db.loans.length, artifact: { delivery: 'SENT', recipientsSent: 1, recipientsLeftOut: 0 } });

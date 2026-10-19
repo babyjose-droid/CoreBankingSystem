@@ -26,6 +26,7 @@ import { BANK_RULES, NBFC_DEPOSIT_RULES, type MockDepositRule } from './depositR
 import { applyDepositMoneyApproval, balanceView, onHold, registerDepositMoneyRoutes, type MockDeclaration, type MockDepositOrder, type MockHold, type MockMovement } from './depositMoney';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 import { applyDepositLifecycleApproval, registerDepositLifecycleRoutes, type MockCharge } from './depositLifecycle';
+import { applyDepositStandingApproval, registerDepositStandingRoutes, type MockInstruction, type MockSiRun } from './depositStanding';
 import type { DepositClosure } from '../api/types';
 
 export type DepositKind = 'BANK' | 'NBFC_DEPOSIT' | null;
@@ -72,6 +73,10 @@ export interface DepositsDb {
   charges: MockCharge[];
   closures: Record<string, DepositClosure>;
   consents: Record<string, { instruction: string; reference: string; receivedOn: string }>;
+  /** P4-5b: standing instructions and what each run paid or could not. */
+  instructions: MockInstruction[];
+  siRuns: MockSiRun[];
+  siSeq: number;
 }
 
 type Result = { status: number; body: unknown };
@@ -104,7 +109,7 @@ const TENANT_KIND: Record<DemoTenantCode, { kind: DepositKind; modules: string[]
 
 export function emptyDeposits(): DepositsDb {
   return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0, orders: [], declarations: [],
-    charges: [], closures: {}, consents: {} };
+    charges: [], closures: {}, consents: {}, instructions: [], siRuns: [], siSeq: 0 };
 }
 
 /** Makes the mock database the given demo tenant: its name, its deposit modules and its demo deposit products. */
@@ -836,6 +841,7 @@ const summaryOf = (db: MockDb, a: DepositAccount): DepositAccountSummary => ({
 export function applyDepositApproval(db: MockDb, p: ApprovalPayload, approval: { id?: string; entityId?: string | null; maker?: string; appliedRef?: string | null }, checker: string, at: string): boolean {
   if (applyDepositMoneyApproval(db, p, approval, checker, at)) return true;
   if (applyDepositLifecycleApproval(db, p, approval, checker, at)) return true;
+  if (applyDepositStandingApproval(db, p, approval, checker, at)) return true;
   if (p.kind === 'DEPOSIT_PRODUCT') {
     const existing = db.deposits.products.find((x) => x.code === p.product.code);
     if (existing && existing.status !== 'ACTIVE') throw conflict('Conflict', `deposit product ${p.product.code} is not active any more`);
@@ -966,6 +972,7 @@ export function registerDepositRoutes(db: MockDb, r: Registrar): void {
 
   registerDepositMoneyRoutes(db, r, module);
   registerDepositLifecycleRoutes(db, r, module);
+  registerDepositStandingRoutes(db, r, module);
 
   on('POST', '/api/v1/deposits/preview', ({ user, body }) => {
     module('TD');
