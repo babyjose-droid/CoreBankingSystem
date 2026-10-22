@@ -6,6 +6,7 @@
  */
 import type {
   CasaAccountInput,
+  ChequeDeposit,
   DepositAccount,
   DepositAccountSummary,
   DepositFamily,
@@ -26,6 +27,7 @@ import { BANK_RULES, NBFC_DEPOSIT_RULES, type MockDepositRule } from './depositR
 import { applyDepositMoneyApproval, balanceView, onHold, registerDepositMoneyRoutes, type MockDeclaration, type MockDepositOrder, type MockHold, type MockMovement } from './depositMoney';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 import { applyDepositLifecycleApproval, registerDepositLifecycleRoutes, type MockCharge } from './depositLifecycle';
+import { applyDepositOperationsApproval, registerDepositOperationsRoutes, type MockChequeBook, type MockLeaf, type MockNof, type MockPresentment } from './depositOperations';
 import { applyDepositStandingApproval, registerDepositStandingRoutes, type MockInstruction, type MockSiRun } from './depositStanding';
 import type { DepositClosure } from '../api/types';
 
@@ -77,6 +79,14 @@ export interface DepositsDb {
   instructions: MockInstruction[];
   siRuns: MockSiRun[];
   siSeq: number;
+  /** P4-6: cheque books and leaves, cheques presented on our accounts and paid into them; the net owned fund. */
+  chequeBooks: MockChequeBook[];
+  chequeLeaves: MockLeaf[];
+  presentments: MockPresentment[];
+  chequeDeposits: ChequeDeposit[];
+  leafSeq: number;
+  bookSeq: number;
+  nof: MockNof[];
 }
 
 type Result = { status: number; body: unknown };
@@ -109,7 +119,8 @@ const TENANT_KIND: Record<DemoTenantCode, { kind: DepositKind; modules: string[]
 
 export function emptyDeposits(): DepositsDb {
   return { kind: null, modules: [], products: [], history: [], accounts: [], casaSeq: 0, termSeq: 0, movements: [], holds: [], balances: {}, movementSeq: 0, orders: [], declarations: [],
-    charges: [], closures: {}, consents: {}, instructions: [], siRuns: [], siSeq: 0 };
+    charges: [], closures: {}, consents: {}, instructions: [], siRuns: [], siSeq: 0,
+    chequeBooks: [], chequeLeaves: [], presentments: [], chequeDeposits: [], leafSeq: 100000, bookSeq: 0, nof: [] };
 }
 
 /** Makes the mock database the given demo tenant: its name, its deposit modules and its demo deposit products. */
@@ -119,6 +130,8 @@ export function applyTenant(db: MockDb, code: DemoTenantCode): void {
   db.tenant = t.code;
   db.tenantName = t.name;
   db.deposits = { ...emptyDeposits(), kind: k.kind, modules: [...k.modules] };
+  // the demo NBFC's net owned fund (DemoDepositSeeder): public deposits are held to 1.5 times it
+  if (k.kind === 'NBFC_DEPOSIT') db.deposits.nof.push({ asOf: '2026-03-31', amount: '50000000', reference: 'Audited balance sheet 2025-26 (demo data)', recordedBy: 'bootstrap' });
   for (const p of k.kind === 'BANK' ? BANK_PRODUCTS : k.kind === 'NBFC_DEPOSIT' ? NBFC_PRODUCTS : []) {
     storeProduct(db, normalise(db, p.productType === 'SAVINGS' || p.productType === 'CURRENT' ? 'CASA' : 'TERM_DEPOSIT', p), 'bootstrap', null);
   }
@@ -842,6 +855,7 @@ export function applyDepositApproval(db: MockDb, p: ApprovalPayload, approval: {
   if (applyDepositMoneyApproval(db, p, approval, checker, at)) return true;
   if (applyDepositLifecycleApproval(db, p, approval, checker, at)) return true;
   if (applyDepositStandingApproval(db, p, approval, checker, at)) return true;
+  if (applyDepositOperationsApproval(db, p, approval, checker, at)) return true;
   if (p.kind === 'DEPOSIT_PRODUCT') {
     const existing = db.deposits.products.find((x) => x.code === p.product.code);
     if (existing && existing.status !== 'ACTIVE') throw conflict('Conflict', `deposit product ${p.product.code} is not active any more`);
@@ -973,6 +987,7 @@ export function registerDepositRoutes(db: MockDb, r: Registrar): void {
   registerDepositMoneyRoutes(db, r, module);
   registerDepositLifecycleRoutes(db, r, module);
   registerDepositStandingRoutes(db, r, module);
+  registerDepositOperationsRoutes(db, r, module);
 
   on('POST', '/api/v1/deposits/preview', ({ user, body }) => {
     module('TD');

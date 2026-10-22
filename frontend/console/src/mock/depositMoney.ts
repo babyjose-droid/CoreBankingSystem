@@ -29,6 +29,7 @@ import { P } from '../auth/permissions';
 import { fromUnits, toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
 import { periods, rdPeriods } from './deposits';
+import { capProblems, CUSTOMER_INDUCED } from './depositOperations';
 import { pledgeReleaseProblems } from './depositStanding';
 import { assertWithinLimit } from './limits';
 import { conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
@@ -138,6 +139,8 @@ export function depositCheckers(payload: ApprovalPayload, amount: string | null)
   if (payload.kind === 'DEPOSIT_LIFECYCLE') return 1;
   if (payload.kind === 'DEPOSIT_FUNDING') return payload.funding.reason !== null || !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
   if (payload.kind === 'DEPOSIT_INSTALMENT') return !amount || toUnits(amount) >= toUnits(DEPOSIT_CHECKER_FROM) ? 1 : 0;
+  if (payload.kind === 'DEPOSIT_CHEQUE') return payload.request.op === 'STOP' ? 0 : 1;
+  if (payload.kind === 'DEPOSIT_DORMANCY' || payload.kind === 'DEPOSIT_NOF') return 1;
   return null;
 }
 
@@ -177,6 +180,11 @@ export function movementProblems(db: MockDb, a: DepositAccount, direction: 'DEBI
     out.push('the amount must be above zero');
     return out;
   }
+  if (!correction && a.unclaimed) {
+    out.push(`account ${a.accountNo}: its balance was transferred as unclaimed; it is refunded to the claimant first`);
+    return out;
+  }
+  if (!correction && direction === 'DEBIT' && a.inoperativeSince) out.push(`account ${a.accountNo} is inoperative since ${a.inoperativeSince}: it is reactivated (KYC updated) before money is taken out of it`);
   const amt = String(amount);
   if (/\.\d{3,}$/.test(amt.replace(/0+$/, ''))) out.push('the amount has more than two decimals (paise)');
   const holds = activeHolds(db, a.id!);
@@ -234,6 +242,7 @@ export function move(db: MockDb, a: DepositAccount, kind: string, direction: 'DE
     bankIfsc: null, reverses: null, reversedBy: null, reversalReason: null, createdBy: maker, approvalId, createdAt: new Date().toISOString(), ...extra,
   };
   db.deposits.movements.push(m);
+  if (a.family === 'CASA' && CUSTOMER_INDUCED.has(kind)) a.lastCustomerTxnOn = db.businessDate;
   return m;
 }
 
@@ -264,9 +273,10 @@ function reversalProblems(db: MockDb, m: MockMovement): string[] {
   return out;
 }
 
-function fundingProblems(d: DepositAccount): string[] {
+function fundingProblems(db: MockDb, d: DepositAccount): string[] {
   const out: string[] = [];
   if (d.status !== 'BOOKED') out.push(`deposit ${d.accountNo} is ${d.status}; only a booked deposit is funded`);
+  out.push(...capProblems(db, d.termDeposit?.principal ?? '0'));
   return out;
 }
 
@@ -323,6 +333,7 @@ function instalmentProblems(db: MockDb, d: DepositAccount, next: RdInstalments['
   if (d.status !== 'ACTIVE') out.push(`recurring deposit ${d.accountNo} is ${d.status}; instalments are paid while it is active`);
   if (!next) out.push(`every instalment of recurring deposit ${d.accountNo} is paid`);
   else if (!next.payableNow && d.status === 'ACTIVE') out.push(`recurring deposit ${d.accountNo} has reached its maturity date`);
+  else out.push(...capProblems(db, next.amount ?? '0'));
   if (from) {
     if (!(from.holders ?? []).some((h) => h.customerId === d.holders?.[0]?.customerId)) out.push(`account ${from.accountNo} is not held by the depositor`);
     out.push(...movementProblems(db, from, 'DEBIT', total, false).map((x) => `account ${from.accountNo}: ${x}`));
@@ -435,7 +446,7 @@ export function applyDepositMoneyApproval(db: MockDb, p: ApprovalPayload, approv
         payoutBankAccountMasked: null, payoutBankIfsc: null, figuresFrom: db.businessDate, figuresMaturityDate: addDays(addMonths(db.businessDate, t.tenureMonths!), t.tenureDays!) });
       d.status = 'BOOKED';
     } else {
-      const problems = fundingProblems(d);
+      const problems = fundingProblems(db, d);
       const from = f.fromAccountId ? findAccount(db, f.fromAccountId, 'CASA') : null;
       if (from) problems.push(...movementProblems(db, from, 'DEBIT', f.amount, false).map((x) => `account ${from.accountNo}: ${x}`));
       refuseIfAny('the deposit cannot be funded', problems);
@@ -781,7 +792,7 @@ export function registerDepositMoneyRoutes(db: MockDb, r: Registrar, module: (na
     const b = (body ?? {}) as Partial<TermDepositFundingInput>;
     if (!b.source || !['ACCOUNT', 'CASH', 'BANK_TRANSFER'].includes(b.source)) throw invalid('source is one of ACCOUNT, CASH, BANK_TRANSFER');
     const t = d.termDeposit!;
-    const problems = fundingProblems(d);
+    const problems = fundingProblems(db, d);
     const reference = text(b.reference, 60, 'reference', problems);
     if (b.source === 'BANK_TRANSFER' && !reference) problems.push("the bank's reference (UTR) is required for a bank transfer");
     let from: DepositAccount | null = null;

@@ -431,6 +431,7 @@ public class DepositMoneyService implements DepositOperations {
         } else if (in.payoutBankAccount() != null) {
             bank = seal(in.payoutBankAccount(), problems);
         }
+        problems.addAll(DepositRegister.capProblems(jdbc, principal));     // P4-6: an NBFC holds public deposits to 1.5 x its net owned fund
         DepositAccountService.refuseIfAny("the deposit cannot be funded", problems);
         String limitType = from != null ? "DEPOSIT_DEBIT" : "DEPOSIT_CREDIT";
         limits.require(limitType, AmountLimitService.MAKE, principal, d.accountNo());
@@ -486,6 +487,7 @@ public class DepositMoneyService implements DepositOperations {
             if (!holds(from.id(), d.customerId())) problems.add("account " + from.accountNo() + " is not held by the depositor");
             for (String p : movementProblems(from, Direction.DEBIT, principal, false)) problems.add("account " + from.accountNo() + ": " + p);
         }
+        problems.addAll(DepositRegister.capProblems(jdbc, principal));     // P4-6: an NBFC holds public deposits to 1.5 x its net owned fund
         DepositAccountService.refuseIfAny("the deposit cannot be funded", problems);
         LocalDate today = days.requireOpen();
         FundingSource source = FundingSource.valueOf(f.source());
@@ -530,6 +532,7 @@ public class DepositMoneyService implements DepositOperations {
         if (next == null) out.add("every instalment of recurring deposit " + d.accountNo() + " is paid");
         else if (!Boolean.TRUE.equals(next.get("payableNow")) && "ACTIVE".equals(d.status())) out.add("recurring deposit " + d.accountNo() + " has reached its maturity date");
         for (String p : movementProblems(d, Direction.CREDIT, total, false)) out.add("deposit " + d.accountNo() + ": " + p);
+        if (next != null) out.addAll(DepositRegister.capProblems(jdbc, new BigDecimal((String) next.get("amount"))));
         if (from != null) {
             if (!holds(from.id(), d.customerId())) out.add("account " + from.accountNo() + " is not held by the depositor");
             for (String p : movementProblems(from, Direction.DEBIT, total, false)) out.add("account " + from.accountNo() + ": " + p);
@@ -663,6 +666,11 @@ public class DepositMoneyService implements DepositOperations {
         return new Paid((UUID) m.get("id"), (UUID) m.get("lot_id"), (BigDecimal) m.get("paid"));
     }
 
+    /** Why the account cannot take this credit now (a credit freeze); empty when it can. */
+    List<String> creditProblems(Account to, BigDecimal amount) {
+        return movementProblems(to, Direction.CREDIT, amount, false);
+    }
+
     /** Why the paying account cannot pay this amount now; empty when it can. */
     List<String> debitProblems(Account from, BigDecimal amount) {
         return movementProblems(from, Direction.DEBIT, amount, false);
@@ -776,6 +784,7 @@ public class DepositMoneyService implements DepositOperations {
         if ("BANK_ACCOUNT".equals(td.get("payout_to")) && !Boolean.TRUE.equals(td.get("payout_bank_recorded"))) {
             problems.add("the deposit is paid out to a bank account that is not recorded");
         }
+        problems.addAll(DepositRegister.capProblems(jdbc, principal));     // P4-6: an NBFC holds public deposits to 1.5 x its net owned fund
         DepositAccountService.refuseIfAny("the deposit cannot be funded", problems);
         TransactionLot lot = post.funding(a.leg(), principal, FundingSource.GATEWAY, null, ref == null ? a.accountNo() : ref);
         postings.post(lot, CurrentUser.username());
@@ -1011,6 +1020,15 @@ public class DepositMoneyService implements DepositOperations {
         if (amount == null) {
             out.add("the amount is required");
             return out;
+        }
+        if (!correction && !jdbc.queryForList("SELECT 1 FROM deposits.unclaimed WHERE account_id = ? AND refunded_on IS NULL", a.id()).isEmpty()) {
+            out.add("account " + a.accountNo() + ": its balance was transferred as unclaimed; it is refunded to the claimant first");
+            return out;
+        }
+        if (!correction && d == Direction.DEBIT && DepositProductService.CASA.equals(a.family())) {
+            List<String> since = jdbc.queryForList("SELECT inoperative_since::text FROM deposits.casa_account WHERE account_id = ? AND inoperative_since IS NOT NULL",
+                    String.class, a.id());
+            if (!since.isEmpty()) out.add("account " + a.accountNo() + " is inoperative since " + since.get(0) + ": it is reactivated (KYC updated) before money is taken out of it");
         }
         out.addAll(AccountHolds.checkMovement(balance(a.id()), holds(a.id()), d, amount, correction));
         return out;

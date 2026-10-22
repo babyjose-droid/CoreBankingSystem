@@ -96,6 +96,13 @@ class DemoDepositSeeder implements DemoTenantSeeder {
              WHERE NOT EXISTS (SELECT 1 FROM deposits.product WHERE code = 'RD02') AND EXISTS (SELECT 1 FROM ledger.gl_head WHERE code = '2405')
             """;
 
+    /** P4-6: a net owned fund for the demo deposit-taking NBFC, so its deposits can be held to 1.5 times it (demo figure). */
+    static final String NBFC_NOF = """
+            INSERT INTO deposits.net_owned_fund (as_of, amount, reference, recorded_by)
+            SELECT DATE '2026-03-31', 50000000, 'Demo audited balance sheet 31-Mar-2026 (demo data)', 'bootstrap'
+             WHERE NOT EXISTS (SELECT 1 FROM deposits.net_owned_fund)
+            """;
+
     private final JdbcTemplate jdbc;
 
     DemoDepositSeeder(JdbcTemplate jdbc) {
@@ -110,7 +117,7 @@ class DemoDepositSeeder implements DemoTenantSeeder {
         if ("BANK".equals(kind)) {
             added = jdbc.update(BANK_SAVINGS) + jdbc.update(BANK_CURRENT) + jdbc.update(BANK_FIXED) + jdbc.update(BANK_RECURRING);
         } else {
-            added = jdbc.update(NBFC_FIXED) + jdbc.update(NBFC_RECURRING);
+            added = jdbc.update(NBFC_FIXED) + jdbc.update(NBFC_RECURRING) + jdbc.update(NBFC_NOF);
         }
         if (added > 0) log.warn("demo tenant: {} deposit product(s) added (demo data, local development only)", added);
     }

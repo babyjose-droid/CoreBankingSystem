@@ -1,4 +1,5 @@
 import type { MockDeclarationRequest, MockFunding, MockHoldRequest, MockInstalment, MockTxn } from './depositMoney';
+import type { MockChequeRequest, MockNof, MockReactivation } from './depositOperations';
 import type { MockPledgeRequest, MockSiRequest } from './depositStanding';
 import type { DepositsDb, MockOpening } from './deposits';
 import type { DepositProduct } from '../api/types';
@@ -137,6 +138,9 @@ export type ApprovalPayload =
   | { kind: 'DEPOSIT_INSTALMENT'; instalment: MockInstalment }
   | { kind: 'DEPOSIT_SI'; request: MockSiRequest }
   | { kind: 'DEPOSIT_PLEDGE'; pledge: MockPledgeRequest }
+  | { kind: 'DEPOSIT_CHEQUE'; request: MockChequeRequest }
+  | { kind: 'DEPOSIT_DORMANCY'; request: MockReactivation }
+  | { kind: 'DEPOSIT_NOF'; nof: Omit<MockNof, 'recordedBy'> }
   | { kind: 'DEPOSIT_LIFECYCLE'; op: 'CHARGE' | 'CASA_CLOSE' | 'TD_CLOSE' | 'INSTRUCTION' | 'RENEW'; accountId: string; data: Record<string, unknown> }
   | { kind: 'TDS_DECLARATION'; declaration: MockDeclarationRequest };
 

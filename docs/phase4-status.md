@@ -1,6 +1,6 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 18-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 22-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
 
 | Increment | State |
 |-----------|-------|
@@ -10,8 +10,11 @@ Updated 18-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | P4-2b gateway for deposits | Built, pushed (`a004bdf`), live-tested on the local stack on 15-Oct-2026 (40 of 40) |
 | P4-3 day-end interest | Built, pushed (`4cb6da2`), live-tested on the local stack on 15-Oct-2026 (17 of 17) |
 | P4-3b tax deducted at source | Built, pushed (`6c52240`), live-tested on the local stack on 16-Oct-2026 (21 of 21) |
-| P4-4 lifecycle | Built on 18-Oct-2026 (charges with GST, minimum balance, closures, premature withdrawal, maturity, renewal, notices); not yet pushed or live-tested |
-| P4-5 to P4-7 | Not started |
+| P4-4 lifecycle | Built, pushed (`33a94ca`), live-tested on the local stack on 19-Oct-2026 (40 of 40) |
+| P4-5 recurring deposits | Built, pushed (`cf57e9e`), live-tested on the local stack on 19-Oct-2026 (23 of 24; the one failure was the smoke script's own expectation) |
+| P4-5b standing instructions and loans against deposits | Built, pushed (`ce79409`), live-tested on the local stack (20 of 20; the pledge quote skipped, no demo loan) |
+| P4-6 cheques, inoperative and unclaimed, register and NOF cap | Built on 22-Oct-2026; not yet pushed or live-tested |
+| P4-7 documents and reports | Not started |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -537,5 +540,55 @@ A savings or current account pays on its own: a fixed amount to another account,
 ### Not verified here
 - **Gradle and Spring**: the job and the `EodListener` as Spring schedules them; the live stack (`p4-5b-smoke.py`). The demo tenants may have no loan for a depositor: the smoke then checks the instructions and skips the pledge quote.
 
-### Next: P4-6
-Cheques (cheque book, stop payment, a clearing simulator), dormant, inoperative and unclaimed accounts, the NBFC register of deposits and the 1.5 × NOF cap. Next tenant migration: V37; next control migration: V5.
+## Increment P4-6: cheques, inoperative and unclaimed accounts, the register of deposits
+
+Cheque books and stop payments on savings and current accounts, a simulator of inward and outward clearing; accounts unused for two years made inoperative and balances unclaimed for ten years transferred for the DEA Fund, with reactivation and claims; the register of deposits, and a deposit-taking NBFC held to 1.5 times its net owned fund.
+
+### What was built
+**Deposit engine** (`backend/deposits-core`)
+- `Cheques`: whether a cheque presented is paid, or the first reason it is returned, in this order: no such account, account closed, not issued to the account, already paid, payment stopped, post-dated, stale (older than 3 months), frozen for debits, inoperative, funds held under lien, funds insufficient.
+- `Dormancy`: an account's stage from its last customer transaction: operative, due for review (12 months), inoperative (24 months), unclaimed (10 years).
+- `NetOwnedFund`: the cap (multiple × NOF), the headroom, and why a new deposit cannot be taken (no NOF recorded, or the cap would be passed).
+
+**Tenant database** (`V37__cheques_dormancy_and_register.sql`)
+- Settings: inward clearing head 2409, outward clearing head 1207, unclaimed deposits head 2407, cheque validity 3 months.
+- Movements CHEQUE_PAID (debit), CHEQUE_DEPOSIT (credit), UNCLAIMED_TRANSFER (debit, the whole balance), UNCLAIMED_REFUND (credit).
+- `deposits.cheque_book` (CB00000001…; 10, 25, 50 or 100 leaves; only on an active, operative account whose product has the cheque facility) and `deposits.cheque_leaf` (each number issued once across the institution; UNUSED, STOPPED with a reason, PAID; a paid cheque is never stopped, a stopped one never paid).
+- `deposits.cheque_presentment` (inward: PAID with its CHEQUE_PAID movement, or RETURNED with the reason) and `deposits.cheque_deposit` (outward: IN_CLEARING, then CLEARED with its CHEQUE_DEPOSIT movement or RETURNED with the reason, settled once).
+- `deposits.casa_account.last_customer_txn_on` (kept by the movement guard from customer movements only: not interest, tax, charges or unclaimed transfers) and `inoperative_since`. An inoperative account takes credits but no debit and no charge.
+- `deposits.unclaimed`: the balance transferred and its refund. While it is open nothing moves on the account but the refund.
+- `deposits.net_owned_fund` (one per balance sheet date, never changed) and `deposits.public_deposits_outstanding()`.
+- Approval rule CHEQUE STOP needs no checker: a stop protects the customer.
+
+**Application**
+- `DepositCheques`: a cheque book through a checker (`CHEQUE` ISSUE_BOOK) takes the next run of numbers; a stop payment of one cheque or a run of up to 100 at once (`CHEQUE` STOP); revoking it through a checker (REVOKE_STOP). Inward clearing: decided at once and recorded either way; paid is Dr account / Cr inward clearing. Outward clearing: a cheque paid in waits in clearing; settled CLEARED it is Dr outward clearing / Cr account; RETURNED credits nothing.
+- `DepositDormancy`: day-end steps "Inoperative accounts" (before the minimum balance charges, which skip an inoperative account) and "Unclaimed deposits (DEA Fund)" (savings and current unused for 10 years, term deposits unclaimed 10 years after maturity; held accounts are skipped): Dr account / Cr unclaimed deposits head. Reactivation of a savings or current account, and the claim on a deposit, through a checker with the KYC reference (`DEPOSIT_DORMANCY` REACTIVATE / CLAIM): any unclaimed balance is refunded first; the account is operative from the business date. Bank rule sets only.
+- `DepositRegister`: the register of deposits (every term and recurring deposit funded and not closed, with depositor, terms, nominee and lien) and, for a deposit-taking NBFC, the net owned fund recorded through a checker (`DEPOSIT_NOF` RECORD; the latest balance sheet date governs). A funding (by staff or through a payment link) and a recurring deposit's instalment are refused when they would take public deposits past 1.5 × NOF, and every new deposit while no NOF is recorded. The demo NBFC is seeded with a NOF of 5 crore.
+- The account view shows the last customer transaction, the date an account became inoperative and any unclaimed balance.
+- API: 14 operations: `GET /casa/accounts/{id}/cheques`, `POST /casa/accounts/{id}/cheque-books`, `POST /casa/accounts/{id}/cheques/stop`, `POST /casa/accounts/{id}/cheques/{leafNo}/revoke-stop`, `POST /casa/clearing/inward`, `POST /casa/accounts/{id}/cheque-deposits`, `GET /casa/cheque-deposits`, `POST /casa/cheque-deposits/{id}/settle`, `GET /casa/dormancy`, `POST /casa/accounts/{id}/reactivate`, `POST /deposits/accounts/{id}/claim`, `GET /deposits/register`, `GET`/`POST /deposits/net-owned-fund`. No new permission.
+
+**Console**
+- Savings and current account page: a Cheques card (books, stops with Revoke the stop, cheques presented and paid in; Issue a cheque book, Stop payment, Pay in a cheque); a banner on an inoperative account or an unclaimed balance with Reactivate (Pay the claim on a deposit); the last customer transaction.
+- New pages: Clearing (present a cheque; settle the cheques in clearing), Inoperative and unclaimed, Register of deposits (with the net owned fund, the cap and the headroom at an NBFC, and Record the net owned fund).
+- Mock mode has no deposit day-end: the tests make an account inoperative or transfer its balance through mock helpers.
+
+### Choices made in this increment (to confirm: open item P4-23)
+- **What keeps an account operative**: a deposit, withdrawal, transfer, cheque or loan repayment by or for the customer; not interest, tax, charges or the unclaimed transfer.
+- **No charge** for a cheque returned, a stop payment, a cheque book or reactivation.
+- **Clearing heads**: settling the inward and outward clearing heads with the clearing house is a voucher; not automated.
+- **The review notice** (due for review at 12 months) is a list only; no letter is sent.
+- **The cap** is checked at funding and at each recurring instalment; a renewal at maturity is not checked against it.
+- **Not built: an NBFC's unclaimed deposits** (transfer to the IEPF after 7 years); the bank rules do not apply to an NBFC rule set.
+
+### Tests
+- **Engine:** 3 new tests (`ChequesDormancyNofTest`); 108 pass in `deposits-core`.
+- **Tenant database:** 49 checks in the new `deposits_cheques_dormancy_test.sql`; all tenant and control suites pass.
+- **Application services:** in the build sandbox, with real approvals and real day-ends: 42 checks on a bank (a cheque book through a checker; a stop at once and its revocation through a checker; a cheque paid; cheques returned already paid, stopped, short of funds, stale, post-dated, not issued, not ours, and under a lien; a cheque paid in held in clearing, credited when cleared, settled once; one returned crediting nothing; an account unused for two years made inoperative by the day-end, refusing withdrawals and cheque books but taking credits, reactivated through a checker; a balance unused for ten years transferred by the day-end, frozen, and refunded on the claim; the register) and 16 on a deposit-taking NBFC (the NOF recorded through a checker, the latest governing, a funding past 1.5 × NOF refused, up to the cap exactly accepted, the register). The P4-4 to P4-5b scenarios still pass (68, 23, 37, 12, 46, 10).
+- **Console:** 7 new tests; 336 pass, typecheck and build clean.
+- **API contract:** 14 new operations; lint clean; every handler has an operation.
+
+### Not verified here
+- **Gradle and Spring**: the two day-end steps as the EOD runner schedules them; the live stack (`p4-6-smoke.py`). The live demo tenants have no account two years idle: the smoke moves no dates, so it checks the inoperative and unclaimed lists and the refusals only through the API it can reach.
+
+### Next: P4-7
+Documents and reports: account statements, deposit receipts, interest and tax certificates; the deposit book, maturity profile, interest paid and TDS reports. Next tenant migration: V38; next control migration: V5.

@@ -31,6 +31,15 @@ import type {
   DepositPledgeInput,
   PledgeQuote,
   LoanPledge,
+  CasaCheques,
+  ChequeDeposit,
+  ChequeDepositInput,
+  ChequePresentmentInput,
+  ChequePresentmentOutcome,
+  DormancyList,
+  DepositRegister,
+  NetOwnedFund,
+  NetOwnedFundInput,
   RdInstalments,
   DepositAccountSummary,
   DepositCollectionOrderInput,
@@ -184,7 +193,7 @@ export function useBookTermDeposit() {
 function useMoneyInvalidation() {
   const qc = useQueryClient();
   return () => {
-    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote', 'rd-instalments', 'standing-instructions', 'standing-instruction', 'loan-pledges', 'pledge-quote'])
+    for (const key of ['deposit-account', 'deposit-accounts', 'deposit-movements', 'deposit-holds', 'approvals', 'casa-charges', 'deposit-maturities', 'closure-quote', 'rd-instalments', 'standing-instructions', 'standing-instruction', 'loan-pledges', 'pledge-quote', 'casa-cheques', 'cheques-in-clearing', 'dormancy', 'deposit-register', 'net-owned-fund'])
       qc.invalidateQueries({ queryKey: [key] });
   };
 }
@@ -576,5 +585,129 @@ export function useLoanPledges(loanId: string | undefined, enabled = true) {
     queryKey: ['loan-pledges', loanId],
     queryFn: () => unwrap<LoanPledge[]>(api.GET('/api/v1/deposits/pledges', { params: { query: { loanId: loanId! } } }) as never),
     enabled: enabled && !!loanId,
+  });
+}
+
+// ---------- P4-6: cheques, inoperative and unclaimed accounts, the register of deposits ----------
+
+export function useCasaCheques(accountId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['casa-cheques', accountId],
+    queryFn: () => unwrap<CasaCheques>(api.GET('/api/v1/casa/accounts/{id}/cheques', { params: { path: { id: accountId! } } }) as never),
+    enabled: !!accountId,
+  });
+}
+
+export function useIssueChequeBook(accountId: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (leaves: number) => unwrap<Approval>(api.POST('/api/v1/casa/accounts/{id}/cheque-books', { params: { path: { id: accountId } }, body: { leaves: leaves as 25 } }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useStopCheques(accountId: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: { fromLeaf: number; toLeaf: number | null; reason: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/casa/accounts/{id}/cheques/stop', { params: { path: { id: accountId } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useRevokeChequeStop(accountId: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (v: { leafNo: number; reason: string }) =>
+      unwrap<Approval>(api.POST('/api/v1/casa/accounts/{id}/cheques/{leafNo}/revoke-stop', { params: { path: { id: accountId, leafNo: v.leafNo } }, body: { reason: v.reason } }) as never),
+    onSuccess: done,
+  });
+}
+
+export function usePresentCheque() {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: ChequePresentmentInput) => unwrap<ChequePresentmentOutcome>(api.POST('/api/v1/casa/clearing/inward', { body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useLodgeCheque(accountId: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: ChequeDepositInput) => unwrap<ChequeDeposit>(api.POST('/api/v1/casa/accounts/{id}/cheque-deposits', { params: { path: { id: accountId } }, body }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useChequesInClearing() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['cheques-in-clearing'],
+    queryFn: () => unwrap<ChequeDeposit[]>(api.GET('/api/v1/casa/cheque-deposits') as never),
+  });
+}
+
+export function useSettleCheque() {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (v: { id: string; outcome: 'CLEARED' | 'RETURNED'; reason: string | null }) =>
+      unwrap<ChequeDeposit>(api.POST('/api/v1/casa/cheque-deposits/{id}/settle', { params: { path: { id: v.id } }, body: { outcome: v.outcome, reason: v.reason } }) as never),
+    onSuccess: done,
+  });
+}
+
+export function useDormancy(stage: string | null) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['dormancy', stage],
+    queryFn: () => unwrap<DormancyList>(api.GET('/api/v1/casa/dormancy', { params: { query: { stage: (stage || undefined) as never } } }) as never),
+  });
+}
+
+export function useReactivate(family: DepositFamily, accountId: string) {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: { kycReference: string; reason: string }) =>
+      unwrap<Approval>(
+        (family === 'CASA'
+          ? api.POST('/api/v1/casa/accounts/{id}/reactivate', { params: { path: { id: accountId } }, body })
+          : api.POST('/api/v1/deposits/accounts/{id}/claim', { params: { path: { id: accountId } }, body })) as never,
+      ),
+    onSuccess: done,
+  });
+}
+
+export function useDepositRegister(branch: string | null) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['deposit-register', branch],
+    queryFn: () => unwrap<DepositRegister>(api.GET('/api/v1/deposits/register', { params: { query: { branch: branch || undefined } } }) as never),
+  });
+}
+
+export function useNetOwnedFund(enabled = true) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['net-owned-fund'],
+    queryFn: () => unwrap<NetOwnedFund>(api.GET('/api/v1/deposits/net-owned-fund') as never),
+    enabled,
+  });
+}
+
+export function useProposeNetOwnedFund() {
+  const api = useApiClient();
+  const done = useMoneyInvalidation();
+  return useMutation({
+    mutationFn: (body: NetOwnedFundInput) => unwrap<Approval>(api.POST('/api/v1/deposits/net-owned-fund', { body }) as never),
+    onSuccess: done,
   });
 }

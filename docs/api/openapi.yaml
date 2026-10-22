@@ -4081,6 +4081,262 @@ paths:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/LoanPledge' } }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/cheques:
+    get:
+      tags: [Deposits]
+      operationId: getCasaCheques
+      summary: An account's cheque books and leaves, the cheques presented on it and the cheques paid into it
+      description: Module CASA. Permission casa:view. P4-6. 404 outside the caller's branch scope.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CasaCheques' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/cheque-books:
+    post:
+      tags: [Deposits]
+      operationId: proposeChequeBook
+      summary: Propose issuing a cheque book (maker-checker)
+      description: >-
+        Module CASA. Permission casa:transact. P4-6. On an active, operative account whose product has the cheque facility. A checker
+        approves it; the book takes the next run of cheque numbers (each number issued once across the institution).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChequeBookInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/cheques/stop:
+    post:
+      tags: [Deposits]
+      operationId: stopCheques
+      summary: Stop payment of one cheque or a run of them
+      description: >-
+        Module CASA. Permission casa:transact. P4-6. Takes effect at once (approval rule CHEQUE STOP, no checker): a stop payment
+        protects the customer. Every cheque in the run is issued to the account and unused.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChequeStopInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/cheques/{leafNo}/revoke-stop:
+    post:
+      tags: [Deposits]
+      operationId: proposeChequeStopRevoke
+      summary: Propose revoking a stop payment (maker-checker)
+      description: Module CASA. Permission casa:transact. P4-6. A checker approves it; the cheque may then be paid.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: leafNo, in: path, required: true, schema: { type: integer } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/clearing/inward:
+    post:
+      tags: [Deposits]
+      operationId: presentCheque
+      summary: Present a cheque drawn on one of our accounts (the inward clearing simulator)
+      description: >-
+        Module CASA. Permission casa:transact. P4-6. Decided at once and recorded either way. Paid: the account is debited (CHEQUE_PAID)
+        against the inward clearing head (setting deposits.gl.inward-clearing, 2409). Returned, with the first reason that applies:
+        the account is not ours or not active, the cheque was not issued to it, is already paid or stopped, is post-dated or stale
+        (older than deposits.cheque-valid-months, 3), the account is frozen or inoperative, or the available balance is short
+        (AMOUNT_HELD when a lien makes it short). No return charge is levied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChequePresentmentInput' }
+      responses:
+        '200':
+          description: The outcome
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChequePresentmentOutcome' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/cheque-deposits:
+    post:
+      tags: [Deposits]
+      operationId: lodgeCheque
+      summary: Pay in another bank's cheque (outward clearing)
+      description: >-
+        Module CASA. Permission casa:transact. P4-6. The cheque waits in clearing; the account is credited only once it is settled
+        as cleared. Not a post-dated or stale cheque; the account takes credits.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChequeDepositInput' }
+      responses:
+        '201':
+          description: Lodged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChequeDeposit' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/cheque-deposits:
+    get:
+      tags: [Deposits]
+      operationId: listChequesInClearing
+      summary: Cheques paid in and waiting in clearing
+      description: Module CASA. Permission casa:view. P4-6. Within the caller's branch scope, oldest first.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ChequeDeposit' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/cheque-deposits/{id}/settle:
+    post:
+      tags: [Deposits]
+      operationId: settleChequeDeposit
+      summary: Settle a cheque in clearing as cleared or returned (the outward clearing simulator)
+      description: >-
+        Module CASA. Permission casa:transact. P4-6. CLEARED credits the account (CHEQUE_DEPOSIT) against the outward clearing head
+        (setting deposits.gl.outward-clearing, 1207); RETURNED, with a reason, credits nothing. Settled once.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChequeSettleInput' }
+      responses:
+        '200':
+          description: Settled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChequeDeposit' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/dormancy:
+    get:
+      tags: [Deposits]
+      operationId: listDormantAccounts
+      summary: Accounts due for review, inoperative, or with a balance transferred as unclaimed
+      description: >-
+        Module CASA. Permission casa:view. P4-6. Bank rule sets only (applies is false at an NBFC). A savings or current account with
+        no customer movement for the review months is listed for review; for the inoperative months (two years) the day-end makes it
+        inoperative; for the unclaimed years (ten) the day-end transfers its balance to the unclaimed deposits head (setting
+        deposits.gl.unclaimed, 2407) for the DEA Fund. A term deposit unclaimed ten years after maturity is transferred too.
+      parameters:
+        - { name: stage, in: query, required: false, schema: { type: string, enum: [REVIEW, INOPERATIVE, UNCLAIMED] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DormancyList' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/reactivate:
+    post:
+      tags: [Deposits]
+      operationId: proposeCasaReactivation
+      summary: Propose reactivating an inoperative account, with the KYC record updated (maker-checker)
+      description: >-
+        Module CASA. Permission casa:open. P4-6. A checker approves it. A balance transferred as unclaimed is refunded to the account
+        first (UNCLAIMED_REFUND); the account is operative again from the business date. No charge is levied for reactivation.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReactivationInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/claim:
+    post:
+      tags: [Deposits]
+      operationId: proposeUnclaimedClaim
+      summary: Propose refunding a term deposit's unclaimed balance to the claimant (maker-checker)
+      description: Module TD. Permission deposit:fund. P4-6. A checker approves it; the balance comes back to the deposit (UNCLAIMED_REFUND) to be paid out or closed.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReactivationInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/register:
+    get:
+      tags: [Deposits]
+      operationId: getDepositRegister
+      summary: The register of deposits
+      description: >-
+        Module TD. Permission deposit:view. P4-6. Every term and recurring deposit funded and not closed, with its depositor and
+        terms, the total, and where a deposit-taking NBFC stands against its cap.
+      parameters:
+        - { name: branch, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepositRegister' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/net-owned-fund:
+    get:
+      tags: [Deposits]
+      operationId: getNetOwnedFund
+      summary: The net owned fund and the cap on public deposits
+      description: >-
+        Module TD. Permission deposit:view. P4-6. A deposit-taking NBFC holds public deposits to 1.5 times its net owned fund (rule
+        TD_DEPOSITS_TO_NOF); applies is false for a bank. Outstanding is every term deposit funded and not closed, at its balance.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NetOwnedFund' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Deposits]
+      operationId: proposeNetOwnedFund
+      summary: Propose recording the net owned fund from an audited balance sheet (maker-checker)
+      description: >-
+        Module TD. Permission product:propose. P4-6. A checker approves it; the latest balance sheet date governs. A funding and a
+        recurring deposit's instalment are refused (422) when they would take public deposits past the cap, and every new deposit
+        while no net owned fund is recorded.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NetOwnedFundInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/casa/transfers:
     post:
       tags: [Deposits]
@@ -6947,7 +7203,7 @@ components:
         seq: { type: integer, description: The order movements were made in }
         businessDate: { type: string, format: date }
         valueDate: { type: string, format: date }
-        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL, RD_INSTALMENT, RD_LATE_CHARGE, LOAN_REPAYMENT], description: 'LOAN_REPAYMENT: a loan instalment paid by a standing instruction (P4-5b). INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)' }
+        kind: { type: string, enum: [CASH_DEPOSIT, CASH_WITHDRAWAL, BANK_TRANSFER_IN, BANK_TRANSFER_OUT, TRANSFER_IN, TRANSFER_OUT, FUNDING, FUNDING_PAID, REVERSAL, INTEREST_CREDIT, INTEREST_PAYOUT, TAX_DEDUCTED, CHARGE, CLOSURE, INTEREST_RECOVERY, RENEWAL, RD_INSTALMENT, RD_LATE_CHARGE, LOAN_REPAYMENT, CHEQUE_PAID, CHEQUE_DEPOSIT, UNCLAIMED_TRANSFER, UNCLAIMED_REFUND], description: 'CHEQUE_PAID (a cheque paid in inward clearing), CHEQUE_DEPOSIT (a cheque paid in, cleared), UNCLAIMED_TRANSFER and UNCLAIMED_REFUND (P4-6). LOAN_REPAYMENT: a loan instalment paid by a standing instruction (P4-5b). INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)' }
         direction: { type: string, enum: [DEBIT, CREDIT] }
         amount: { $ref: '#/components/schemas/Money' }
         balanceAfter: { $ref: '#/components/schemas/Money' }
@@ -7267,6 +7523,16 @@ components:
         availableBalance: { $ref: '#/components/schemas/Money', description: The balance less the liens }
         freezes: { type: array, items: { type: string, enum: [DEBIT_FREEZE, CREDIT_FREEZE, TOTAL_FREEZE] } }
         nextInterestDate: { type: [string, 'null'], format: date, description: 'Savings and current: the last day of the interest period in progress; null for an account that bears no interest' }
+        lastCustomerTxnOn: { type: [string, 'null'], format: date, description: 'Savings and current: the last movement made by or for the customer (P4-6); interest, tax and charges do not count' }
+        inoperativeSince: { type: [string, 'null'], format: date, description: 'Savings and current: set by the day-end after two years with no customer movement (P4-6). Credits are taken; nothing is taken out and nothing charged until the account is reactivated' }
+        unclaimed:
+          oneOf:
+            - type: 'null'
+            - type: object
+              properties:
+                transferredOn: { type: string, format: date }
+                amount: { type: string }
+          description: 'The balance transferred to the unclaimed deposits head (for the DEA Fund), not yet refunded (P4-6). Nothing moves on the account until it is'
         termDeposit: { $ref: '#/components/schemas/TermDepositTerms' }
         closedOn: { type: [string, 'null'], format: date }
         closure: { oneOf: [ { $ref: '#/components/schemas/DepositClosure' }, { type: 'null' } ], description: How the account was closed (P4-4) }
@@ -7470,3 +7736,201 @@ components:
         figuresMaturityDate: { type: string, format: date }
         totalInterest: { $ref: '#/components/schemas/Money' }
         maturityValue: { $ref: '#/components/schemas/Money' }
+    ChequeBookInput:
+      type: object
+      properties:
+        leaves: { type: [integer, 'null'], enum: [10, 25, 50, 100, null], description: Default 25 }
+    ChequeStopInput:
+      type: object
+      required: [fromLeaf, reason]
+      properties:
+        fromLeaf: { type: integer }
+        toLeaf: { type: [integer, 'null'], description: The last cheque of the run; none for one cheque. At most 100 }
+        reason: { type: string, maxLength: 500 }
+    ChequePresentmentInput:
+      type: object
+      required: [accountNo, leafNo, amount, chequeDate, payee, presentingBank]
+      properties:
+        accountNo: { type: string }
+        leafNo: { type: integer }
+        amount: { type: [number, string] }
+        chequeDate: { type: string, format: date }
+        payee: { type: string, maxLength: 200 }
+        presentingBank: { type: string, maxLength: 100 }
+    ChequePresentmentOutcome:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [PAID, RETURNED] }
+        returnReason: { oneOf: [ { $ref: '#/components/schemas/ChequeReturnReason' }, { type: 'null' } ] }
+        returnReasonText: { type: [string, 'null'] }
+        movementId: { type: [string, 'null'], format: uuid }
+    ChequeReturnReason:
+      type: string
+      enum: [NO_SUCH_ACCOUNT, ACCOUNT_CLOSED, NOT_ISSUED, ALREADY_PAID, PAYMENT_STOPPED, POST_DATED, STALE, ACCOUNT_FROZEN, ACCOUNT_INOPERATIVE, AMOUNT_HELD, INSUFFICIENT_FUNDS]
+    ChequeDepositInput:
+      type: object
+      required: [chequeNo, draweeIfsc, drawerName, amount, chequeDate]
+      properties:
+        chequeNo: { type: string, pattern: '^[0-9]{6}$' }
+        draweeIfsc: { type: string, description: The IFSC of the bank the cheque is drawn on }
+        drawerName: { type: string, maxLength: 200 }
+        amount: { type: [number, string] }
+        chequeDate: { type: string, format: date }
+    ChequeSettleInput:
+      type: object
+      required: [outcome]
+      properties:
+        outcome: { type: string, enum: [CLEARED, RETURNED] }
+        reason: { type: [string, 'null'], maxLength: 200, description: 'RETURNED only, and then required' }
+    ChequeDeposit:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        accountNo: { type: string }
+        chequeNo: { type: string }
+        draweeIfsc: { type: string }
+        drawerName: { type: string }
+        amount: { type: string }
+        chequeDate: { type: string, format: date }
+        lodgedOn: { type: string, format: date }
+        status: { type: string, enum: [IN_CLEARING, CLEARED, RETURNED] }
+        settledOn: { type: [string, 'null'], format: date }
+        returnReason: { type: [string, 'null'] }
+    CasaCheques:
+      type: object
+      properties:
+        chequeFacility: { type: boolean, description: "Whether the account's product has the cheque facility" }
+        books:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              bookNo: { type: string }
+              firstLeaf: { type: integer }
+              lastLeaf: { type: integer }
+              leaves: { type: integer }
+              issuedOn: { type: string, format: date }
+              issuedBy: { type: string }
+              unused: { type: integer }
+        leaves:
+          type: array
+          description: The leaves stopped or paid, newest first
+          items:
+            type: object
+            properties:
+              leafNo: { type: integer }
+              status: { type: string, enum: [UNUSED, STOPPED, PAID] }
+              stoppedOn: { type: [string, 'null'], format: date }
+              stopReason: { type: [string, 'null'] }
+              paidOn: { type: [string, 'null'], format: date }
+        presented:
+          type: array
+          description: The latest 100 cheques presented on the account, paid or returned
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              leafNo: { type: integer }
+              amount: { type: string }
+              chequeDate: { type: string, format: date }
+              payee: { type: string }
+              presentingBank: { type: string }
+              presentedOn: { type: string, format: date }
+              status: { type: string, enum: [PAID, RETURNED] }
+              returnReason: { type: [string, 'null'] }
+              returnReasonText: { type: [string, 'null'] }
+        paidIn: { type: array, items: { $ref: '#/components/schemas/ChequeDeposit' }, description: The latest 100 cheques paid in }
+    ReactivationInput:
+      type: object
+      required: [kycReference, reason]
+      properties:
+        kycReference: { type: string, maxLength: 100, description: The KYC record updated for the reactivation or the claim }
+        reason: { type: string, maxLength: 500 }
+    DormancyList:
+      type: object
+      properties:
+        asOf: { type: string, format: date }
+        applies: { type: boolean }
+        reviewMonths: { type: integer }
+        inoperativeMonths: { type: integer }
+        unclaimedYears: { type: integer }
+        accounts:
+          type: array
+          items:
+            type: object
+            properties:
+              accountId: { type: string, format: uuid }
+              accountNo: { type: string }
+              family: { type: string, enum: [CASA, TERM_DEPOSIT] }
+              productCode: { type: string }
+              branchCode: { type: string }
+              customerNo: { type: string }
+              customerName: { type: string }
+              balance: { type: string }
+              lastOperated: { type: string, format: date, description: 'The last customer movement; for a term deposit, its maturity' }
+              stage: { type: string, enum: [REVIEW, INOPERATIVE, UNCLAIMED] }
+              inoperativeSince: { type: [string, 'null'], format: date }
+              inoperativeOn: { type: [string, 'null'], format: date }
+              unclaimedOn: { type: [string, 'null'], format: date }
+              unclaimedTransferredOn: { type: [string, 'null'], format: date }
+              unclaimedAmount: { type: [string, 'null'] }
+    NetOwnedFundInput:
+      type: object
+      required: [amount, asOf, reference]
+      properties:
+        amount: { type: [number, string] }
+        asOf: { type: string, format: date, description: 'The date of the audited balance sheet; one per date, not after the business date' }
+        reference: { type: string, maxLength: 200 }
+    NetOwnedFund:
+      type: object
+      properties:
+        applies: { type: boolean }
+        multiple: { type: [string, 'null'] }
+        netOwnedFund: { type: [string, 'null'], description: The latest recorded; null when none is }
+        outstanding: { type: string }
+        cap: { type: [string, 'null'] }
+        headroom: { type: [string, 'null'] }
+        usedPercent: { type: [string, 'null'] }
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              asOf: { type: string, format: date }
+              amount: { type: string }
+              reference: { type: string }
+              recordedBy: { type: string }
+    DepositRegister:
+      type: object
+      properties:
+        asOf: { type: string, format: date }
+        count: { type: integer }
+        total: { type: string }
+        netOwnedFund: { $ref: '#/components/schemas/NetOwnedFund' }
+        deposits:
+          type: array
+          items:
+            type: object
+            properties:
+              accountId: { type: string, format: uuid }
+              accountNo: { type: string }
+              branchCode: { type: string }
+              status: { type: string, enum: [ACTIVE, MATURED] }
+              productCode: { type: string }
+              productType: { type: string }
+              customerNo: { type: string }
+              depositorName: { type: string }
+              holders: { type: integer }
+              principal: { type: string }
+              ratePercent: { type: string }
+              tenureMonths: { type: integer }
+              tenureDays: { type: integer }
+              startDate: { type: [string, 'null'], format: date }
+              maturityDate: { type: [string, 'null'], format: date }
+              maturityInstruction: { type: string }
+              balance: { type: string }
+              nominee: { type: boolean }
+              lien: { type: boolean }

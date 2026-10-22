@@ -67,6 +67,7 @@ import { DepositProductsPage } from './pages/deposits/DepositProductsPage';
 import { RuleSetPage } from './pages/deposits/RuleSetPage';
 import { DepositTaxPage } from './pages/deposits/DepositTaxPage';
 import { MaturitiesPage } from './pages/deposits/MaturitiesPage';
+import { ClearingPage, DepositRegisterPage, DormancyPage } from './pages/deposits/DepositOperationsPages';
 import { TermDepositFormPage } from './pages/deposits/TermDepositFormPage';
 import { ToastProvider } from './ui';
 
@@ -146,6 +147,9 @@ export function AppRoutes() {
         <Route path="deposits/rules" element={guard(P.productView, <RuleSetPage />)} />
         <Route path="deposits/tax" element={guard(P.depositView, <DepositTaxPage />)} />
         <Route path="deposits/maturities" element={guard(P.depositView, <MaturitiesPage />)} />
+        <Route path="deposits/clearing" element={guard(P.casaView, <ClearingPage />)} />
+        <Route path="deposits/dormancy" element={guard(P.casaView, <DormancyPage />)} />
+        <Route path="deposits/register" element={guard(P.depositView, <DepositRegisterPage />)} />
         <Route path="deposits/products" element={guard(P.productView, <DepositProductsPage />)} />
         <Route path="deposits/products/:family/new" element={guard(P.productPropose, <DepositProductFormPage />)} />
         <Route path="deposits/products/:family/:code" element={guard(P.productView, <DepositProductDetailPage />)} />

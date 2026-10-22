@@ -221,11 +221,13 @@ final class DepositClosing {
     static void minimumBalance(DepositBooks b, Json json, UUID id, LocalDate through) {
         JdbcTemplate jdbc = b.jdbc();
         Map<String, Object> a = jdbc.queryForMap("""
-                SELECT a.account_no, a.branch_code, a.opened_on, a.status, p.gl_liability, p.min_balance::numeric AS min_balance, c.min_balance_through
+                SELECT a.account_no, a.branch_code, a.opened_on, a.status, p.gl_liability, p.min_balance::numeric AS min_balance, c.min_balance_through,
+                       c.inoperative_since
                   FROM deposits.account a JOIN deposits.product p ON p.code = a.product_code JOIN deposits.casa_account c ON c.account_id = a.id
                  WHERE a.id = ? FOR UPDATE OF a
                 """, id);
         BigDecimal minimum = (BigDecimal) a.get("min_balance");
+        boolean inoperative = a.get("inoperative_since") != null;      // P4-6: no charge for want of balance on an inoperative account
         if (!"ACTIVE".equals(a.get("status")) || minimum.signum() == 0) return;
         LocalDate opened = DepositEod.date(a.get("opened_on"));
         LocalDate done = DepositEod.date(a.get("min_balance_through"));
@@ -244,7 +246,9 @@ final class DepositClosing {
             String note = null;
             if (shortfall.signum() > 0) {
                 Optional<BigDecimal> amount = DepositCharges.minimumBalanceCharge(s, shortfall);
-                if (amount.isEmpty()) {
+                if (inoperative) {
+                    note = "short; the account is inoperative: no minimum balance charge";
+                } else if (amount.isEmpty()) {
                     note = "short; the product has no minimum balance charge";
                 } else if (!previous) {
                     note = "short; notified, not charged (the depositor has a month to restore the balance)";
@@ -263,7 +267,7 @@ final class DepositClosing {
             jdbc.update("""
                     INSERT INTO deposits.min_balance_month (account_id, month, from_date, to_date, required, average, shortfall, notified, charge_id, note)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, id, month, from, to, minimum, average, shortfall, shortfall.signum() > 0, chargeId, note);
+                    """, id, month, from, to, minimum, average, shortfall, shortfall.signum() > 0 && !inoperative, chargeId, note);
             last = to;
         }
         if (last != null && !last.equals(done)) jdbc.update("UPDATE deposits.casa_account SET min_balance_through = ? WHERE account_id = ?", last, id);

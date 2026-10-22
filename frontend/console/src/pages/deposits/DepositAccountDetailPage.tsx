@@ -7,6 +7,7 @@ import { P, hasPermission } from '../../auth/permissions';
 import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
 import { CasaCloseDialog, ChargesCard, ClosureCard, DepositCloseDialog, INSTRUCTION_LABEL, InstructionDialog, RenewDialog } from './DepositLifecycle';
+import { ChequesCard, DormancyBanner } from './Cheques';
 import { InstalmentsCard } from './RecurringDeposit';
 import { PledgeDialog, StandingInstructionsCard } from './StandingInstructions';
 import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, InterestCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
@@ -68,6 +69,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {term && <NotInsured rules={rules.data} />}
       {matured && <Banner tone="warn">This deposit has matured and is waiting to be paid out or renewed{isNbfc ? '' : '; it earns overdue interest as the rule set says until it is'}.</Banner>}
       {a.closure && <ClosureCard closure={a.closure} />}
+      <DormancyBanner family={family} account={a} canAct={can(term ? P.depositFund : P.casaOpen)} />
       {(a.freezes ?? []).length > 0 && <Banner tone="warn">This account is under a {(a.freezes ?? []).map((f) => humanize(f).toLowerCase()).join(' and a ')}.</Banner>}
       <div className="grid-cards">
         {(!term || a.status !== 'BOOKED') && <BalanceCard a={a} />}
@@ -85,6 +87,8 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
               <>
                 <dt>Next interest credit</dt>
                 <dd data-testid="next-interest">{a.nextInterestDate ? <DateText value={a.nextInterestDate} /> : 'None: this account bears no interest'}</dd>
+                <dt>Last customer transaction</dt>
+                <dd>{a.lastCustomerTxnOn ? <DateText value={a.lastCustomerTxnOn} /> : '—'}</dd>
               </>
             )}
             {t && (
@@ -151,6 +155,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       </div>
       {recurring && t?.funded && <InstalmentsCard account={a} canPay={can(P.depositFund)} />}
       {((!term && a.nextInterestDate) || (term && t?.funded)) && <InterestCard family={family} accountId={a.id!} />}
+      {!term && a.status !== 'BOOKED' && <ChequesCard account={a} canTransact={can(P.casaTransact)} />}
       {(!term || recurring) && a.status !== 'BOOKED' && modules.casa && <StandingInstructionsCard account={a} canGive={can(P.casaTransact)} />}
       {(!term || a.status !== 'BOOKED') && <MovementsCard family={family} accountId={a.id!} canReverse={can(P.casaTransact)} />}
       {!term && a.status !== 'BOOKED' && <ChargesCard account={a} product={product.data} canLevy={can(P.casaTransact)} />}

@@ -611,10 +611,21 @@ public class DepositAccountService {
                 }, id));
         out.putAll(money.balanceView(id));
         if (DepositProductService.CASA.equals(family)) {
-            out.put("nextInterestDate", jdbc.queryForObject("SELECT next_interest_date::text FROM deposits.casa_account WHERE account_id = ?", String.class, id));
+            Map<String, Object> c = jdbc.queryForMap("SELECT next_interest_date::text AS n, last_customer_txn_on::text AS l, inoperative_since::text AS i "
+                    + "FROM deposits.casa_account WHERE account_id = ?", id);
+            out.put("nextInterestDate", c.get("n"));
+            out.put("lastCustomerTxnOn", c.get("l"));
+            out.put("inoperativeSince", c.get("i"));
         } else {
             out.put("termDeposit", termDeposit(id));
         }
+        out.put("unclaimed", jdbc.query("SELECT transferred_on::text, amount::numeric FROM deposits.unclaimed WHERE account_id = ? AND refunded_on IS NULL",
+                (rs, i) -> {
+                    Map<String, Object> u = new LinkedHashMap<>();
+                    u.put("transferredOn", rs.getString(1));
+                    u.put("amount", DepositRuleSets.plain(rs.getBigDecimal(2)));
+                    return u;
+                }, id).stream().findFirst().orElse(null));
         return out;
     }
 

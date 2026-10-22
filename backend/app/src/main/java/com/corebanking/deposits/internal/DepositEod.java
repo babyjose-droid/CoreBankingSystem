@@ -6,6 +6,7 @@ import com.corebanking.deposits.DepositEvents;
 import com.corebanking.deposits.DepositPostings;
 import com.corebanking.deposits.DepositPostings.Leg;
 import com.corebanking.deposits.DepositRules;
+import com.corebanking.deposits.Dormancy;
 import com.corebanking.deposits.InterestDayEnd;
 import com.corebanking.deposits.InterestDayEnd.Accrual;
 import com.corebanking.deposits.InterestDayEnd.Credit;
@@ -45,6 +46,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       when that cannot be done it waits as MATURED, to be paid when claimed ({@link DepositClosing#mature}).</li>
  *   <li><b>Maturity notices</b> (P4-4): a deposit maturing within the notice period is noticed once, and the depositor
  *       is told (message template DEPOSIT_MATURITY).</li>
+ *   <li><b>Inoperative accounts</b> (P4-6): a savings or current account without a customer movement for 24 months is inoperative.</li>
  *   <li><b>Minimum balance</b> (P4-4): at each month-end a savings or current account's average balance is compared
  *       with its product's minimum, and a charge is levied when the shortfall follows a notified one.</li>
  * </ol>
@@ -75,7 +77,7 @@ class DepositEod implements EodStepProvider {
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
         return List.of(savings(jdbc, tx), termDeposits(jdbc, tx), recurringDeposits(jdbc, tx), pledges(jdbc, tx), maturities(jdbc, tx), notices(jdbc, tx),
-                minimumBalances(jdbc, tx));
+                inoperative(jdbc, tx), minimumBalances(jdbc, tx), unclaimed(jdbc, tx));
     }
 
     /** The last calendar day this business date closes: the day before the next working day. */
@@ -479,6 +481,40 @@ class DepositEod implements EodStepProvider {
 
             @Override void each(EodEngine.Context ctx, UUID id) {
                 DepositClosing.notice(books, outbox, id);
+            }
+        };
+    }
+
+    /** P4-6: savings and current accounts without a customer movement for the rule set's months become inoperative (a bank only). */
+    private EodEngine.ItemStep inoperative(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            @Override public String name() { return "Inoperative accounts"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                if (jdbc.queryForObject("SELECT deposits.rule_kind()", String.class) == null) return List.of();
+                Dormancy.Rules r = DepositDormancy.rulesOf(new DepositRuleSets(jdbc).current());
+                return r == null ? List.of() : DepositDormancy.toMarkInoperative(jdbc, r, ctx.businessDate());
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                DepositDormancy.markInoperative(jdbc, id, ctx.businessDate());
+            }
+        };
+    }
+
+    /** P4-6: balances not operated or claimed for the rule set's years go to the unclaimed deposits head (a bank only). */
+    private EodEngine.ItemStep unclaimed(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new AccountStep(jdbc, tx) {
+            @Override public String name() { return "Unclaimed deposits (DEA Fund)"; }
+
+            @Override List<String> accounts(EodEngine.Context ctx) {
+                if (jdbc.queryForObject("SELECT deposits.rule_kind()", String.class) == null) return List.of();
+                Dormancy.Rules r = DepositDormancy.rulesOf(new DepositRuleSets(jdbc).current());
+                return r == null ? List.of() : DepositDormancy.toTransferUnclaimed(jdbc, r, ctx.businessDate());
+            }
+
+            @Override void each(EodEngine.Context ctx, UUID id) {
+                DepositDormancy.transferUnclaimed(books, id);
             }
         };
     }

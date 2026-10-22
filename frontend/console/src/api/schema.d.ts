@@ -3782,6 +3782,270 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/accounts/{id}/cheques": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An account's cheque books and leaves, the cheques presented on it and the cheques paid into it
+         * @description Module CASA. Permission casa:view. P4-6. 404 outside the caller's branch scope.
+         */
+        get: operations["getCasaCheques"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/cheque-books": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose issuing a cheque book (maker-checker)
+         * @description Module CASA. Permission casa:transact. P4-6. On an active, operative account whose product has the cheque facility. A checker approves it; the book takes the next run of cheque numbers (each number issued once across the institution).
+         */
+        post: operations["proposeChequeBook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/cheques/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop payment of one cheque or a run of them
+         * @description Module CASA. Permission casa:transact. P4-6. Takes effect at once (approval rule CHEQUE STOP, no checker): a stop payment protects the customer. Every cheque in the run is issued to the account and unused.
+         */
+        post: operations["stopCheques"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/cheques/{leafNo}/revoke-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose revoking a stop payment (maker-checker)
+         * @description Module CASA. Permission casa:transact. P4-6. A checker approves it; the cheque may then be paid.
+         */
+        post: operations["proposeChequeStopRevoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/clearing/inward": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Present a cheque drawn on one of our accounts (the inward clearing simulator)
+         * @description Module CASA. Permission casa:transact. P4-6. Decided at once and recorded either way. Paid: the account is debited (CHEQUE_PAID) against the inward clearing head (setting deposits.gl.inward-clearing, 2409). Returned, with the first reason that applies: the account is not ours or not active, the cheque was not issued to it, is already paid or stopped, is post-dated or stale (older than deposits.cheque-valid-months, 3), the account is frozen or inoperative, or the available balance is short (AMOUNT_HELD when a lien makes it short). No return charge is levied.
+         */
+        post: operations["presentCheque"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/cheque-deposits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pay in another bank's cheque (outward clearing)
+         * @description Module CASA. Permission casa:transact. P4-6. The cheque waits in clearing; the account is credited only once it is settled as cleared. Not a post-dated or stale cheque; the account takes credits.
+         */
+        post: operations["lodgeCheque"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/cheque-deposits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cheques paid in and waiting in clearing
+         * @description Module CASA. Permission casa:view. P4-6. Within the caller's branch scope, oldest first.
+         */
+        get: operations["listChequesInClearing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/cheque-deposits/{id}/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Settle a cheque in clearing as cleared or returned (the outward clearing simulator)
+         * @description Module CASA. Permission casa:transact. P4-6. CLEARED credits the account (CHEQUE_DEPOSIT) against the outward clearing head (setting deposits.gl.outward-clearing, 1207); RETURNED, with a reason, credits nothing. Settled once.
+         */
+        post: operations["settleChequeDeposit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/dormancy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Accounts due for review, inoperative, or with a balance transferred as unclaimed
+         * @description Module CASA. Permission casa:view. P4-6. Bank rule sets only (applies is false at an NBFC). A savings or current account with no customer movement for the review months is listed for review; for the inoperative months (two years) the day-end makes it inoperative; for the unclaimed years (ten) the day-end transfers its balance to the unclaimed deposits head (setting deposits.gl.unclaimed, 2407) for the DEA Fund. A term deposit unclaimed ten years after maturity is transferred too.
+         */
+        get: operations["listDormantAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/casa/accounts/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose reactivating an inoperative account, with the KYC record updated (maker-checker)
+         * @description Module CASA. Permission casa:open. P4-6. A checker approves it. A balance transferred as unclaimed is refunded to the account first (UNCLAIMED_REFUND); the account is operative again from the business date. No charge is levied for reactivation.
+         */
+        post: operations["proposeCasaReactivation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose refunding a term deposit's unclaimed balance to the claimant (maker-checker)
+         * @description Module TD. Permission deposit:fund. P4-6. A checker approves it; the balance comes back to the deposit (UNCLAIMED_REFUND) to be paid out or closed.
+         */
+        post: operations["proposeUnclaimedClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The register of deposits
+         * @description Module TD. Permission deposit:view. P4-6. Every term and recurring deposit funded and not closed, with its depositor and terms, the total, and where a deposit-taking NBFC stands against its cap.
+         */
+        get: operations["getDepositRegister"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/net-owned-fund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The net owned fund and the cap on public deposits
+         * @description Module TD. Permission deposit:view. P4-6. A deposit-taking NBFC holds public deposits to 1.5 times its net owned fund (rule TD_DEPOSITS_TO_NOF); applies is false for a bank. Outstanding is every term deposit funded and not closed, at its balance.
+         */
+        get: operations["getNetOwnedFund"];
+        put?: never;
+        /**
+         * Propose recording the net owned fund from an audited balance sheet (maker-checker)
+         * @description Module TD. Permission product:propose. P4-6. A checker approves it; the latest balance sheet date governs. A funding and a recurring deposit's instalment are refused (422) when they would take public deposits past the cap, and every new deposit while no net owned fund is recorded.
+         */
+        post: operations["proposeNetOwnedFund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/casa/transfers": {
         parameters: {
             query?: never;
@@ -6969,10 +7233,10 @@ export interface components {
             /** Format: date */
             valueDate?: string;
             /**
-             * @description LOAN_REPAYMENT: a loan instalment paid by a standing instruction (P4-5b). INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)
+             * @description CHEQUE_PAID (a cheque paid in inward clearing), CHEQUE_DEPOSIT (a cheque paid in, cleared), UNCLAIMED_TRANSFER and UNCLAIMED_REFUND (P4-6). LOAN_REPAYMENT: a loan instalment paid by a standing instruction (P4-5b). INTEREST_CREDIT, INTEREST_PAYOUT (P4-3) and TAX_DEDUCTED (P4-3b) are made by the day-end; CHARGE, CLOSURE, INTEREST_RECOVERY and RENEWAL by the lifecycle (P4-4); RD_INSTALMENT (into a recurring deposit) and RD_LATE_CHARGE (from the paying account) by an instalment (P4-5)
              * @enum {string}
              */
-            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL" | "RD_INSTALMENT" | "RD_LATE_CHARGE" | "LOAN_REPAYMENT";
+            kind?: "CASH_DEPOSIT" | "CASH_WITHDRAWAL" | "BANK_TRANSFER_IN" | "BANK_TRANSFER_OUT" | "TRANSFER_IN" | "TRANSFER_OUT" | "FUNDING" | "FUNDING_PAID" | "REVERSAL" | "INTEREST_CREDIT" | "INTEREST_PAYOUT" | "TAX_DEDUCTED" | "CHARGE" | "CLOSURE" | "INTEREST_RECOVERY" | "RENEWAL" | "RD_INSTALMENT" | "RD_LATE_CHARGE" | "LOAN_REPAYMENT" | "CHEQUE_PAID" | "CHEQUE_DEPOSIT" | "UNCLAIMED_TRANSFER" | "UNCLAIMED_REFUND";
             /** @enum {string} */
             direction?: "DEBIT" | "CREDIT";
             amount?: components["schemas"]["Money"];
@@ -7383,6 +7647,22 @@ export interface components {
              * @description Savings and current: the last day of the interest period in progress; null for an account that bears no interest
              */
             nextInterestDate?: string | null;
+            /**
+             * Format: date
+             * @description Savings and current: the last movement made by or for the customer (P4-6); interest, tax and charges do not count
+             */
+            lastCustomerTxnOn?: string | null;
+            /**
+             * Format: date
+             * @description Savings and current: set by the day-end after two years with no customer movement (P4-6). Credits are taken; nothing is taken out and nothing charged until the account is reactivated
+             */
+            inoperativeSince?: string | null;
+            /** @description The balance transferred to the unclaimed deposits head (for the DEA Fund), not yet refunded (P4-6). Nothing moves on the account until it is */
+            unclaimed?: null | {
+                /** Format: date */
+                transferredOn?: string;
+                amount?: string;
+            };
             termDeposit?: components["schemas"]["TermDepositTerms"];
             /** Format: date */
             closedOn?: string | null;
@@ -7625,6 +7905,220 @@ export interface components {
             figuresMaturityDate?: string;
             totalInterest?: components["schemas"]["Money"];
             maturityValue?: components["schemas"]["Money"];
+        };
+        ChequeBookInput: {
+            /**
+             * @description Default 25
+             * @enum {integer|null}
+             */
+            leaves?: 10 | 25 | 50 | 100 | null;
+        };
+        ChequeStopInput: {
+            fromLeaf: number;
+            /** @description The last cheque of the run; none for one cheque. At most 100 */
+            toLeaf?: number | null;
+            reason: string;
+        };
+        ChequePresentmentInput: {
+            accountNo: string;
+            leafNo: number;
+            amount: number | string;
+            /** Format: date */
+            chequeDate: string;
+            payee: string;
+            presentingBank: string;
+        };
+        ChequePresentmentOutcome: {
+            /** Format: uuid */
+            id?: string;
+            /** @enum {string} */
+            status?: "PAID" | "RETURNED";
+            returnReason?: components["schemas"]["ChequeReturnReason"] | null;
+            returnReasonText?: string | null;
+            /** Format: uuid */
+            movementId?: string | null;
+        };
+        /** @enum {string} */
+        ChequeReturnReason: "NO_SUCH_ACCOUNT" | "ACCOUNT_CLOSED" | "NOT_ISSUED" | "ALREADY_PAID" | "PAYMENT_STOPPED" | "POST_DATED" | "STALE" | "ACCOUNT_FROZEN" | "ACCOUNT_INOPERATIVE" | "AMOUNT_HELD" | "INSUFFICIENT_FUNDS";
+        ChequeDepositInput: {
+            chequeNo: string;
+            /** @description The IFSC of the bank the cheque is drawn on */
+            draweeIfsc: string;
+            drawerName: string;
+            amount: number | string;
+            /** Format: date */
+            chequeDate: string;
+        };
+        ChequeSettleInput: {
+            /** @enum {string} */
+            outcome: "CLEARED" | "RETURNED";
+            /** @description RETURNED only, and then required */
+            reason?: string | null;
+        };
+        ChequeDeposit: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            accountId?: string;
+            accountNo?: string;
+            chequeNo?: string;
+            draweeIfsc?: string;
+            drawerName?: string;
+            amount?: string;
+            /** Format: date */
+            chequeDate?: string;
+            /** Format: date */
+            lodgedOn?: string;
+            /** @enum {string} */
+            status?: "IN_CLEARING" | "CLEARED" | "RETURNED";
+            /** Format: date */
+            settledOn?: string | null;
+            returnReason?: string | null;
+        };
+        CasaCheques: {
+            /** @description Whether the account's product has the cheque facility */
+            chequeFacility?: boolean;
+            books?: {
+                /** Format: uuid */
+                id?: string;
+                bookNo?: string;
+                firstLeaf?: number;
+                lastLeaf?: number;
+                leaves?: number;
+                /** Format: date */
+                issuedOn?: string;
+                issuedBy?: string;
+                unused?: number;
+            }[];
+            /** @description The leaves stopped or paid, newest first */
+            leaves?: {
+                leafNo?: number;
+                /** @enum {string} */
+                status?: "UNUSED" | "STOPPED" | "PAID";
+                /** Format: date */
+                stoppedOn?: string | null;
+                stopReason?: string | null;
+                /** Format: date */
+                paidOn?: string | null;
+            }[];
+            /** @description The latest 100 cheques presented on the account, paid or returned */
+            presented?: {
+                /** Format: uuid */
+                id?: string;
+                leafNo?: number;
+                amount?: string;
+                /** Format: date */
+                chequeDate?: string;
+                payee?: string;
+                presentingBank?: string;
+                /** Format: date */
+                presentedOn?: string;
+                /** @enum {string} */
+                status?: "PAID" | "RETURNED";
+                returnReason?: string | null;
+                returnReasonText?: string | null;
+            }[];
+            /** @description The latest 100 cheques paid in */
+            paidIn?: components["schemas"]["ChequeDeposit"][];
+        };
+        ReactivationInput: {
+            /** @description The KYC record updated for the reactivation or the claim */
+            kycReference: string;
+            reason: string;
+        };
+        DormancyList: {
+            /** Format: date */
+            asOf?: string;
+            applies?: boolean;
+            reviewMonths?: number;
+            inoperativeMonths?: number;
+            unclaimedYears?: number;
+            accounts?: {
+                /** Format: uuid */
+                accountId?: string;
+                accountNo?: string;
+                /** @enum {string} */
+                family?: "CASA" | "TERM_DEPOSIT";
+                productCode?: string;
+                branchCode?: string;
+                customerNo?: string;
+                customerName?: string;
+                balance?: string;
+                /**
+                 * Format: date
+                 * @description The last customer movement; for a term deposit, its maturity
+                 */
+                lastOperated?: string;
+                /** @enum {string} */
+                stage?: "REVIEW" | "INOPERATIVE" | "UNCLAIMED";
+                /** Format: date */
+                inoperativeSince?: string | null;
+                /** Format: date */
+                inoperativeOn?: string | null;
+                /** Format: date */
+                unclaimedOn?: string | null;
+                /** Format: date */
+                unclaimedTransferredOn?: string | null;
+                unclaimedAmount?: string | null;
+            }[];
+        };
+        NetOwnedFundInput: {
+            amount: number | string;
+            /**
+             * Format: date
+             * @description The date of the audited balance sheet; one per date, not after the business date
+             */
+            asOf: string;
+            reference: string;
+        };
+        NetOwnedFund: {
+            applies?: boolean;
+            multiple?: string | null;
+            /** @description The latest recorded; null when none is */
+            netOwnedFund?: string | null;
+            outstanding?: string;
+            cap?: string | null;
+            headroom?: string | null;
+            usedPercent?: string | null;
+            history?: {
+                /** Format: date */
+                asOf?: string;
+                amount?: string;
+                reference?: string;
+                recordedBy?: string;
+            }[];
+        };
+        DepositRegister: {
+            /** Format: date */
+            asOf?: string;
+            count?: number;
+            total?: string;
+            netOwnedFund?: components["schemas"]["NetOwnedFund"];
+            deposits?: {
+                /** Format: uuid */
+                accountId?: string;
+                accountNo?: string;
+                branchCode?: string;
+                /** @enum {string} */
+                status?: "ACTIVE" | "MATURED";
+                productCode?: string;
+                productType?: string;
+                customerNo?: string;
+                depositorName?: string;
+                holders?: number;
+                principal?: string;
+                ratePercent?: string;
+                tenureMonths?: number;
+                tenureDays?: number;
+                /** Format: date */
+                startDate?: string | null;
+                /** Format: date */
+                maturityDate?: string | null;
+                maturityInstruction?: string;
+                balance?: string;
+                nominee?: boolean;
+                lien?: boolean;
+            }[];
         };
     };
     responses: {
@@ -13096,6 +13590,321 @@ export interface operations {
                     "application/json": components["schemas"]["LoanPledge"][];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaCheques: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CasaCheques"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeChequeBook: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChequeBookInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    stopCheques: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChequeStopInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeChequeStopRevoke: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+                leafNo: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    presentCheque: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChequePresentmentInput"];
+            };
+        };
+        responses: {
+            /** @description The outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChequePresentmentOutcome"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    lodgeCheque: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChequeDepositInput"];
+            };
+        };
+        responses: {
+            /** @description Lodged */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChequeDeposit"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listChequesInClearing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChequeDeposit"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    settleChequeDeposit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChequeSettleInput"];
+            };
+        };
+        responses: {
+            /** @description Settled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChequeDeposit"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listDormantAccounts: {
+        parameters: {
+            query?: {
+                stage?: "REVIEW" | "INOPERATIVE" | "UNCLAIMED";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DormancyList"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCasaReactivation: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReactivationInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeUnclaimedClaim: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReactivationInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getDepositRegister: {
+        parameters: {
+            query?: {
+                branch?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositRegister"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getNetOwnedFund: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetOwnedFund"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeNetOwnedFund: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetOwnedFundInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
             default: components["responses"]["Problem"];
         };
     };
