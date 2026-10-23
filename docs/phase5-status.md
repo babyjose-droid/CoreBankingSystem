@@ -6,7 +6,7 @@ Updated 23-Oct-2026. Phase 5 starts with co-lending; business accounting, securi
 |-----------|-------|
 | P5-1 co-lending arrangements and allocation | Built, pushed (`04421b7`), live-tested on the local stack on 23-Oct-2026 (28 of 28) |
 | P5-2 daily split and settlement | Built, pushed (`e0a6ddd`, fix `1156e2e`), live-tested on the local stack on 23-Oct-2026 (split 15 of 17, then after the fix 10 of 10) |
-| P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Built, in review (patch `0006-P5-3`) |
+| P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Built, pushed (`0d4d8c6`), live-tested on the local stack on 23-Oct-2026 (21 of 21) |
 | P5-4 the partner side (this lender takes shares originated by others) | Planned |
 | P5-5 reports and disclosures | Planned |
 
@@ -138,6 +138,19 @@ Write-off is not built for any loan yet (the engine has the status but no operat
   - an invocation on an overdue loan, not set off; a recovery; the release;
   - the books.
 - All SQL suites and the earlier scenarios pass. Console: 14 co-lending tests (356 in all).
+
+### Live test (23-Oct-2026, demo-nbfc, `p5-3-smoke.py`)
+21 of 21:
+- the classification file for the partner (2 loans);
+- the cap of 8,000 (5% of the 1,60,000 the partner funded), with a cover above it refused;
+- a cash cover of 4,000 through a checker (DLG000001), moving 4,000 to the deposit head 1304;
+- a bank guarantee of 1 (DLG000002), kept off the books;
+- an invocation refused on a loan not overdue;
+- both covers released, with the cash back from 1304;
+- the partner's SUBSTANDARD report on loan 10010000000049 held here until 1-Jul-2027;
+- a balanced trial balance.
+
+The `--eod` part, where the borrower's other loan follows at day-end, was not run live; the sandbox scenario covers it.
 
 ### Open items
 P5-04 in `open-items.md`.
