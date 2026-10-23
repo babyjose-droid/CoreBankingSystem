@@ -5,7 +5,7 @@ Updated 23-Oct-2026. Phase 5 starts with co-lending; business accounting, securi
 | Increment | State |
 |-----------|-------|
 | P5-1 co-lending arrangements and allocation | Built, pushed (`04421b7`), live-tested on the local stack on 23-Oct-2026 (28 of 28) |
-| P5-2 daily split and settlement | Built, pushed (`e0a6ddd`), fix patch `0004`; live run in progress |
+| P5-2 daily split and settlement | Built, pushed (`e0a6ddd`, fix `1156e2e`), live-tested on the local stack on 23-Oct-2026 (split 15 of 17, then after the fix 10 of 10) |
 | P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Planned |
 | P5-4 the partner side (this lender takes shares originated by others) | Planned |
 | P5-5 reports and disclosures | Planned |
@@ -89,6 +89,9 @@ The first end of day on demo-nbfc since Phase 4 failed at *Term deposit maturity
 read the deposit rule set, which refuses ("not recorded as registered by RBI to accept public deposits"). The co-lending split itself
 ran clean (2 loans; 8,000 of a 10,000 part-prepayment to the partner). Fix (patch 0004): the step has nothing to do on a tenant without
 deposits, as the inoperative and unclaimed steps already did. A service scenario now runs the whole day-end on a lending-only NBFC.
+After the fix the failed run was restarted from that step and completed (next business date 1-Jul-2026); the partner was paid the
+8,000 through a checker from escrow (settlement CLS00000001, with its statement), nothing was left to settle, and the trial balance
+balances. The first attempt's exception stays on the run as a record (unresolved) until someone marks it resolved.
 
 ### Open items
 P5-03 in `open-items.md`.
