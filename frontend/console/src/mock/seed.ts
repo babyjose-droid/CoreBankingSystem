@@ -249,7 +249,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     loanProducts: [],
     loans: [],
     loanSeq: 0,
-    coLending: { arrangements: [], loans: [] },
+    coLending: { arrangements: [], loans: [], splits: [], settlements: [] },
     staff: [],
     branchSets: [],
     systemProperties: [],

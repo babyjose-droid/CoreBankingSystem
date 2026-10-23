@@ -52,7 +52,7 @@ class LendingEod implements EodStepProvider {
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         DataSource ds = jdbc.getDataSource();
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
-        return List.of(loanDayEnd(jdbc, tx), borrowerNpa(jdbc, tx), feeInvoices(jdbc), coLendingLapse(jdbc));
+        return List.of(loanDayEnd(jdbc, tx), borrowerNpa(jdbc, tx), feeInvoices(jdbc), coLendingLapse(jdbc), coLendingSplit(jdbc, tx));
     }
 
     /**
@@ -70,6 +70,28 @@ class LendingEod implements EodStepProvider {
 
             @Override public void process(EodEngine.Context ctx, String loanId) {
                 CoLendingService.lapse(jdbc, UUID.fromString(loanId));
+            }
+        };
+    }
+
+    /**
+     * Co-lending (P5-2): each loan whose share the partner holds is divided between the lenders for the day (and the
+     * calendar days closed with it), after the loan's own day-end: principal, interest, fees and penal received, less the
+     * servicing fee. Per loan, in its own transaction.
+     */
+    private EodEngine.ItemStep coLendingSplit(JdbcTemplate jdbc, TransactionTemplate tx) {
+        return new EodEngine.ItemStep() {
+            private LocalDate through;
+
+            @Override public String name() { return "Co-lending split"; }
+
+            @Override public List<String> items(EodEngine.Context ctx) {
+                through = jdbc.queryForObject("SELECT platform.next_working_day(?::date) - 1", LocalDate.class, ctx.businessDate().toString());
+                return CoLendingSplit.due(jdbc);
+            }
+
+            @Override public void process(EodEngine.Context ctx, String loanId) {
+                tx.executeWithoutResult(s -> CoLendingSplit.split(jdbc, store, UUID.fromString(loanId), ctx.businessDate(), through, USER));
             }
         };
     }

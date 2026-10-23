@@ -41,6 +41,8 @@ import org.springframework.transaction.annotation.Transactional;
  *       (Dr co-lending escrow / Cr partner's share of co-lent loans, the partner's part of the principal outstanding).
  *       An offer declined or not accepted in time leaves the loan wholly with the originator (paras 22, 24).</li>
  *   <li>The partner's decisions arrive by file (or from the simulator) and are recorded through a checker.</li>
+ *   <li>P5-2: each day-end divides what the borrower paid between the lenders ({@link CoLendingSplit}); a settlement
+ *       pays the partner what is due through the escrow account, through a checker, with a statement.</li>
  * </ul>
  */
 @Service
@@ -48,6 +50,7 @@ public class CoLendingService {
 
     static final String ARRANGEMENT = "CO_LENDING_ARRANGEMENT";
     static final String DECISION = "CO_LENDING_DECISION";
+    static final String SETTLEMENT = "CO_LENDING_SETTLEMENT";
 
     /** openapi.yaml#/components/schemas/CoLendingArrangementInput. */
     public record ArrangementInput(String code, String name, String partnerName, String partnerKind, String partnerReference,
@@ -70,8 +73,11 @@ public class CoLendingService {
     private final BusinessDays days;
     private final BranchScope scope;
     private final Json json;
+    private final LoanStore store;
 
-    CoLendingService(JdbcTemplate jdbc, ApprovalService approvals, PostingService posting, BusinessDays days, BranchScope scope, Json json) {
+    CoLendingService(JdbcTemplate jdbc, ApprovalService approvals, PostingService posting, BusinessDays days, BranchScope scope, Json json,
+                     LoanStore store) {
+        this.store = store;
         this.jdbc = jdbc;
         this.approvals = approvals;
         this.posting = posting;
@@ -364,8 +370,202 @@ public class CoLendingService {
             CoLending.Split now = CoLending.byShare(t, principal);
             m.put("originatorPrincipal", plain(now.originator()));
             m.put("partnerPrincipal", plain(now.partner()));
+            List<Map<String, Object>> pos = jdbc.queryForList("""
+                    SELECT p.as_of, p.principal, p.interest, (SELECT coalesce(sum(value::numeric), 0) FROM jsonb_each_text(p.fees)) AS fees, p.penal,
+                           p.servicing, (SELECT coalesce(sum(x.net), 0) FROM lending.co_lending_split x WHERE x.loan_id = p.loan_id AND x.settlement_id IS NULL)
+                             AS unsettled
+                      FROM lending.co_lent_position p WHERE p.loan_id = ?
+                    """, loanId);
+            if (!pos.isEmpty()) {
+                Map<String, Object> p = pos.get(0);
+                m.put("splitAsOf", str(p.get("as_of")));
+                m.put("partnerPrincipalRepaid", plain((BigDecimal) p.get("principal")));
+                m.put("partnerInterest", plain((BigDecimal) p.get("interest")));
+                m.put("partnerFees", plain((BigDecimal) p.get("fees")));
+                m.put("partnerPenal", plain((BigDecimal) p.get("penal")));
+                m.put("servicingFeeTaken", plain((BigDecimal) p.get("servicing")));
+                m.put("unsettled", plain((BigDecimal) p.get("unsettled")));
+            }
         }
         return m;
+    }
+
+    /** The rate of a co-lent loan is the arrangement's blended rate: it is not amended (each lender's rate is agreed). */
+    public void refuseRateChange(UUID loanId) {
+        List<String> s = jdbc.queryForList("SELECT arrangement_code FROM lending.co_lent_loan WHERE loan_id = ? AND status IN ('SANCTIONED','OFFERED','ACCEPTED')",
+                String.class, loanId);
+        if (!s.isEmpty()) {
+            throw ApiException.conflict("the loan is co-lent under " + s.get(0) + ": its rate is the arrangement's blended rate and is not amended");
+        }
+    }
+
+    /** Restructuring a loan whose share the partner holds needs both lenders; it comes with the stress handling of P5-3. */
+    public void refuseRestructure(UUID loanId) {
+        List<String> s = jdbc.queryForList("SELECT arrangement_code FROM lending.co_lent_loan WHERE loan_id = ? AND status = 'ACCEPTED'", String.class, loanId);
+        if (!s.isEmpty()) {
+            throw ApiException.conflict("the partner of " + s.get(0) + " holds a share of this loan: restructuring a co-lent loan is not built yet (open item P5-03)");
+        }
+    }
+
+    // ================================================================================================ settlement (P5-2)
+
+    /** What is due to the partner and not yet settled, by loan, from the splits of the day-ends so far. */
+    public Map<String, Object> unsettled(String code) {
+        arrangement(code);
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT l.id AS loan_id, l.loan_no, l.branch_code, max(x.business_date) AS last_split, sum(x.principal) AS principal, sum(x.interest) AS interest,
+                       sum(x.fees) AS fees, sum(x.penal) AS penal, sum(x.servicing) AS servicing, sum(x.net) AS net
+                  FROM lending.co_lending_split x JOIN lending.co_lent_loan c ON c.loan_id = x.loan_id JOIN lending.loan_account l ON l.id = x.loan_id
+                 WHERE c.arrangement_code = ? AND x.settlement_id IS NULL
+                 GROUP BY l.id, l.loan_no, l.branch_code ORDER BY l.loan_no
+                """, code);
+        List<Map<String, Object>> loans = new ArrayList<>();
+        BigDecimal[] tot = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        String[] keys = {"principal", "interest", "fees", "penal", "servicing", "net"};
+        for (Map<String, Object> r : rows) {
+            if (!scope.canSee((String) r.get("branch_code"))) continue;
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("loanId", r.get("loan_id").toString());
+            m.put("loanNo", r.get("loan_no"));
+            m.put("branchCode", r.get("branch_code"));
+            m.put("lastSplit", str(r.get("last_split")));
+            for (int i = 0; i < keys.length; i++) {
+                BigDecimal v = (BigDecimal) r.get(keys[i]);
+                m.put(keys[i], plain(v));
+                tot[i] = tot[i].add(v);
+            }
+            loans.add(m);
+        }
+        Map<String, Object> totals = new LinkedHashMap<>();
+        for (int i = 0; i < keys.length; i++) totals.put(keys[i], plain(tot[i]));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("arrangementCode", code);
+        out.put("asOf", str(jdbc.queryForObject("""
+                SELECT max(p.as_of) FROM lending.co_lent_position p JOIN lending.co_lent_loan c ON c.loan_id = p.loan_id WHERE c.arrangement_code = ?
+                """, java.sql.Date.class, code)));
+        out.put("loans", loans);
+        out.put("totals", totals);
+        return out;
+    }
+
+    /** A settlement with the partner: pays what is due through escrow, once a checker approves it. */
+    @Transactional
+    public ApprovalRequest proposeSettlement(String code, String idempotencyKey) {
+        Map<String, Object> a = arrangement(code);
+        days.requireOpen();
+        Integer pending = jdbc.queryForObject("SELECT count(*)::int FROM platform.approval_request WHERE entity_type = ? AND entity_id = ? AND status = 'PENDING'",
+                Integer.class, SETTLEMENT, code);
+        if (pending != null && pending > 0) throw ApiException.conflict("a settlement of " + code + " is already waiting for a checker");
+        List<String> ids = jdbc.queryForList("""
+                SELECT x.id::text FROM lending.co_lending_split x JOIN lending.co_lent_loan c ON c.loan_id = x.loan_id
+                 WHERE c.arrangement_code = ? AND x.settlement_id IS NULL ORDER BY x.business_date, x.id
+                """, String.class, code);
+        Map<String, Object> due = unsettled(code);
+        @SuppressWarnings("unchecked") Map<String, Object> totals = (Map<String, Object>) due.get("totals");
+        BigDecimal net = new BigDecimal((String) totals.get("net"));
+        if (ids.isEmpty() || net.signum() <= 0) throw ApiException.conflict("nothing is due to the partner of " + code);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("arrangementCode", code);
+        payload.put("partnerName", a.get("partnerName"));
+        payload.put("asOf", due.get("asOf"));
+        payload.put("loans", ((List<?>) due.get("loans")).size());
+        payload.putAll(totals);
+        payload.put("splitIds", ids);
+        return approvals.propose(SETTLEMENT, "SETTLE", code, payload, null, net, null, idempotencyKey);
+    }
+
+    String applySettlement(ApprovalRequest r) {
+        LocalDate today = days.requireOpen();
+        String code = (String) r.payload().get("arrangementCode");
+        List<UUID> ids = ((List<?>) r.payload().get("splitIds")).stream().map(o -> UUID.fromString(String.valueOf(o))).toList();
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT x.id, x.settlement_id, x.principal, x.interest, x.fees, x.penal, x.servicing, x.net, c.arrangement_code, l.loan_no, l.branch_code
+                  FROM lending.co_lending_split x JOIN lending.co_lent_loan c ON c.loan_id = x.loan_id JOIN lending.loan_account l ON l.id = x.loan_id
+                 WHERE x.id = ANY (?::uuid[]) FOR UPDATE OF x
+                """, "{" + String.join(",", ids.stream().map(UUID::toString).toList()) + "}");
+        if (rows.size() != ids.size() || rows.stream().anyMatch(x -> x.get("settlement_id") != null || !code.equals(x.get("arrangement_code")))) {
+            throw ApiException.conflict("some of these splits were settled meanwhile: propose the settlement again");
+        }
+        Map<String, BigDecimal> byLoan = new LinkedHashMap<>();
+        Map<String, String> branch = new LinkedHashMap<>();
+        BigDecimal[] t = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        for (Map<String, Object> x : rows) {
+            byLoan.merge((String) x.get("loan_no"), (BigDecimal) x.get("net"), BigDecimal::add);
+            branch.put((String) x.get("loan_no"), (String) x.get("branch_code"));
+            t[0] = t[0].add((BigDecimal) x.get("principal"));
+            t[1] = t[1].add((BigDecimal) x.get("interest"));
+            t[2] = t[2].add((BigDecimal) x.get("fees"));
+            t[3] = t[3].add((BigDecimal) x.get("penal"));
+            t[4] = t[4].add((BigDecimal) x.get("servicing"));
+        }
+        BigDecimal net = t[0].add(t[1]).add(t[2]).add(t[3]).subtract(t[4]);
+        if (net.signum() <= 0) throw ApiException.conflict("nothing is due to the partner of " + code);
+        String no = "CLS" + String.format("%08d", jdbc.queryForObject("SELECT nextval('lending.co_lending_settlement_seq')", Long.class));
+        List<CoLending.SettlementLine> lines = byLoan.entrySet().stream().map(e -> new CoLending.SettlementLine(branch.get(e.getKey()), e.getKey(), e.getValue())).toList();
+        TransactionLot lot = CoLending.settlementLot(CoLendingSplit.heads(jdbc), lines, no, today);
+        posting.post(lot, r.maker());
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO lending.co_lending_settlement (id, settlement_no, arrangement_code, business_date, loans, principal, interest, fees, penal, servicing,
+                                                           net, lot_id, approval_id, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, id, no, code, today, byLoan.size(), t[0], t[1], t[2], t[3], t[4], net, lot.id(), r.id(), r.maker());
+        jdbc.update("UPDATE lending.co_lending_split SET settlement_id = ? WHERE id = ANY (?::uuid[])", id,
+                "{" + String.join(",", ids.stream().map(UUID::toString).toList()) + "}");
+        return no + ": " + plain(net) + " paid to the partner of " + code + " through escrow (" + byLoan.size() + " loan" + (byLoan.size() == 1 ? "" : "s") + ")";
+    }
+
+    public List<Map<String, Object>> settlements(String code) {
+        arrangement(code);
+        return jdbc.queryForList("SELECT * FROM lending.co_lending_settlement WHERE arrangement_code = ? ORDER BY created_at DESC", code).stream()
+                .map(CoLendingService::settlementRow).toList();
+    }
+
+    private static Map<String, Object> settlementRow(Map<String, Object> x) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", x.get("id").toString());
+        m.put("settlementNo", x.get("settlement_no"));
+        m.put("arrangementCode", x.get("arrangement_code"));
+        m.put("businessDate", str(x.get("business_date")));
+        m.put("loans", x.get("loans"));
+        for (String k : List.of("principal", "interest", "fees", "penal", "servicing", "net")) m.put(k, plain((BigDecimal) x.get(k)));
+        m.put("createdBy", x.get("created_by"));
+        return m;
+    }
+
+    /** A settlement with what it paid for each loan. */
+    public Map<String, Object> settlement(UUID id) {
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM lending.co_lending_settlement WHERE id = ?", id);
+        if (rows.isEmpty()) throw ApiException.notFound("co-lending settlement " + id);
+        Map<String, Object> m = settlementRow(rows.get(0));
+        m.put("lines", jdbc.queryForList("""
+                SELECT l.loan_no, l.branch_code, sum(x.principal) AS principal, sum(x.interest) AS interest, sum(x.fees) AS fees, sum(x.penal) AS penal,
+                       sum(x.servicing) AS servicing, sum(x.net) AS net
+                  FROM lending.co_lending_split x JOIN lending.loan_account l ON l.id = x.loan_id WHERE x.settlement_id = ?
+                 GROUP BY l.loan_no, l.branch_code ORDER BY l.loan_no
+                """, id).stream().map(x -> {
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("loanNo", x.get("loan_no"));
+            line.put("branchCode", x.get("branch_code"));
+            for (String k : List.of("principal", "interest", "fees", "penal", "servicing", "net")) line.put(k, plain((BigDecimal) x.get(k)));
+            return line;
+        }).toList());
+        return m;
+    }
+
+    /** The settlement statement for the partner: one line per loan and the total. */
+    public byte[] statementFile(UUID id) {
+        Map<String, Object> st = settlement(id);
+        StringBuilder sb = new StringBuilder(Csv.line(List.of("settlement_no", "arrangement", "business_date", "loan_no", "principal", "interest", "fees",
+                "penal_charges", "servicing_fee", "net_paid")));
+        for (Object o : (List<?>) st.get("lines")) {
+            Map<?, ?> l = (Map<?, ?>) o;
+            sb.append(Csv.line(List.of(s(st.get("settlementNo")), s(st.get("arrangementCode")), s(st.get("businessDate")), s(l.get("loanNo")), s(l.get("principal")),
+                    s(l.get("interest")), s(l.get("fees")), s(l.get("penal")), s(l.get("servicing")), s(l.get("net")))));
+        }
+        sb.append(Csv.line(List.of(s(st.get("settlementNo")), s(st.get("arrangementCode")), s(st.get("businessDate")), "TOTAL", s(st.get("principal")),
+                s(st.get("interest")), s(st.get("fees")), s(st.get("penal")), s(st.get("servicing")), s(st.get("net")))));
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     // ================================================================================================ offers and decisions
@@ -524,6 +724,7 @@ public class CoLendingService {
                     UPDATE lending.co_lent_loan SET status = 'ACCEPTED', partner_loan_ref = ?, partner_principal = ?, transfer_lot_id = ?,
                            decision_approval_id = ? WHERE loan_id = ?
                     """, d.get("partnerLoanRef"), partner, lot.id(), r.id(), loanId);
+            CoLendingSplit.open(jdbc, loanId, store.read(jdbc, loanId).account(), today);
             accepted++;
         }
         return code + ": " + accepted + " accepted, " + declined + " declined"
@@ -602,6 +803,20 @@ public class CoLendingService {
         @Override public String entityType() { return ARRANGEMENT; }
 
         @Override public String apply(ApprovalRequest r) { return colending.applyArrangement(r); }
+    }
+
+    /** Pays the partner once a checker approves a settlement. */
+    @Service
+    static class SettlementApplier implements ApprovalApplier {
+        private final CoLendingService colending;
+
+        SettlementApplier(@Lazy CoLendingService colending) {
+            this.colending = colending;
+        }
+
+        @Override public String entityType() { return SETTLEMENT; }
+
+        @Override public String apply(ApprovalRequest r) { return colending.applySettlement(r); }
     }
 
     /** Applies the partner's decisions once a checker approves them. */

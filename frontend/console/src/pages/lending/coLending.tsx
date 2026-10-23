@@ -3,11 +3,15 @@ import { Link, useParams } from 'react-router';
 import { useMe } from '../../api/hooks';
 import {
   coLendingOffersFile,
+  coLendingStatementFile,
   parseDecisionsCsv,
   useCoLendingArrangement,
   useCoLendingArrangements,
   useCoLendingOffers,
+  useCoLendingSettlements,
+  useCoLendingUnsettled,
   useProposeCoLendingArrangement,
+  useProposeCoLendingSettlement,
   useProposeCoLendingDecisions,
   useProposeCoLendingStatus,
   useSimulateCoLendingPartner,
@@ -387,10 +391,96 @@ export function CoLendingDetailPage() {
           />
         </Card>
       )}
+      <PartnerDueCard code={x.code!} canSettle={canDecide} />
       {editing && <ArrangementDialog current={x} onClose={() => setEditing(false)} />}
       {status && <StatusDialog a={x} to={status} onClose={() => setStatus(null)} />}
       {deciding && <DecisionDialog code={x.code!} offer={deciding} onClose={() => setDeciding(null)} />}
     </div>
+  );
+}
+
+/** P5-2: what the day-ends split to the partner and is not yet paid, and the settlements that paid it. */
+function PartnerDueCard({ code, canSettle }: { code: string; canSettle: boolean }) {
+  const due = useCoLendingUnsettled(code);
+  const done = useCoLendingSettlements(code);
+  const settle = useProposeCoLendingSettlement(code);
+  const download = useFileDownload();
+  const proposal = useProposalToast();
+  const toast = useToast();
+  const t = due.data?.totals;
+  const net = Number(t?.net ?? 0);
+  const amountCols = [
+    { key: 'p', header: 'Principal', numeric: true, render: (r: { principal?: string }) => <MoneyText value={r.principal} /> },
+    { key: 'i', header: 'Interest', numeric: true, render: (r: { interest?: string }) => <MoneyText value={r.interest} /> },
+    { key: 'f', header: 'Fees', numeric: true, render: (r: { fees?: string }) => <MoneyText value={r.fees} /> },
+    { key: 'pe', header: 'Penal', numeric: true, render: (r: { penal?: string }) => <MoneyText value={r.penal} /> },
+    { key: 's', header: 'Servicing fee', numeric: true, render: (r: { servicing?: string }) => <MoneyText value={r.servicing} /> },
+    { key: 'n', header: 'Due', numeric: true, render: (r: { net?: string }) => <strong><MoneyText value={r.net} /></strong> },
+  ];
+  return (
+    <>
+      <Card
+        title="Due to the partner"
+        flush
+        actions={canSettle ? (
+          <Button size="sm" variant="primary" loading={settle.isPending} disabled={!(net > 0)} onClick={() => settle.mutate(undefined, { onSuccess: (a) => proposal(a, 'Settlement with the partner') })}>
+            Settle with partner…
+          </Button>
+        ) : undefined}
+      >
+        <p className="muted" style={{ margin: 12 }}>
+          Each day-end divides what borrowers paid: principal by share, interest in the ratio share × rate (each lender earns its own rate on its share), fees without GST and
+          penal charges as agreed, less the servicing fee on the partner’s principal. A reversed receipt is taken back the next day. Split to {due.data?.asOf ? <DateText value={due.data.asOf} /> : '—'}.
+        </p>
+        <ErrorBanner error={due.error ?? settle.error} />
+        {due.isLoading ? <div style={{ padding: 16 }}><Spinner /></div> : (
+          <Table
+            caption="Due to the partner by loan"
+            captionHidden
+            columns={[{ key: 'loan', header: 'Loan', render: (r) => <Link to={`/loans/${r.loanId}`} className="mono">{r.loanNo}</Link> }, ...amountCols]}
+            rows={due.data?.loans ?? []}
+            rowKey={(r) => r.loanNo ?? ''}
+            empty={<EmptyState title="Nothing due to the partner" />}
+            footer={(due.data?.loans ?? []).length > 0 && t ? (
+              <tr>
+                <td>Total</td>
+                <td className="num"><MoneyText value={t.principal} /></td>
+                <td className="num"><MoneyText value={t.interest} /></td>
+                <td className="num"><MoneyText value={t.fees} /></td>
+                <td className="num"><MoneyText value={t.penal} /></td>
+                <td className="num"><MoneyText value={t.servicing} /></td>
+                <td className="num" data-testid="due-total"><strong><MoneyText value={t.net} /></strong></td>
+              </tr>
+            ) : undefined}
+          />
+        )}
+      </Card>
+      <Card title="Settlements" flush>
+        <ErrorBanner error={done.error ?? download.error} />
+        <Table
+          caption="Settlements with the partner"
+          captionHidden
+          columns={[
+            { key: 'no', header: 'Settlement', render: (r) => <span className="mono">{r.settlementNo}</span> },
+            { key: 'd', header: 'Date', render: (r) => <DateText value={r.businessDate} /> },
+            { key: 'l', header: 'Loans', numeric: true, render: (r) => r.loans },
+            ...amountCols.map((c) => (c.key === 'n' ? { ...c, header: 'Paid' } : c)),
+            {
+              key: 'st',
+              header: <span className="sr-only">Statement</span>,
+              render: (r) => (
+                <Button size="sm" variant="ghost" onClick={() => download.mutate(coLendingStatementFile(r.id!, r.settlementNo!), { onSuccess: (name) => toast({ tone: 'success', message: `Saved ${name}.` }) })}>
+                  Statement
+                </Button>
+              ),
+            },
+          ]}
+          rows={done.data ?? []}
+          rowKey={(r) => r.id ?? ''}
+          empty={<EmptyState title="No settlement yet" />}
+        />
+      </Card>
+    </>
   );
 }
 
@@ -420,6 +510,18 @@ export function CoLendingCard({ loan }: { loan: Loan }) {
           <>
             <Stat label="Partner’s principal"><MoneyText value={c.partnerPrincipal} /></Stat>
             <Stat label="This lender’s principal"><MoneyText value={c.originatorPrincipal} /></Stat>
+            {c.splitAsOf && (
+              <>
+                <Stat label="Split to the partner" testId="partner-received">
+                  <MoneyText value={String((Number(c.partnerPrincipalRepaid ?? 0) + Number(c.partnerInterest ?? 0) + Number(c.partnerFees ?? 0) + Number(c.partnerPenal ?? 0)).toFixed(2))} />
+                  <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+                    principal <MoneyText value={c.partnerPrincipalRepaid} />, interest <MoneyText value={c.partnerInterest} />
+                  </div>
+                </Stat>
+                <Stat label="Servicing fee taken"><MoneyText value={c.servicingFeeTaken} /></Stat>
+                <Stat label="Not yet settled" testId="partner-unsettled"><MoneyText value={c.unsettled} /></Stat>
+              </>
+            )}
           </>
         )}
       </div>

@@ -5,7 +5,7 @@ Updated 23-Oct-2026. Phase 5 starts with co-lending; business accounting, securi
 | Increment | State |
 |-----------|-------|
 | P5-1 co-lending arrangements and allocation | Built, pushed (`04421b7`), live-tested on the local stack on 23-Oct-2026 (28 of 28) |
-| P5-2 daily split and settlement | Planned |
+| P5-2 daily split and settlement | Built, in review (patch `0003-P5-2`) |
 | P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Planned |
 | P5-4 the partner side (this lender takes shares originated by others) | Planned |
 | P5-5 reports and disclosures | Planned |
@@ -57,3 +57,32 @@ In force from 1-Jan-2026, for commercial banks (not small finance banks, local a
 
 ### Open items
 P5-01 (tranche and floating-rate loans not co-lent) and P5-02 (P5-1 choices to confirm) in `open-items.md`.
+
+## Increment P5-2: daily split and settlement
+
+### What was built
+**Engine** (`CoLending`): where the partner should stand on a loan (`target`): principal repaid to it is what it funded less its share of the principal outstanding; interest received divides in the ratio share × rate; fees received (without their GST) and penal charges are shared by share or kept by the originator, as the arrangement says. The servicing fee accrues daily on the partner's principal outstanding (% a year, 365 days). `splitLot` posts the change since the last split: Dr contra 1105 / Cr due to the partner 2303 for principal, Dr the income head / Cr 2303 for interest, fees and penal, Dr 2303 / Cr 4110 for the servicing fee; a negative change (a receipt reversed) posts the other way. `settlementLot` pays the partner: Dr 2303 per loan / Cr escrow 1208, per branch.
+
+**Database** (tenant `V40`)
+- `lending.co_lent_position`: per loan, what the borrower had paid when the partner took its share (the baseline, fixed) and where the partner stands (cumulative). Loans accepted before V40 count from the day of the migration.
+- `lending.co_lending_split`: each day's change as posted, with its lot; settled once and never changed.
+- `lending.co_lending_settlement`: a payment to the partner with its lot; its figures must be those of the splits it settles (checked at commit).
+- `lending.co_lending_problems()` now also checks that the partner payable on the co-lent loans equals the splits not yet settled, and that the contra head equals the partner's principal funded less repaid to it.
+
+**Application**
+- Day-end step *Co-lending split*, per loan, after the loan's own day-end; the calendar days closed with a business day are split with it. A loan written off is left for P5-3. Once a loan is closed and fully divided its split is final.
+- At acceptance the baseline is recorded.
+- Settlement with the partner through a checker (`CO_LENDING_SETTLEMENT`): settles every split not yet settled; one at a time per arrangement; refused when nothing is due. A statement CSV per settlement.
+- A rate amendment or a switch to fixed is refused on a co-lent loan (its rate is the blended rate), and a restructure once the partner holds a share (P5-03).
+- API: what is due by loan, the settlements, propose a settlement, one settlement, its statement (five operations); `Loan.coLending` shows what has been split to the partner and what is not yet settled.
+
+**Console**: on the arrangement page, *Due to the partner* (by loan, with the total and *Settle with partner…*) and *Settlements* (with each statement); on the loan's co-lending card, what has been split to the partner, the servicing fee taken and what is not yet settled. Mock API and tests.
+
+### Tests
+- `CoLendingTest`: the day's split, a reversal taken back, fees kept or shared, the servicing fee, the settlement lot (111 engine tests in all).
+- `co_lending_split_test.sql`: 19 checks on V40 (the position, splits, settlements and the books).
+- Service scenario P52: 38 checks (servicing fee from acceptance, an instalment split, a fee shared without GST and its receipt reversed, a settlement through a checker with its statement, one at a time, pre-closure repaying the partner's principal in full, the final split, the books). All SQL suites and the earlier scenarios pass.
+- Console: 11 co-lending tests (353 in all).
+
+### Open items
+P5-03 in `open-items.md`.

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrap } from './client';
 import type { FileRequest } from './extraHooks';
-import type { Approval, CoLendingArrangement, CoLendingArrangementInput, CoLendingDecision, CoLendingOffer, CoLendingStatusInput } from './types';
+import type { Approval, CoLendingArrangement, CoLendingArrangementInput, CoLendingDecision, CoLendingOffer, CoLendingSettlement, CoLendingStatusInput, CoLendingUnsettled } from './types';
 import { useApiClient } from './useApiClient';
 
 /** Co-lending as the originating lender (P5-1). */
@@ -68,6 +68,39 @@ export function useSimulateCoLendingPartner(code: string) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['approvals'] }),
   });
 }
+
+/** P5-2: what is due to the partner from the daily splits, and the settlements that paid it. */
+export function useCoLendingUnsettled(code: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['co-lending', code, 'unsettled'],
+    queryFn: () => unwrap<CoLendingUnsettled>(api.GET('/api/v1/co-lending/arrangements/{code}/unsettled', { params: { path: { code: code! } } })),
+    enabled: !!code,
+  });
+}
+
+export function useCoLendingSettlements(code: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ['co-lending', code, 'settlements'],
+    queryFn: () => unwrap<CoLendingSettlement[]>(api.GET('/api/v1/co-lending/arrangements/{code}/settlements', { params: { path: { code: code! } } })),
+    enabled: !!code,
+  });
+}
+
+export function useProposeCoLendingSettlement(code: string) {
+  const api = useApiClient();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap<Approval>(api.POST('/api/v1/co-lending/arrangements/{code}/settlements', { params: { path: { code } } }) as never),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['approvals'] }),
+  });
+}
+
+export const coLendingStatementFile = (id: string, no: string): FileRequest => ({
+  request: (api) => api.GET('/api/v1/co-lending/settlements/{id}/statement.csv', { params: { path: { id } }, parseAs: 'blob' }),
+  fallbackName: `co-lending-settlement-${no}.csv`,
+});
 
 export const coLendingOffersFile = (code: string): FileRequest => ({
   request: (api) => api.GET('/api/v1/co-lending/arrangements/{code}/offers.csv', { params: { path: { code } }, parseAs: 'blob' }),

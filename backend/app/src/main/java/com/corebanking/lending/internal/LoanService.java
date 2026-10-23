@@ -1166,6 +1166,7 @@ public class LoanService {
     @Transactional
     public Map<String, Object> proposeAmendment(UUID loanId, AmendmentRequest req) {
         if (req == null || req.reason() == null || req.reason().isBlank()) throw ApiException.invalid("a reason is required");
+        if ("RATE_CHANGE".equals(req.kind()) || "SWITCH_TO_FIXED".equals(req.kind())) coLending.refuseRateChange(loanId);
         LocalDate bd = days.current().businessDate();
         Amendment a = amendment(req, limits(loanId));
         LoanStore.Loaded l = active(loanId);
@@ -1245,6 +1246,7 @@ public class LoanService {
         if (req == null || req.reason() == null || req.reason().isBlank()) throw ApiException.invalid("a reason is required");
         LocalDate bd = days.current().businessDate();
         limits(loanId);
+        coLending.refuseRestructure(loanId);
         RestructureTerms t = restructureTerms(req);
         LoanStore.Loaded l = active(loanId);
         RestructureSimulation s = engine(() -> l.account().simulateRestructure(t, bd));

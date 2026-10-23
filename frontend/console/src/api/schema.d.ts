@@ -1252,6 +1252,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/co-lending/arrangements/{code}/unsettled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is due to the partner and not yet settled, by loan, from the daily splits so far
+         * @description Permission: loan:view. Each day-end splits what the borrower paid on a loan whose share the partner holds:
+         *     principal repaid by share, interest received in the ratio share x rate, fees (without GST) and penal charges
+         *     received as the arrangement shares them, less the servicing fee accrued daily on the partner's principal. A
+         *     receipt reversed is taken back by the next split (a negative line).
+         */
+        get: operations["getCoLendingUnsettled"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Settlements with the partner, newest first
+         * @description Permission: loan:view.
+         */
+        get: operations["listCoLendingSettlements"];
+        put?: never;
+        /**
+         * Pay the partner what is due, through the escrow account (maker-checker)
+         * @description Permission: loan:disburse. Settles every split not yet settled (409 when nothing is due, or a settlement of the
+         *     arrangement already waits for a checker). On approval: Dr due to the partner on each loan / Cr escrow, and a
+         *     statement for the partner.
+         */
+        post: operations["proposeCoLendingSettlement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/settlements/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A settlement with what it paid for each loan
+         * @description Permission: loan:view.
+         */
+        get: operations["getCoLendingSettlement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/settlements/{id}/statement.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The settlement statement for the partner (one line per loan and the total)
+         * @description Permission: loan:view.
+         */
+        get: operations["downloadCoLendingStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans": {
         parameters: {
             query?: never;
@@ -6149,6 +6238,84 @@ export interface components {
             /** @description Accepted loans: the originator's share of the principal outstanding */
             originatorPrincipal?: string;
             partnerPrincipal?: string;
+            /**
+             * Format: date
+             * @description Last day split between the lenders
+             */
+            splitAsOf?: string;
+            /** @description Cumulative since acceptance: principal repaid to the partner */
+            partnerPrincipalRepaid?: string;
+            partnerInterest?: string;
+            partnerFees?: string;
+            partnerPenal?: string;
+            servicingFeeTaken?: string;
+            /** @description Split and not yet paid to the partner */
+            unsettled?: string;
+        };
+        CoLendingUnsettled: {
+            arrangementCode?: string;
+            /**
+             * Format: date
+             * @description Last day split
+             */
+            asOf?: string | null;
+            loans?: {
+                /** Format: uuid */
+                loanId?: string;
+                loanNo?: string;
+                branchCode?: string;
+                /** Format: date */
+                lastSplit?: string;
+                principal?: string;
+                interest?: string;
+                fees?: string;
+                penal?: string;
+                /** @description Servicing fee taken by the originator */
+                servicing?: string;
+                /** @description principal + interest + fees + penal - servicing */
+                net?: string;
+            }[];
+            totals?: {
+                principal?: string;
+                interest?: string;
+                fees?: string;
+                penal?: string;
+                /** @description Servicing fee taken by the originator */
+                servicing?: string;
+                /** @description principal + interest + fees + penal - servicing */
+                net?: string;
+            };
+        };
+        CoLendingSettlement: {
+            /** Format: uuid */
+            id?: string;
+            settlementNo?: string;
+            arrangementCode?: string;
+            /** Format: date */
+            businessDate?: string;
+            loans?: number;
+            principal?: string;
+            interest?: string;
+            fees?: string;
+            penal?: string;
+            /** @description Servicing fee taken by the originator */
+            servicing?: string;
+            /** @description principal + interest + fees + penal - servicing */
+            net?: string;
+            createdBy?: string;
+            /** @description In a single settlement only */
+            lines?: {
+                loanNo?: string;
+                branchCode?: string;
+                principal?: string;
+                interest?: string;
+                fees?: string;
+                penal?: string;
+                /** @description Servicing fee taken by the originator */
+                servicing?: string;
+                /** @description principal + interest + fees + penal - servicing */
+                net?: string;
+            }[];
         };
         KfsCoLending: {
             arrangementCode?: string;
@@ -10462,6 +10629,115 @@ export interface operations {
         requestBody?: never;
         responses: {
             202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCoLendingUnsettled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingUnsettled"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCoLendingSettlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingSettlement"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingSettlement: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCoLendingSettlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingSettlement"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    downloadCoLendingStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };

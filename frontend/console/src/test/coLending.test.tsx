@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { parseDecisionsCsv } from '../api/coLendingHooks';
 import { addDays } from '../lib/dates';
+import { coLendingDayEnd } from '../mock/coLending';
+import { lendingDayEnd } from '../mock/lending';
 import { createMockServer, type MockServer } from '../mock/server';
 import { mockToken } from '../auth/demoUsers';
 import { mockCall, renderApp } from './utils';
@@ -158,6 +160,80 @@ describe('co-lending pages', () => {
     await user().click(within(dialog).getByRole('button', { name: 'Submit for approval' }));
     expect(await screen.findByText(/New arrangement sent for approval/)).toBeInTheDocument();
     expect(s.db.approvals.some((a) => a.approval.entityType === 'CO_LENDING_ARRANGEMENT' && a.approval.entityId === 'CLAUDE_TEST')).toBe(true);
+  });
+});
+
+/** Move the mock's business date on and run the loans' and the co-lending day-ends. */
+function dayEnd(s: MockServer, days = 1) {
+  s.db.businessDate = addDays(s.db.businessDate, days);
+  lendingDayEnd(s.db);
+  coLendingDayEnd(s.db);
+}
+
+async function accepted(s: MockServer) {
+  const { id, loanNo } = await coLentLoan(s, 'Anu');
+  const sim = await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/simulate-partner', {});
+  await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${sim.body.id}/approve`, {});
+  return { id, loanNo };
+}
+
+describe('co-lending split and settlement (mock API)', () => {
+  it('splits a repayment, takes the servicing fee and pays the partner through a checker', async () => {
+    const s = createMockServer();
+    const { id, loanNo } = await accepted(s);
+    dayEnd(s, 30);
+    const fee = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}`)).body.coLending.servicingFeeTaken;
+    expect(Number(fee)).toBeCloseTo((80000 * 0.5 * 29) / 36500, 1);
+    const repaid = await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/repayments`, { amount: '9000' });
+    expect(repaid.status).toBe(200);
+    dayEnd(s);
+    const view = (await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}`)).body.coLending;
+    expect(Number(view.partnerPrincipalRepaid)).toBeGreaterThan(0);
+    expect(Number(view.partnerInterest)).toBeGreaterThan(0);
+    const due = (await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/unsettled')).body;
+    expect(due.loans).toHaveLength(1);
+    expect(due.loans[0].loanNo).toBe(loanNo);
+    expect(Number(due.totals.net)).toBeCloseTo(Number(view.unsettled), 2);
+    const p = await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/settlements', {});
+    expect(p.status).toBe(202);
+    expect(p.body).toMatchObject({ entityType: 'CO_LENDING_SETTLEMENT', amount: due.totals.net });
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/settlements', {})).status).toBe(409);
+    const ok = await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${p.body.id}/approve`, {});
+    expect(ok.body.appliedRef).toMatch(/^CLS00000001: .* paid to the partner of BANKX through escrow \(1 loan\)$/);
+    expect((await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}`)).body.coLending.unsettled).toBe('0.00');
+    const list = (await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/settlements')).body;
+    expect(list[0]).toMatchObject({ settlementNo: 'CLS00000001', loans: 1, net: due.totals.net });
+    const one = (await mockCall(s, 'maker', 'GET', `/api/v1/co-lending/settlements/${list[0].id}`)).body;
+    expect(one.lines[0].loanNo).toBe(loanNo);
+    const csv = await (await s.fetch(new Request(`http://localhost/api/v1/co-lending/settlements/${list[0].id}/statement.csv`, { headers: { Authorization: `Bearer ${mockToken('maker')}` } }))).text();
+    expect(csv.split('\r\n')[0]).toBe('settlement_no,arrangement,business_date,loan_no,principal,interest,fees,penal_charges,servicing_fee,net_paid');
+    expect(csv).toContain('TOTAL');
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/settlements', {})).status).toBe(409);
+  });
+});
+
+describe('co-lending settlement page', () => {
+  it('shows what is due to the partner and sends a settlement for approval', async () => {
+    const s = createMockServer();
+    const { loanNo } = await accepted(s);
+    dayEnd(s, 30);
+    renderApp({ user: 'maker', route: '/co-lending/BANKX', server: s });
+    const table = await screen.findByRole('table', { name: 'Due to the partner by loan' });
+    await waitFor(() => expect(within(table).getByText(loanNo)).toBeInTheDocument());
+    expect(await screen.findByTestId('due-total')).toHaveTextContent('-');
+  });
+
+  it('settles once something is due', async () => {
+    const s = createMockServer();
+    const { id } = await accepted(s);
+    dayEnd(s, 30);
+    await mockCall(s, 'maker', 'POST', `/api/v1/loans/${id}/repayments`, { amount: '9000' });
+    dayEnd(s);
+    renderApp({ user: 'maker', route: '/co-lending/BANKX', server: s });
+    const btn = await screen.findByRole('button', { name: 'Settle with partner…' });
+    await waitFor(() => expect(btn).toBeEnabled());
+    await user().click(btn);
+    expect(await screen.findByText(/Settlement with the partner sent for approval/)).toBeInTheDocument();
   });
 });
 

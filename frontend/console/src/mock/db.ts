@@ -114,6 +114,7 @@ export type ApprovalPayload =
   | { kind: 'CO_LENDING_ARRANGEMENT'; arrangement: CoLendingArrangementInput }
   | { kind: 'CO_LENDING_STATUS'; code: string; status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED'; reason: string }
   | { kind: 'CO_LENDING_DECISION'; code: string; decisions: CoLendingDecision[] }
+  | { kind: 'CO_LENDING_SETTLEMENT'; code: string; splitIds: string[] }
   | { kind: 'LOAN_PARTY_RELEASE'; loanId: string; customerId: string; reason: string; stressed: boolean }
   | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
@@ -362,6 +363,46 @@ export interface StoredCoLent {
   partnerLoanRef: string | null;
   /** Paise. */
   partnerPrincipal: number | null;
+  /** P5-2: where the split counts from, and where the partner stands (cumulative, paise). */
+  split?: CoLentPosition;
+}
+
+/** Paise; fees by income head. The baseline is what the borrower had paid when the partner took its share. */
+export interface CoLentPosition {
+  baseInterest: number;
+  basePenal: number;
+  baseFees: Record<string, number>;
+  asOf: string;
+  principal: number;
+  interest: number;
+  fees: Record<string, number>;
+  penal: number;
+  /** Unrounded paise. */
+  servicingAccrued: number;
+  servicing: number;
+  final: boolean;
+}
+
+/** One day's change, as posted (paise; negative when a receipt was reversed). */
+export interface StoredCoLendingSplit {
+  id: string;
+  loanId: string;
+  businessDate: string;
+  principal: number;
+  interest: number;
+  fees: number;
+  penal: number;
+  servicing: number;
+  settlementId: string | null;
+}
+
+export interface StoredCoLendingSettlement {
+  id: string;
+  settlementNo: string;
+  arrangementCode: string;
+  businessDate: string;
+  createdBy: string;
+  createdAt: string;
 }
 
 export interface MockDb {
@@ -391,7 +432,7 @@ export interface MockDb {
   loans: StoredLoan[];
   loanSeq: number;
   /** Co-lending (Phase 5) as the originating lender. */
-  coLending: { arrangements: StoredArrangement[]; loans: StoredCoLent[] };
+  coLending: { arrangements: StoredArrangement[]; loans: StoredCoLent[]; splits: StoredCoLendingSplit[]; settlements: StoredCoLendingSettlement[] };
   staff: StoredStaff[];
   branchSets: BranchSet[];
   systemProperties: StoredProperty[];

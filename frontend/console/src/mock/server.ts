@@ -28,7 +28,7 @@ import { registerDocumentRoutes } from './documents';
 import { assertWithinLimit } from './limits';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
 import { applyLendingMoreApproval, registerLendingMoreRoutes } from './lendingMore';
-import { applyCoLendingApproval, registerCoLendingRoutes } from './coLending';
+import { applyCoLendingApproval, coLendingDayEnd, registerCoLendingRoutes } from './coLending';
 import { applyIntegrationApproval, registerIntegrationRoutes, rejectIntegrationApproval } from './integrations';
 import { applyPlatformMoreApproval, assertCustom, bookDeferredReceipts, maskCustom, registerPlatformMoreRoutes } from './platformMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
@@ -440,6 +440,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
     run.nextBusinessDate = next;
     db.businessDate = next;
     lendingDayEnd(db);
+    coLendingDayEnd(db);
     db.dayStatus = 'OPEN';
     // Receipts accepted during end of day are booked as soon as the new date opens.
     bookDeferredReceipts(db, run.finishedAt!);

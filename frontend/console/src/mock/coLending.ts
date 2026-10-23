@@ -9,7 +9,7 @@ import type { CoLendingArrangement, CoLendingArrangementInput, CoLendingDecision
 import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { addDays, ISO_DATE } from '../lib/dates';
-import { appendAudit, type ApprovalPayload, type MockDb, type StoredArrangement, type StoredCoLent, type StoredLoan } from './db';
+import { appendAudit, uuid, type ApprovalPayload, type CoLentPosition, type MockDb, type StoredArrangement, type StoredCoLent, type StoredLoan } from './db';
 import { customerOf, principalOutstanding } from './lending';
 import * as C from './lendingCalc';
 import { bad, conflict, notFound } from './problems';
@@ -186,8 +186,134 @@ export function coLentView(db: MockDb, loan: StoredLoan): CoLentLoan | null {
     const po = principalOutstanding(loan);
     view.partnerPrincipal = C.fromPaise(partnerOf(t, po));
     view.originatorPrincipal = C.fromPaise(po - partnerOf(t, po));
+    if (c.split) {
+      const sp = c.split;
+      view.splitAsOf = sp.asOf;
+      view.partnerPrincipalRepaid = C.fromPaise(sp.principal);
+      view.partnerInterest = C.fromPaise(sp.interest);
+      view.partnerFees = C.fromPaise(Object.values(sp.fees).reduce((a, b) => a + b, 0));
+      view.partnerPenal = C.fromPaise(sp.penal);
+      view.servicingFeeTaken = C.fromPaise(sp.servicing);
+      view.unsettled = C.fromPaise(db.coLending.splits.filter((x) => x.loanId === loan.id && !x.settlementId).reduce((a, x) => a + net(x), 0));
+    }
   }
   return view;
+}
+
+// ------------------------------------------------------------------------------------------------ P5-2: daily split
+const net = (x: { principal: number; interest: number; fees: number; penal: number; servicing: number }) => x.principal + x.interest + x.fees + x.penal - x.servicing;
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+const interestPaid = (loan: StoredLoan) => sum(loan.state.demands.map((d) => d.interestPaid));
+const penalPaid = (loan: StoredLoan) => sum(loan.state.charges.filter((x) => x.kind === 'PENAL').map((x) => x.paid));
+
+function openPosition(db: MockDb, loan: StoredLoan): CoLentPosition {
+  return {
+    baseInterest: interestPaid(loan),
+    basePenal: penalPaid(loan),
+    baseFees: Object.fromEntries(loan.state.charges.filter((x) => x.kind === 'FEE').map((x) => [x.id, x.paid])),
+    asOf: db.businessDate,
+    principal: 0,
+    interest: 0,
+    fees: {},
+    penal: 0,
+    servicingAccrued: 0,
+    servicing: 0,
+    final: false,
+  };
+}
+
+/** Where the partner should stand: principal by share, interest in the ratio share × rate, fees ex-GST and penal as agreed. */
+function target(c: StoredCoLent, loan: StoredLoan, servicingAccrued: number): Omit<CoLentPosition, 'baseInterest' | 'basePenal' | 'baseFees' | 'asOf' | 'final'> {
+  const t = c.terms;
+  const sp = c.split!;
+  const po = principalOutstanding(loan);
+  const o = t.originatorShare * t.originatorRate;
+  const p = (100 - t.originatorShare) * t.partnerRate;
+  const interest = Math.round(((interestPaid(loan) - sp.baseInterest) * p) / (o + p));
+  const fees: Record<string, number> = {};
+  if (t.feeSharing === 'BY_SHARE') {
+    for (const ch of loan.state.charges.filter((x) => x.kind === 'FEE')) {
+      const rule = (loan.product.fees ?? []).find((f) => f.code === ch.code);
+      const gst = Number(rule?.gstRate ?? 0);
+      const head = rule?.event === 'PRECLOSURE' ? '4104' : '4102';
+      const exGst = Math.round(((ch.paid - (sp.baseFees[ch.id] ?? 0)) * 100) / (100 + gst));
+      if (exGst) fees[head] = (fees[head] ?? 0) + exGst;
+    }
+    for (const k of Object.keys(fees)) fees[k] = partnerOf(t, fees[k]);
+  }
+  const penal = t.penalSharing === 'BY_SHARE' ? partnerOf(t, penalPaid(loan) - sp.basePenal) : 0;
+  return { principal: (c.partnerPrincipal ?? 0) - (po > 0 ? partnerOf(t, po) : 0), interest, fees, penal, servicingAccrued, servicing: Math.round(servicingAccrued) };
+}
+
+/** Day-end (after the loans'): split each loan whose share the partner holds, up to the day before the new business date. */
+export function coLendingDayEnd(db: MockDb) {
+  const through = addDays(db.businessDate, -1);
+  for (const c of db.coLending.loans) {
+    const sp = c.split;
+    const loan = db.loans.find((l) => l.id === c.loanId);
+    if (c.status !== 'ACCEPTED' || !sp || sp.final || !loan) continue;
+    const partnerNow = principalOutstanding(loan) > 0 ? partnerOf(c.terms, principalOutstanding(loan)) : 0;
+    let accrued = sp.servicingAccrued;
+    let last = sp.asOf;
+    for (let d = addDays(sp.asOf, 1); d <= through; d = addDays(d, 1)) {
+      accrued += (partnerNow * c.terms.servicingFee) / 36500;
+      last = d;
+    }
+    const tg = target(c, loan, accrued);
+    const d = {
+      principal: tg.principal - sp.principal,
+      interest: tg.interest - sp.interest,
+      fees: sum(Object.values(tg.fees)) - sum(Object.values(sp.fees)),
+      penal: tg.penal - sp.penal,
+      servicing: tg.servicing - sp.servicing,
+    };
+    if (d.principal || d.interest || d.fees || d.penal || d.servicing) {
+      db.coLending.splits.push({ id: uuid(), loanId: loan.id, businessDate: db.businessDate, ...d, settlementId: null });
+    }
+    Object.assign(sp, tg, { asOf: last, final: !!loan.state.closedOn && partnerNow === 0 });
+  }
+}
+
+function unsettled(db: MockDb, code: string) {
+  const rows = new Map<string, { loanId: string; loanNo: string; branchCode: string; lastSplit: string; principal: number; interest: number; fees: number; penal: number; servicing: number }>();
+  const ids: string[] = [];
+  for (const x of db.coLending.splits.filter((s) => !s.settlementId)) {
+    const c = db.coLending.loans.find((l) => l.loanId === x.loanId);
+    if (c?.terms.code !== code) continue;
+    const loan = db.loans.find((l) => l.id === x.loanId)!;
+    ids.push(x.id);
+    const r = rows.get(loan.id) ?? { loanId: loan.id, loanNo: loan.loanNo, branchCode: loan.branch, lastSplit: x.businessDate, principal: 0, interest: 0, fees: 0, penal: 0, servicing: 0 };
+    for (const k of ['principal', 'interest', 'fees', 'penal', 'servicing'] as const) r[k] += x[k];
+    if (x.businessDate > r.lastSplit) r.lastSplit = x.businessDate;
+    rows.set(loan.id, r);
+  }
+  const loans = [...rows.values()].sort((a, b) => a.loanNo.localeCompare(b.loanNo));
+  const money = (r: { principal: number; interest: number; fees: number; penal: number; servicing: number }) => ({
+    principal: C.fromPaise(r.principal), interest: C.fromPaise(r.interest), fees: C.fromPaise(r.fees), penal: C.fromPaise(r.penal), servicing: C.fromPaise(r.servicing), net: C.fromPaise(net(r)),
+  });
+  const tot = { principal: sum(loans.map((l) => l.principal)), interest: sum(loans.map((l) => l.interest)), fees: sum(loans.map((l) => l.fees)), penal: sum(loans.map((l) => l.penal)), servicing: sum(loans.map((l) => l.servicing)) };
+  const asOf = db.coLending.loans.filter((c) => c.terms.code === code && c.split).map((c) => c.split!.asOf).sort().pop() ?? null;
+  return { ids, net: net(tot), body: { arrangementCode: code, asOf, loans: loans.map((l) => ({ loanId: l.loanId, loanNo: l.loanNo, branchCode: l.branchCode, lastSplit: l.lastSplit, ...money(l) })), totals: money(tot) } };
+}
+
+function settlementView(db: MockDb, id: string, withLines: boolean) {
+  const st = db.coLending.settlements.find((x) => x.id === id);
+  if (!st) throw notFound('Co-lending settlement');
+  const splits = db.coLending.splits.filter((x) => x.settlementId === id);
+  const byLoan = new Map<string, { principal: number; interest: number; fees: number; penal: number; servicing: number }>();
+  for (const x of splits) {
+    const r = byLoan.get(x.loanId) ?? { principal: 0, interest: 0, fees: 0, penal: 0, servicing: 0 };
+    for (const k of ['principal', 'interest', 'fees', 'penal', 'servicing'] as const) r[k] += x[k];
+    byLoan.set(x.loanId, r);
+  }
+  const money = (r: { principal: number; interest: number; fees: number; penal: number; servicing: number }) => ({
+    principal: C.fromPaise(r.principal), interest: C.fromPaise(r.interest), fees: C.fromPaise(r.fees), penal: C.fromPaise(r.penal), servicing: C.fromPaise(r.servicing), net: C.fromPaise(net(r)),
+  });
+  const tot = { principal: sum(splits.map((x) => x.principal)), interest: sum(splits.map((x) => x.interest)), fees: sum(splits.map((x) => x.fees)), penal: sum(splits.map((x) => x.penal)), servicing: sum(splits.map((x) => x.servicing)) };
+  return {
+    id: st.id, settlementNo: st.settlementNo, arrangementCode: st.arrangementCode, businessDate: st.businessDate, loans: byLoan.size, ...money(tot), createdBy: st.createdBy,
+    ...(withLines ? { lines: [...byLoan.entries()].map(([loanId, r]) => { const loan = db.loans.find((l) => l.id === loanId)!; return { loanNo: loan.loanNo, branchCode: loan.branch, ...money(r) }; }) } : {}),
+  };
 }
 
 function offers(db: MockDb, code: string): CoLendingOffer[] {
@@ -331,10 +457,25 @@ export function applyCoLendingApproval(db: MockDb, p: ApprovalPayload, approval:
           continue;
         }
         Object.assign(c, { status: 'ACCEPTED', decidedOn: db.businessDate, partnerLoanRef: d.partnerLoanRef ?? null, partnerPrincipal: partnerOf(c.terms, principalOutstanding(loan)) });
+        c.split = openPosition(db, loan);
         accepted++;
       }
       approval.appliedRef = `${p.code}: ${accepted} accepted, ${declined} declined${lapsed ? `, ${lapsed} past their 15 days (left with the originator)` : ''}${gone ? `, ${gone} no longer offered` : ''}`;
       appendAudit(db, at, checker, 'CO_LENDING_DECIDED', 'CO_LENDING_ARRANGEMENT', p.code, { accepted, declined, lapsed, gone });
+      return true;
+    }
+    case 'CO_LENDING_SETTLEMENT': {
+      const splits = db.coLending.splits.filter((x) => p.splitIds.includes(x.id));
+      if (splits.length !== p.splitIds.length || splits.some((x) => x.settlementId)) throw conflict('Settled meanwhile', 'Some of these splits were settled meanwhile: propose the settlement again');
+      const total = sum(splits.map(net));
+      if (total <= 0) throw conflict('Nothing due', `Nothing is due to the partner of ${p.code}`);
+      const id = uuid();
+      const no = `CLS${String(db.coLending.settlements.length + 1).padStart(8, '0')}`;
+      db.coLending.settlements.push({ id, settlementNo: no, arrangementCode: p.code, businessDate: db.businessDate, createdBy: approval.maker ?? checker, createdAt: at });
+      for (const x of splits) x.settlementId = id;
+      const loans = new Set(splits.map((x) => x.loanId)).size;
+      approval.appliedRef = `${no}: ${C.fromPaise(total)} paid to the partner of ${p.code} through escrow (${loans} loan${loans === 1 ? '' : 's'})`;
+      appendAudit(db, at, checker, 'CO_LENDING_SETTLED', 'CO_LENDING_ARRANGEMENT', p.code, { settlementNo: no });
       return true;
     }
     default:
@@ -429,6 +570,41 @@ export function registerCoLendingRoutes(db: MockDb, r: CoLendingRouter) {
   on('POST', '/api/v1/co-lending/arrangements/{code}/decisions', ({ user, params, body }) => {
     require(user, P.loanDisburse);
     return proposeDecisions(user, params.code, (body as { decisions?: CoLendingDecision[] } | null)?.decisions);
+  });
+  on('GET', '/api/v1/co-lending/arrangements/{code}/unsettled', ({ user, params }) => {
+    require(user, P.loanView);
+    findArrangement(db, params.code);
+    return ok(unsettled(db, params.code).body);
+  });
+  on('GET', '/api/v1/co-lending/arrangements/{code}/settlements', ({ user, params }) => {
+    require(user, P.loanView);
+    findArrangement(db, params.code);
+    return ok(db.coLending.settlements.filter((x) => x.arrangementCode === params.code).slice().reverse().map((x) => settlementView(db, x.id, false)));
+  });
+  on('POST', '/api/v1/co-lending/arrangements/{code}/settlements', ({ user, params }) => {
+    require(user, P.loanDisburse);
+    const a = findArrangement(db, params.code);
+    assertOpen();
+    if (db.approvals.some((x) => x.approval.status === 'PENDING' && x.payload.kind === 'CO_LENDING_SETTLEMENT' && x.payload.code === a.code)) {
+      throw conflict('Settlement pending', `A settlement of ${a.code} is already waiting for a checker`);
+    }
+    const u = unsettled(db, a.code);
+    if (!u.ids.length || u.net <= 0) throw conflict('Nothing due', `Nothing is due to the partner of ${a.code}`);
+    return propose(user, 'CO_LENDING_SETTLEMENT', 'SETTLE', { kind: 'CO_LENDING_SETTLEMENT', code: a.code, splitIds: u.ids },
+      { arrangementCode: a.code, partnerName: a.partnerName, asOf: u.body.asOf, loans: u.body.loans.length, ...u.body.totals }, null, a.code, C.fromPaise(u.net));
+  });
+  on('GET', '/api/v1/co-lending/settlements/{id}', ({ user, params }) => {
+    require(user, P.loanView);
+    return ok(settlementView(db, params.id, true));
+  });
+  on('GET', '/api/v1/co-lending/settlements/{id}/statement.csv', ({ user, params }) => {
+    require(user, P.loanView);
+    const st = settlementView(db, params.id, true);
+    const line = (xs: unknown[]) => xs.map((x) => String(x ?? '')).join(',') + '\r\n';
+    const head = ['settlement_no', 'arrangement', 'business_date', 'loan_no', 'principal', 'interest', 'fees', 'penal_charges', 'servicing_fee', 'net_paid'];
+    const body = line(head) + (st.lines ?? []).map((l) => line([st.settlementNo, st.arrangementCode, st.businessDate, l.loanNo, l.principal, l.interest, l.fees, l.penal, l.servicing, l.net])).join('')
+      + line([st.settlementNo, st.arrangementCode, st.businessDate, 'TOTAL', st.principal, st.interest, st.fees, st.penal, st.servicing, st.net]);
+    return { status: 200, body: null, raw: { contentType: 'text/csv; charset=UTF-8', data: body, fileName: `co-lending-settlement-${st.settlementNo}.csv` } };
   });
   on('POST', '/api/v1/co-lending/arrangements/{code}/simulate-partner', ({ user, params }) => {
     require(user, P.loanDisburse);

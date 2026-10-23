@@ -1471,6 +1471,78 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/unsettled:
+    get:
+      tags: [Lending]
+      operationId: getCoLendingUnsettled
+      summary: What is due to the partner and not yet settled, by loan, from the daily splits so far
+      description: |
+        Permission: loan:view. Each day-end splits what the borrower paid on a loan whose share the partner holds:
+        principal repaid by share, interest received in the ratio share x rate, fees (without GST) and penal charges
+        received as the arrangement shares them, less the servicing fee accrued daily on the partner's principal. A
+        receipt reversed is taken back by the next split (a negative line).
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoLendingUnsettled' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/settlements:
+    get:
+      tags: [Lending]
+      operationId: listCoLendingSettlements
+      summary: Settlements with the partner, newest first
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/CoLendingSettlement' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingSettlement
+      summary: Pay the partner what is due, through the escrow account (maker-checker)
+      description: |
+        Permission: loan:disburse. Settles every split not yet settled (409 when nothing is due, or a settlement of the
+        arrangement already waits for a checker). On approval: Dr due to the partner on each loan / Cr escrow, and a
+        statement for the partner.
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/settlements/{id}:
+    get:
+      tags: [Lending]
+      operationId: getCoLendingSettlement
+      summary: A settlement with what it paid for each loan
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoLendingSettlement' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/settlements/{id}/statement.csv:
+    get:
+      tags: [Lending]
+      operationId: downloadCoLendingStatement
+      summary: The settlement statement for the partner (one line per loan and the total)
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: 'The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            text/csv:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans:
     get:
       tags: [Lending]
@@ -6339,6 +6411,71 @@ components:
         partnerPrincipalAtTransfer: { type: [string, 'null'] }
         originatorPrincipal: { type: string, description: 'Accepted loans: the originator''s share of the principal outstanding' }
         partnerPrincipal: { type: string }
+        splitAsOf: { type: string, format: date, description: Last day split between the lenders }
+        partnerPrincipalRepaid: { type: string, description: 'Cumulative since acceptance: principal repaid to the partner' }
+        partnerInterest: { type: string }
+        partnerFees: { type: string }
+        partnerPenal: { type: string }
+        servicingFeeTaken: { type: string }
+        unsettled: { type: string, description: Split and not yet paid to the partner }
+    CoLendingUnsettled:
+      type: object
+      properties:
+        arrangementCode: { type: string }
+        asOf: { type: [string, 'null'], format: date, description: Last day split }
+        loans:
+          type: array
+          items:
+            type: object
+            properties:
+              loanId: { type: string, format: uuid }
+              loanNo: { type: string }
+              branchCode: { type: string }
+              lastSplit: { type: string, format: date }
+              principal: { type: string }
+              interest: { type: string }
+              fees: { type: string }
+              penal: { type: string }
+              servicing: { type: string, description: Servicing fee taken by the originator }
+              net: { type: string, description: 'principal + interest + fees + penal - servicing' }
+        totals:
+          type: object
+          properties:
+            principal: { type: string }
+            interest: { type: string }
+            fees: { type: string }
+            penal: { type: string }
+            servicing: { type: string, description: Servicing fee taken by the originator }
+            net: { type: string, description: 'principal + interest + fees + penal - servicing' }
+    CoLendingSettlement:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        settlementNo: { type: string }
+        arrangementCode: { type: string }
+        businessDate: { type: string, format: date }
+        loans: { type: integer }
+        principal: { type: string }
+        interest: { type: string }
+        fees: { type: string }
+        penal: { type: string }
+        servicing: { type: string, description: Servicing fee taken by the originator }
+        net: { type: string, description: 'principal + interest + fees + penal - servicing' }
+        createdBy: { type: string }
+        lines:
+          type: array
+          description: In a single settlement only
+          items:
+            type: object
+            properties:
+              loanNo: { type: string }
+              branchCode: { type: string }
+              principal: { type: string }
+              interest: { type: string }
+              fees: { type: string }
+              penal: { type: string }
+              servicing: { type: string, description: Servicing fee taken by the originator }
+              net: { type: string, description: 'principal + interest + fees + penal - servicing' }
     KfsCoLending:
       type: object
       properties:
