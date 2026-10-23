@@ -97,7 +97,7 @@ public class DepositDocumentService {
      * The statement of an account for a period: by default from the first day of the business date's month (or the day
      * the account was opened) to the business date. Not past the business date; at most two years.
      */
-    @Transactional(readOnly = true)
+    @Transactional   // not read-only: every document generated is audited
     public Document statement(String family, UUID accountId, LocalDate from, LocalDate to) {
         DepositMoneyService.Account a = money.account(accountId, family, true);
         Map<String, Object> row = accountRow(a.id());
@@ -146,7 +146,7 @@ public class DepositDocumentService {
     // ================================================================================================ receipt
 
     /** The receipt of a funded term or recurring deposit (409 while it waits for its funds). */
-    @Transactional(readOnly = true)
+    @Transactional   // not read-only: every document generated is audited
     public Document receipt(UUID depositId) {
         DepositMoneyService.Account a = money.account(depositId, DepositProductService.TERM_DEPOSIT, true);
         Map<String, Object> view = accounts.get(DepositProductService.TERM_DEPOSIT, a.id());
@@ -199,7 +199,7 @@ public class DepositDocumentService {
      * The certificate of interest paid or credited, and tax deducted, on a depositor's accounts (where they are the
      * first holder) in a tax year: the current one by default. Only accounts in the caller's branches are included.
      */
-    @Transactional(readOnly = true)
+    @Transactional   // not read-only: every document generated is audited
     public Document interestCertificate(UUID customerId, Integer taxYear) {
         if (customerId == null) throw ApiException.invalid("customerId is required");
         List<Map<String, Object>> found = jdbc.queryForList("SELECT home_branch, pan_last4 FROM customer.customer WHERE id = ?", customerId);
