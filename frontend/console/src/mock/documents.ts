@@ -9,6 +9,7 @@ import { formatDate, ISO_DATE } from '../lib/dates';
 import { appendAudit, uuid, type MockDb, type StoredLoan } from './db';
 import { arrearsOf, customerOf, displayName, principalOutstanding } from './lending';
 import * as C from './lendingCalc';
+import { addMonths } from './deposits';
 import { branchScope } from './platform';
 import { bad, conflict, HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
@@ -135,6 +136,79 @@ function reportSpecs(db: MockDb): ReportSpec[] {
       permission: P.bureauExport, outputFormat: 'UCRF', containsPersonalData: true, allBranchesOnly: true, schedule: null,
       parameters: { type: 'object', properties: { asOf: date('Reporting date', 'Usually the last day of the month') }, required: ['asOf'] },
       run: () => ({ headers: [], rows: [] }),
+    },
+    ...(db.deposits.kind ? depositReportSpecs(db) : []),
+  ];
+}
+
+/** The deposit reports of P4-7 (V38), worked out from the mock's accounts and movements. */
+const BUCKETS_TD: Array<[string, (days: number, maturity: string, asOf: string) => boolean]> = [
+  ['Matured, not paid', (d) => d <= 0], ['1 day', (d) => d === 1], ['2 to 7 days', (d) => d <= 7], ['8 to 14 days', (d) => d <= 14], ['15 to 30 days', (d) => d <= 30],
+  ['31 days to 2 months', (_d, m, a) => m <= addMonths(a, 2)], ['Over 2 to 3 months', (_d, m, a) => m <= addMonths(a, 3)], ['Over 3 to 6 months', (_d, m, a) => m <= addMonths(a, 6)],
+  ['Over 6 months to 1 year', (_d, m, a) => m <= addMonths(a, 12)], ['Over 1 to 3 years', (_d, m, a) => m <= addMonths(a, 36)], ['Over 3 to 5 years', (_d, m, a) => m <= addMonths(a, 60)],
+  ['Over 5 years', () => true],
+];
+const dayDiff = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+
+function depositReportSpecs(db: MockDb): ReportSpec[] {
+  const asOfParam = { type: 'object', properties: { asOf: date('As at (day-end; blank = business date)') }, required: [] };
+  const period = { type: 'object', properties: { from: date('From'), to: date('To') }, required: ['from', 'to'] };
+  const balanceAt = (id: string, d: string) => db.deposits.movements.filter((m) => m.accountId === id && m.businessDate! <= d)
+    .reduce((s, m) => s + (m.direction === 'CREDIT' ? 1 : -1) * Number(m.amount), 0);
+  const money = (v: number) => (Math.round(v * 100) / 100).toString();
+  const common = { permission: P.depositView, outputFormat: 'CSV' as const, containsPersonalData: false, allBranchesOnly: false, schedule: null };
+  return [
+    {
+      ...common, code: 'DEPOSIT_BOOK', name: 'Deposit book', description: 'Deposits held by branch and product, as at a day-end.', parameters: asOfParam,
+      run: (_db, _loans, p) => {
+        const d = p.asOf || db.businessDate;
+        const groups = new Map<string, { branch: string; family: string; product: string; n: number; total: number }>();
+        for (const a of db.deposits.accounts) {
+          const b = balanceAt(a.id!, d);
+          if (!b) continue;
+          const k = `${a.branchCode}|${a.family}|${a.productCode}`;
+          const g = groups.get(k) ?? { branch: a.branchCode!, family: a.family!, product: a.productCode!, n: 0, total: 0 };
+          g.n += 1;
+          g.total += b;
+          groups.set(k, g);
+        }
+        return { headers: ['as_at', 'branch_code', 'family', 'product_code', 'accounts', 'balance'],
+          rows: [...groups.values()].map((g) => [d, g.branch, g.family, g.product, g.n, money(g.total)]) };
+      },
+    },
+    {
+      ...common, code: 'DEPOSIT_MATURITY_PROFILE', name: 'Deposit maturity profile', description: 'Term and recurring deposits by residual maturity.', parameters: asOfParam,
+      run: (_db, _loans, p) => {
+        const d = p.asOf || db.businessDate;
+        const live = db.deposits.accounts.filter((a) => a.family === 'TERM_DEPOSIT' && a.termDeposit?.maturityDate && a.termDeposit.startDate && a.termDeposit.startDate <= d && balanceAt(a.id!, d) > 0);
+        const branches = [...new Set(live.map((a) => a.branchCode!))].sort();
+        const bucket = (m: string) => BUCKETS_TD.find(([, f]) => f(dayDiff(d, m), m, d))![0];
+        return { headers: ['as_at', 'branch_code', 'bucket', 'deposits', 'principal', 'balance'],
+          rows: branches.flatMap((b) => BUCKETS_TD.map(([name]) => {
+            const in_ = live.filter((a) => a.branchCode === b && bucket(a.termDeposit!.maturityDate!) === name);
+            return [d, b, name, in_.length, money(in_.reduce((s, a) => s + Number(a.termDeposit!.principal), 0)), money(in_.reduce((s, a) => s + balanceAt(a.id!, d), 0))];
+          })) };
+      },
+    },
+    {
+      ...common, code: 'DEPOSIT_INTEREST_PAID', name: 'Interest paid on deposits', description: 'Interest credited, recovered, paid out and taxed, by account, in the period.', parameters: period,
+      run: (_db, _loans, p) => {
+        const rows = db.deposits.accounts.map((a) => {
+          const ms = db.deposits.movements.filter((m) => m.accountId === a.id && !m.reversedBy && m.businessDate! >= p.from && m.businessDate! <= p.to);
+          const sum = (k: string) => ms.filter((m) => m.kind === k).reduce((s, m) => s + Number(m.amount), 0);
+          return { a, credited: sum('INTEREST_CREDIT'), recovered: sum('INTEREST_RECOVERY'), tax: sum('TAX_DEDUCTED'), out: sum('INTEREST_PAYOUT') };
+        }).filter((x) => x.credited || x.recovered || x.tax || x.out);
+        return { headers: ['from_date', 'to_date', 'branch_code', 'account_no', 'family', 'customer_no', 'interest_credited', 'interest_recovered', 'net_interest', 'tax_deducted', 'interest_paid_out'],
+          rows: rows.map((x) => [p.from, p.to, x.a.branchCode, x.a.accountNo, x.a.family, x.a.holders?.[0]?.customerNo, money(x.credited), money(x.recovered), money(x.credited - x.recovered), money(x.tax), money(x.out)]) };
+      },
+    },
+    {
+      ...common, code: 'DEPOSIT_TDS', name: 'Tax deducted at source on deposit interest', description: 'Every interest credit taxed in the period, with the tax and its basis. No PAN is included.', parameters: period,
+      run: (_db, _loans, p) => ({
+        headers: ['business_date', 'account_no', 'customer_no', 'tax'],
+        rows: db.deposits.movements.filter((m) => m.kind === 'TAX_DEDUCTED' && m.businessDate! >= p.from && m.businessDate! <= p.to)
+          .map((m) => { const a = db.deposits.accounts.find((x) => x.id === m.accountId)!; return [m.businessDate, a.accountNo, a.holders?.[0]?.customerNo, m.amount]; }),
+      }),
     },
   ];
 }

@@ -58,6 +58,25 @@ export const loanDocument = {
   }),
 };
 
+/** Depositor documents (P4-7). */
+export const depositDocument = {
+  statement: (family: 'CASA' | 'TERM_DEPOSIT', id: string, from?: string, to?: string): FileRequest => ({
+    request: (api) =>
+      family === 'CASA'
+        ? api.GET('/api/v1/casa/accounts/{id}/statement.pdf', { params: { path: { id }, query: { from: from || undefined, to: to || undefined } }, parseAs: 'blob' })
+        : api.GET('/api/v1/deposits/accounts/{id}/statement.pdf', { params: { path: { id }, query: { from: from || undefined, to: to || undefined } }, parseAs: 'blob' }),
+    fallbackName: 'statement.pdf',
+  }),
+  receipt: (id: string): FileRequest => ({
+    request: (api) => api.GET('/api/v1/deposits/accounts/{id}/receipt.pdf', { params: { path: { id } }, parseAs: 'blob' }),
+    fallbackName: 'receipt.pdf',
+  }),
+  interestCertificate: (customerId: string, taxYear?: number): FileRequest => ({
+    request: (api) => api.GET('/api/v1/deposits/tax/interest-certificate.pdf', { params: { query: { customerId, taxYear } }, parseAs: 'blob' }),
+    fallbackName: 'interest-certificate.pdf',
+  }),
+};
+
 export const reportFile = (id: string, part?: 'rejections'): FileRequest => ({
   request: (api) => api.GET('/api/v1/reports/runs/{id}/download', { params: { path: { id }, query: { part } }, parseAs: 'blob' }),
   fallbackName: part ? 'rejections.csv' : 'report.csv',

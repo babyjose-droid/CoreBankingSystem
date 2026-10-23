@@ -1,6 +1,6 @@
 # Phase 4 (CASA and term deposits) – status
 
-Updated 22-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
+Updated 23-Oct-2026. Plan: the Phase 4 design and increment plan (eight increments, P4-0 to P4-7).
 
 | Increment | State |
 |-----------|-------|
@@ -13,8 +13,8 @@ Updated 22-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | P4-4 lifecycle | Built, pushed (`33a94ca`), live-tested on the local stack on 19-Oct-2026 (40 of 40) |
 | P4-5 recurring deposits | Built, pushed (`cf57e9e`), live-tested on the local stack on 19-Oct-2026 (23 of 24; the one failure was the smoke script's own expectation) |
 | P4-5b standing instructions and loans against deposits | Built, pushed (`ce79409`), live-tested on the local stack (20 of 20; the pledge quote skipped, no demo loan) |
-| P4-6 cheques, inoperative and unclaimed, register and NOF cap | Built on 22-Oct-2026; not yet pushed or live-tested |
-| P4-7 documents and reports | Not started |
+| P4-6 cheques, inoperative and unclaimed, register and NOF cap | Built, pushed (`1574170`), live-tested on the local stack on 23-Oct-2026 (32 of 32) |
+| P4-7 documents and reports | Built on 23-Oct-2026; not yet pushed or live-tested. The last increment of Phase 4 |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -590,5 +590,51 @@ Cheque books and stop payments on savings and current accounts, a simulator of i
 ### Not verified here
 - **Gradle and Spring**: the two day-end steps as the EOD runner schedules them; the live stack (`p4-6-smoke.py`). The live demo tenants have no account two years idle: the smoke moves no dates, so it checks the inoperative and unclaimed lists and the refusals only through the API it can reach.
 
-### Next: P4-7
-Documents and reports: account statements, deposit receipts, interest and tax certificates; the deposit book, maturity profile, interest paid and TDS reports. Next tenant migration: V38; next control migration: V5.
+### Verified after the push (23-Oct-2026)
+Live smoke `p4-6-smoke.py`: 32 of 32 (cheque book CB00000001 through a checker; a stop at once and its revocation; cheques paid and returned stopped, already paid, stale, not issued and not ours; a cheque paid in, cleared and credited, one returned; the inoperative list; the register; the NBFC's net owned fund of 5 crore and its cap; trial balances on both tenants). Not run with `--eod`.
+
+## Increment P4-7: documents and reports
+
+What a depositor is given (a statement, a deposit receipt, an interest certificate) and what the institution reports on its deposits (the deposit book, the maturity profile, interest paid, tax deducted).
+
+### What was built
+**Deposit engine** (`backend/deposits-core`, which now uses the kernel's PDF writer)
+- `DepositDocuments`, pure builders like the loan documents of P2-4:
+  - the statement of an account for a period: the holders (the first with the address), opening balance, each movement with its reference, value date and running balance, totals, closing balance, any amount held under lien; refused when the movements do not lead to the closing balance or a running balance differs from the books;
+  - the receipt of a term or recurring deposit: what RBI asks a deposit-taking NBFC's receipt to show (the depositor's name, the amount in words and figures, the rate, the dates of deposit and maturity and the amount repayable, the institution's name, an authorised signatory), how interest is paid, what happens at maturity, any lien;
+  - the certificate of interest paid or credited and tax deducted for a tax year, by account and by quarter, with the PAN masked and any Form 121; refused when the quarters do not add up to the accounts. Form 16A itself comes from TRACES.
+  - The line on deposit insurance: at a bank, the DICGC cover from the tenant setting `deposits.dicgc.cover` (printed "[not configured]" until it is set; the cover is not seeded, as the rule set already notes); at a deposit-taking NBFC, that the deposit is not insured and that RBI does not guarantee its repayment.
+
+**Tenant database** (`V38__deposit_reports.sql`): four reports in the catalogue, each needing `deposit:view` on top of `report:run`, limited to the caller's branches, and schedulable (each gets its job, off until scheduled):
+- DEPOSIT_BOOK: accounts with a balance, the total and the average, by branch and product, as at any day-end (`deposits.balance_as_at`, from the movements);
+- DEPOSIT_MATURITY_PROFILE: term and recurring deposits by residual maturity (1 day, 2 to 7 days, 8 to 14, 15 to 30, 31 days to 2 months, over 2 to 3 months, 3 to 6, 6 months to 1 year, 1 to 3 years, 3 to 5, over 5 years: the time buckets of RBI's statement of structural liquidity) and matured deposits not yet paid;
+- DEPOSIT_INTEREST_PAID: interest credited (reversals left out), recovered on early closure, paid out and taxed, by account, in a period;
+- DEPOSIT_TDS: every interest credit taxed in a period with the tax, the rate, its basis, the tax year and quarter, and any declaration's reference. No PAN is exported.
+- A tenant that takes no deposits does not see the deposit reports.
+
+**Application**
+- `DepositDocumentService` gathers the data from the books (the first holder's address decrypted for the document only, PAN masked); every document generated is audited (`DOCUMENT_GENERATED`).
+- API: `GET /casa/accounts/{id}/statement.pdf`, `GET /deposits/accounts/{id}/statement.pdf` (from and to; by default the month to date, at most two years, not past the business date), `GET /deposits/accounts/{id}/receipt.pdf` (409 until the deposit is funded), `GET /deposits/tax/interest-certificate.pdf` (customer and tax year). No new permission.
+
+**Console**
+- Account page: Statement (choose the period, download the PDF); on a funded deposit, Receipt. Tax at source page: Interest certificate. The four reports appear on the Reports page like any other.
+- Mock mode: small PDFs with the same figures, and the four reports worked out from the mock's accounts.
+
+### Choices made in this increment (to confirm: open item P4-24)
+- **The interest certificate** covers the accounts where the depositor is the first holder (the payee for tax), in the caller's branches; interest is counted on the day it was credited, less what was recovered on early closure.
+- **The TDS report carries no PAN**: the quarterly return (Form 26Q) is prepared outside from it with the PAN; building the return file, and paying the tax over, are not built (open item P4-17).
+- **The DICGC cover** is a tenant setting, not seeded.
+- **Statements** are generated on demand; none are sent by e-mail or on a cycle.
+
+### Tests
+- **Engine:** 3 new tests (`DepositDocumentsTest`); 111 pass in `deposits-core`.
+- **Tenant database:** 24 checks in the new `deposits_reports_test.sql` (the maturity buckets at their edges, balances as at any day, reversals left out, the declaration's reference, branch scope); the catalogue check of `documents_reports_test.sql` now expects `deposit:view` on the deposit reports; all tenant and control suites pass.
+- **Application services:** in the build sandbox, with real day-ends: 25 checks on a bank (the statement since opening with the address decrypted, refusals past the business date and backwards, the statement across the day-end that credits the quarter's interest, a deposit's statement with its rate, the receipt refused before funding and complete after, the DICGC line from the setting, the interest certificate by account and quarter, a depositor with none, a tax year to come refused, every document audited, the four reports) and 9 on a deposit-taking NBFC (the "not insured" receipt, no DICGC line, the deposit's statement, the deposit book). The P4-4 to P4-6 scenarios still pass.
+- **Console:** 6 new tests; 342 pass, typecheck and build clean.
+- **API contract:** 4 new operations; lint clean.
+
+### Not verified here
+- **Gradle and Spring**: the PDF download headers as Spring sends them; the reports run through the report service and stored; the live stack (`p4-7-smoke.py`).
+
+### Phase 4 is complete
+Every increment of the plan (P4-0 to P4-7) is built. What remains is in the open items P4-01 to P4-24.

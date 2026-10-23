@@ -7,6 +7,7 @@ import { P, hasPermission } from '../../auth/permissions';
 import { Badge, Banner, Button, Card, DateText, Dialog, EmptyState, ErrorBanner, Input, MoneyText, PageHeader, Select, Spinner, StatusBadge, Table, Textarea } from '../../ui';
 import { CustomerPicker, Problems } from './common';
 import { useMoneyToast } from './DepositMoney';
+import { InterestCertificateButton } from './DepositDocuments';
 
 /** Tax deducted at source on deposit interest (P4-3b): a depositor's tax year and their Form 121 declarations. */
 
@@ -45,6 +46,9 @@ export function DepositTaxPage() {
                 onChange={(e) => setYear(Number(e.target.value))}
                 options={[(current ?? 0) + 1, current ?? 0, (current ?? 0) - 1].map((y) => ({ value: String(y), label: yearLabel(y) }))}
               />
+            </div>
+            <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+              <InterestCertificateButton customerId={customerId!} taxYear={s.taxYear!} />
             </div>
             <dl className="kv">
               <dt>Interest credited</dt>

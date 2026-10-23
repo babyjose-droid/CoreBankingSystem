@@ -230,10 +230,11 @@ SELECT pg_temp.check((SELECT count(*) = 2 AND bool_and(due_date IN ('2026-07-31'
 SELECT pg_temp.check((SELECT count(*) FROM reporting.report_definition) >= 9
                      AND (SELECT bool_and(to_regprocedure(sql_function || '(text,jsonb)') IS NOT NULL) FROM reporting.report_definition),
                      'R1 the nine reports of V16 (and those added later) in the catalogue, each with its function');
-SELECT pg_temp.check((SELECT bool_and(permission = CASE code WHEN 'BUREAU_CONSUMER' THEN 'bureau:export' ELSE 'report:run' END)
+SELECT pg_temp.check((SELECT bool_and(permission = CASE WHEN code = 'BUREAU_CONSUMER' THEN 'bureau:export'
+                                                         WHEN code LIKE 'DEPOSIT\_%' THEN 'deposit:view' ELSE 'report:run' END)
                              AND bool_and(contains_pii = (code = 'BUREAU_CONSUMER')) AND bool_and(all_branches_only = (code = 'BUREAU_CONSUMER'))
                         FROM reporting.report_definition),
-                     'R2 the bureau file needs bureau:export and all-branch access; the rest need report:run');
+                     'R2 the bureau file needs bureau:export and all-branch access; the deposit reports (P4-7) deposit:view; the rest report:run');
 SELECT pg_temp.check((SELECT array_agg(branch_code || ':' || loans || ':' || principal_outstanding::int || ':' || overdue_amount::int || ':' || npa_loans || ':' || npa_principal::int
                                        ORDER BY branch_code) FROM reporting.rpt_loan_book('all.user', '{}'))
                      = ARRAY['HO:1:92311:9788:0:0', 'MUM:2:240000:12000:1:40000'],

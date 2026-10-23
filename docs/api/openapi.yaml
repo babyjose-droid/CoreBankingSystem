@@ -4827,6 +4827,90 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Approval' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/casa/accounts/{id}/statement.pdf:
+    get:
+      tags: [Documents]
+      operationId: getCasaStatementPdf
+      summary: Statement of a savings or current account as PDF
+      description: |
+        Module CASA. Permission `casa:view`; the account must be in the caller's branch scope (404 otherwise). P4-7.
+        The holders (the first with the address), the opening balance, every movement with its reference and the running
+        balance, the totals, the closing balance and any amount held under lien; the line on deposit insurance. Built from
+        the movements and refused if they do not lead to the closing balance. At most two years. Audited
+        (`DOCUMENT_GENERATED`), because the document holds personal data.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: from, in: query, schema: { type: string, format: date }, description: 'Default: the first day of the business date''s month, or the opening date' }
+        - { name: to, in: query, schema: { type: string, format: date }, description: 'Default: the business date; cannot be later' }
+      responses:
+        '200':
+          description: 'The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/statement.pdf:
+    get:
+      tags: [Documents]
+      operationId: getDepositStatementPdf
+      summary: Statement of a term or recurring deposit as PDF
+      description: Module TD. Permission `deposit:view`. P4-7. As the savings statement, with the deposit's rate.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: from, in: query, schema: { type: string, format: date }, description: 'Default: the first day of the business date''s month, or the booking date' }
+        - { name: to, in: query, schema: { type: string, format: date }, description: 'Default: the business date; cannot be later' }
+      responses:
+        '200':
+          description: 'The PDF, as a download'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/accounts/{id}/receipt.pdf:
+    get:
+      tags: [Documents]
+      operationId: getDepositReceiptPdf
+      summary: Receipt of a term or recurring deposit as PDF
+      description: |
+        Module TD. Permission `deposit:view`. P4-7. The depositor(s), the amount (a recurring deposit: the instalment) in
+        figures and words, the rate and how interest is paid, the dates of deposit and maturity, the amount repayable on
+        maturity in figures and words, what happens at maturity, any lien, and the authorised signatory's line. At a bank:
+        the DICGC cover (tenant setting `deposits.dicgc.cover`, printed as "[not configured]" until set); at a
+        deposit-taking NBFC: that the deposit is not insured. Audited.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: 'The PDF, as a download'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '409':
+          description: The deposit is not funded yet
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/deposits/tax/interest-certificate.pdf:
+    get:
+      tags: [Documents]
+      operationId: getInterestCertificatePdf
+      summary: Certificate of interest and tax deducted for a tax year as PDF
+      description: |
+        Module TD. Permission `deposit:view`. P4-7. The interest paid or credited (less any recovered on early closure)
+        and the tax deducted at source on each of the depositor's accounts where they are the first holder, by account
+        and by quarter, with the PAN masked and any Form 121 for the year. Only accounts in the caller's branches. The
+        certificate of tax deducted (Form 16A) comes from TRACES and is not made here. Audited.
+      parameters:
+        - { name: customerId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: taxYear, in: query, schema: { type: integer }, description: 'The calendar year the tax year starts in (2026 for 2026-27). Default: the current one' }
+      responses:
+        '200':
+          description: 'The PDF, as a download'
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/deposits/tax/summary:
     get:
       tags: [Deposits]

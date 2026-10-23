@@ -4506,6 +4506,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/casa/accounts/{id}/statement.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Statement of a savings or current account as PDF
+         * @description Module CASA. Permission `casa:view`; the account must be in the caller's branch scope (404 otherwise). P4-7.
+         *     The holders (the first with the address), the opening balance, every movement with its reference and the running
+         *     balance, the totals, the closing balance and any amount held under lien; the line on deposit insurance. Built from
+         *     the movements and refused if they do not lead to the closing balance. At most two years. Audited
+         *     (`DOCUMENT_GENERATED`), because the document holds personal data.
+         */
+        get: operations["getCasaStatementPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/statement.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Statement of a term or recurring deposit as PDF
+         * @description Module TD. Permission `deposit:view`. P4-7. As the savings statement, with the deposit's rate.
+         */
+        get: operations["getDepositStatementPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/accounts/{id}/receipt.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Receipt of a term or recurring deposit as PDF
+         * @description Module TD. Permission `deposit:view`. P4-7. The depositor(s), the amount (a recurring deposit: the instalment) in
+         *     figures and words, the rate and how interest is paid, the dates of deposit and maturity, the amount repayable on
+         *     maturity in figures and words, what happens at maturity, any lien, and the authorised signatory's line. At a bank:
+         *     the DICGC cover (tenant setting `deposits.dicgc.cover`, printed as "[not configured]" until set); at a
+         *     deposit-taking NBFC: that the deposit is not insured. Audited.
+         */
+        get: operations["getDepositReceiptPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deposits/tax/interest-certificate.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Certificate of interest and tax deducted for a tax year as PDF
+         * @description Module TD. Permission `deposit:view`. P4-7. The interest paid or credited (less any recovered on early closure)
+         *     and the tax deducted at source on each of the depositor's accounts where they are the first holder, by account
+         *     and by quarter, with the PAN masked and any Form 121 for the year. Only accounts in the caller's branches. The
+         *     certificate of tax deducted (Form 16A) comes from TRACES and is not made here. Audited.
+         */
+        get: operations["getInterestCertificatePdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/deposits/tax/summary": {
         parameters: {
             query?: never;
@@ -14506,6 +14597,119 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Approval"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCasaStatementPdf: {
+        parameters: {
+            query?: {
+                /** @description Default: the first day of the business date's month, or the opening date */
+                from?: string;
+                /** @description Default: the business date; cannot be later */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getDepositStatementPdf: {
+        parameters: {
+            query?: {
+                /** @description Default: the first day of the business date's month, or the booking date */
+                from?: string;
+                /** @description Default: the business date; cannot be later */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getDepositReceiptPdf: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description The deposit is not funded yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getInterestCertificatePdf: {
+        parameters: {
+            query: {
+                customerId: string;
+                /** @description The calendar year the tax year starts in (2026 for 2026-27). Default: the current one */
+                taxYear?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF, as a download */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
                 };
             };
             default: components["responses"]["Problem"];

@@ -101,6 +101,7 @@ public class ReportService {
                        sql_function
                   FROM reporting.report_definition
                  WHERE active AND (?::text IS NULL OR code = ?)
+                   AND (code NOT LIKE 'DEPOSIT\\_%' OR deposits.rule_kind() IS NOT NULL)   -- deposit reports (P4-7) only where deposits are taken
                  ORDER BY sort_order, code
                 """, (rs, i) -> new Def(new Definition(rs.getString(1), rs.getString(2), rs.getString(3), json.readMap(rs.getString(4)),
                         rs.getString(5), rs.getString(6), rs.getBoolean(7), rs.getBoolean(8), rs.getString(9)), rs.getString(10)),

@@ -10,11 +10,13 @@ import type { DemoUser } from '../auth/demoUsers';
 import { P } from '../auth/permissions';
 import { toUnits } from '../lib/money';
 import { appendAudit, uuid, type ApprovalPayload, type MockDb } from './db';
+import { ISO_DATE } from '../lib/dates';
 import { activeHolds, balanceOf, findAccount, move, movementProblems, plain, refuseIfAny, text } from './depositMoney';
 import { addMonths } from './deposits';
+import { tinyPdf } from './documents';
 import { HttpProblem, notFound, PROBLEM_BASE } from './problems';
 
-type Result = { status: number; body: unknown };
+type Result = { status: number; body: unknown; raw?: { contentType: string; data: Uint8Array | string; fileName: string } };
 interface Ctx {
   user: DemoUser;
   url: URL;
@@ -388,6 +390,84 @@ export function registerDepositOperationsRoutes(db: MockDb, r: Registrar, module
       });
     const total = rows.reduce((s, x) => s + toUnits(x.balance), 0n);
     return ok({ asOf: db.businessDate, count: rows.length, total: plain(total), netOwnedFund: nofView(db), deposits: rows });
+  });
+
+  // ---- depositor documents (P4-7): small but valid PDFs with the same figures as the real ones
+  const pdf = (user: DemoUser, entity: string, ref: string, doc: string, title: string, lines: string[], fileName: string): Result => {
+    appendAudit(db, new Date().toISOString(), user.username, 'DOCUMENT_GENERATED', entity, ref, { document: doc });
+    return { status: 200, body: null, raw: { contentType: 'application/pdf', data: tinyPdf(title, [db.tenantName, '', ...lines]), fileName } };
+  };
+  const balanceAt = (id: string, d: string) => db.deposits.movements.filter((m) => m.accountId === id && m.businessDate! <= d)
+    .reduce((s, m) => s + (m.direction === 'CREDIT' ? 1 : -1) * Number(m.amount), 0);
+  const fix = (v: number) => (Math.round(v * 100) / 100).toFixed(2);
+  const statement = (user: DemoUser, family: 'CASA' | 'TERM_DEPOSIT', id: string, url: URL) => {
+    const a = findAccount(db, id, family);
+    const today = db.businessDate;
+    const first = today.slice(0, 8) + '01';
+    const from = url.searchParams.get('from') || (a.openedOn! > first ? a.openedOn! : first);
+    const to = url.searchParams.get('to') || today;
+    const problems: string[] = [];
+    if (!ISO_DATE.test(from) || !ISO_DATE.test(to)) throw invalid('from and to are dates as YYYY-MM-DD');
+    if (to > today) problems.push(`the statement cannot run past the business date (${today})`);
+    if (from > to) problems.push("'from' is after 'to'");
+    refuseIfAny('the statement cannot be made', problems);
+    const before = new Date(Date.parse(from) - 86_400_000).toISOString().slice(0, 10);
+    const lines = db.deposits.movements.filter((m) => m.accountId === a.id && m.businessDate! >= from && m.businessDate! <= to)
+      .map((m) => `${m.businessDate}  ${String(m.kind).padEnd(18)} ${m.direction === 'DEBIT' ? 'Dr' : 'Cr'} ${m.amount}  balance ${m.balanceAfter}  ${m.reference ?? ''}`);
+    return pdf(user, 'DEPOSIT_ACCOUNT', a.accountNo!, 'STATEMENT', 'Statement of account', [
+      `Account ${a.accountNo}   ${a.holders?.[0]?.name ?? ''} (customer ${a.holders?.[0]?.customerNo ?? ''})`,
+      `Statement period ${from} to ${to}`, `Opening balance Rs ${fix(balanceAt(a.id!, before))}`, '', ...lines, '',
+      `Closing balance Rs ${fix(balanceAt(a.id!, to))}`,
+    ], `statement-${a.accountNo}-${from}-${to}.pdf`);
+  };
+  on('GET', '/api/v1/casa/accounts/{id}/statement.pdf', ({ user, params, url }) => {
+    module('CASA');
+    require(user, P.casaView);
+    return statement(user, 'CASA', params.id, url);
+  });
+  on('GET', '/api/v1/deposits/accounts/{id}/statement.pdf', ({ user, params, url }) => {
+    module('TD');
+    require(user, P.depositView);
+    return statement(user, 'TERM_DEPOSIT', params.id, url);
+  });
+  on('GET', '/api/v1/deposits/accounts/{id}/receipt.pdf', ({ user, params }) => {
+    module('TD');
+    require(user, P.depositView);
+    const d = findAccount(db, params.id, 'TERM_DEPOSIT');
+    const t = d.termDeposit!;
+    if (!t.funded) throw conflict(`deposit ${d.accountNo} is not funded: its receipt is issued once its funds are received`);
+    const insured = db.deposits.kind === 'BANK'
+      ? 'Deposits are insured by the Deposit Insurance and Credit Guarantee Corporation (DICGC) up to [not configured] per depositor.'
+      : 'This deposit is not insured. The Reserve Bank of India does not guarantee the repayment of deposits accepted by NBFCs.';
+    return pdf(user, 'DEPOSIT_ACCOUNT', d.accountNo!, 'RECEIPT', t.recurring ? 'Recurring deposit receipt' : 'Term deposit receipt', [
+      `Receipt number ${d.accountNo}/${t.startDate}`, `Holder ${d.holders?.[0]?.name ?? ''}`,
+      `${t.recurring ? 'Monthly instalment' : 'Amount of deposit'} Rs ${t.principal}`, `Rate of interest ${t.ratePercent}% per annum`,
+      `Date of deposit ${t.startDate}    Date of maturity ${t.maturityDate}`, `Amount repayable on maturity Rs ${t.maturityValue}`, '', insured, '', 'Authorised signatory',
+    ], `receipt-${d.accountNo}.pdf`);
+  });
+  on('GET', '/api/v1/deposits/tax/interest-certificate.pdf', ({ user, url }) => {
+    module('TD');
+    require(user, P.depositView);
+    const customerId = url.searchParams.get('customerId');
+    const c = db.customers.find((x) => x.id === customerId);
+    if (!c) throw notFound(`customer ${customerId}`);
+    const start = db.businessDate.slice(5) >= '04-01' ? Number(db.businessDate.slice(0, 4)) : Number(db.businessDate.slice(0, 4)) - 1;
+    const year = Number(url.searchParams.get('taxYear') || start);
+    if (year > start) throw invalid(`the tax year ${year}-${String(year + 1).slice(2)} has not begun`);
+    const from = `${year}-04-01`;
+    const to = `${year + 1}-03-31`;
+    const rows = db.deposits.accounts.filter((a) => a.holders?.[0]?.customerId === c.id).map((a) => {
+      const ms = db.deposits.movements.filter((m) => m.accountId === a.id && !m.reversedBy && m.businessDate! >= from && m.businessDate! <= to);
+      const i = ms.filter((m) => m.kind === 'INTEREST_CREDIT').reduce((s, m) => s + Number(m.amount), 0) - ms.filter((m) => m.kind === 'INTEREST_RECOVERY').reduce((s, m) => s + Number(m.amount), 0);
+      const tx = ms.filter((m) => m.kind === 'TAX_DEDUCTED').reduce((s, m) => s + Number(m.amount), 0);
+      return { a, i, tx };
+    }).filter((x) => x.i || x.tx);
+    const label = `${year}-${String(year + 1).slice(2)}`;
+    return pdf(user, 'CUSTOMER', c.customerNo, 'INTEREST_CERTIFICATE', 'Certificate of interest on deposits', [
+      `Depositor ${c.customerNo}   Tax year ${label}`, '',
+      ...(rows.length ? rows.map((x) => `${x.a.accountNo}  interest Rs ${fix(x.i)}  tax deducted Rs ${fix(x.tx)}`) : ['No interest was paid or credited in the year']),
+      '', `Total interest Rs ${fix(rows.reduce((s, x) => s + x.i, 0))}    Total tax deducted Rs ${fix(rows.reduce((s, x) => s + x.tx, 0))}`,
+    ], `interest-certificate-${c.customerNo}-${label}.pdf`);
   });
 
   on('GET', '/api/v1/deposits/net-owned-fund', ({ user }) => {

@@ -1,18 +1,19 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useDepositAccount, useDepositProduct, useDepositRules } from '../../api/depositHooks';
-import { useMe } from '../../api/hooks';
+import { useBusinessDay, useMe } from '../../api/hooks';
 import type { DepositFamily } from '../../api/types';
 import { P, hasPermission } from '../../auth/permissions';
 import { Banner, Button, Card, DateText, ErrorBanner, MoneyText, PageHeader, Spinner, StatusBadge, Table, humanize } from '../../ui';
 import { NotInsured, PERIOD_LABEL, TYPE_LABEL, familyPath, pct, tenureText, useDepositModules } from './common';
 import { CasaCloseDialog, ChargesCard, ClosureCard, DepositCloseDialog, INSTRUCTION_LABEL, InstructionDialog, RenewDialog } from './DepositLifecycle';
 import { ChequesCard, DormancyBanner } from './Cheques';
+import { ReceiptButton, StatementDialog } from './DepositDocuments';
 import { InstalmentsCard } from './RecurringDeposit';
 import { PledgeDialog, StandingInstructionsCard } from './StandingInstructions';
 import { BalanceCard, FundingDialog, HoldDialog, HoldsCard, InterestCard, MovementsCard, PaymentLinkDialog, PaymentLinksCard, ReverseFundingDialog, TransactionDialog, TransferDialog } from './DepositMoney';
 
-type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | 'CLOSE' | 'INSTRUCTION' | 'RENEW' | 'PLEDGE' | null;
+type Action = 'IN' | 'OUT' | 'TRANSFER' | 'HOLD' | 'FUND' | 'UNFUND' | 'LINK' | 'CLOSE' | 'INSTRUCTION' | 'RENEW' | 'PLEDGE' | 'STATEMENT' | null;
 const SOURCE: Record<string, string> = { ACCOUNT: 'From account', CASH: 'In cash', BANK_TRANSFER: 'By bank transfer', GATEWAY: 'Through a payment link' };
 
 export function DepositAccountDetailPage({ family }: { family: DepositFamily }) {
@@ -20,6 +21,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
   const q = useDepositAccount(family, id);
   const rules = useDepositRules(family);
   const me = useMe().data!;
+  const day = useBusinessDay();
   const modules = useDepositModules();
   const [action, setAction] = useState<Action>(null);
   const product = useDepositProduct(family, q.data?.productCode);
@@ -54,6 +56,8 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {term && (active || matured) && can(P.depositFund) && <Button variant={matured ? 'primary' : 'ghost'} onClick={() => setAction('CLOSE')}>{matured ? 'Pay out' : 'Close the deposit'}</Button>}
       {term && matured && can(P.depositFund) && <Button onClick={() => setAction('RENEW')}>Renew</Button>}
       {!term && active && can(P.casaTransact) && <Button variant="ghost" onClick={() => setAction('CLOSE')}>Close the account</Button>}
+      {a.status !== 'BOOKED' && can(term ? P.depositView : P.casaView) && <Button variant="ghost" onClick={() => setAction('STATEMENT')}>Statement</Button>}
+      {term && t?.funded && can(P.depositView) && <ReceiptButton account={a} />}
       {a.holders?.[0]?.customerId && modules.td && can(P.depositView) && <Link to={`/deposits/tax?customer=${a.holders[0].customerId}`}>Tax at source</Link>}
       <Link to={`/deposits/${familyPath(family)}`}>Back to the list</Link>
     </div>
@@ -200,6 +204,7 @@ export function DepositAccountDetailPage({ family }: { family: DepositFamily }) 
       {action === 'INSTRUCTION' && <InstructionDialog account={a} isNbfc={isNbfc} renewalAllowed={product.data?.autoRenewalAllowed === true} onClose={() => setAction(null)} />}
       {action === 'RENEW' && <RenewDialog account={a} isNbfc={isNbfc} onClose={() => setAction(null)} />}
       {action === 'PLEDGE' && <PledgeDialog account={a} onClose={() => setAction(null)} />}
+      {action === 'STATEMENT' && <StatementDialog family={family} account={a} businessDate={day.data?.businessDate ?? me.businessDate ?? ''} onClose={() => setAction(null)} />}
       {action === 'LINK' && <PaymentLinkDialog family={family} account={a} onClose={() => setAction(null)} />}
     </div>
   );
