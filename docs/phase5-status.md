@@ -5,7 +5,7 @@ Updated 23-Oct-2026. Phase 5 starts with co-lending; business accounting, securi
 | Increment | State |
 |-----------|-------|
 | P5-1 co-lending arrangements and allocation | Built, pushed (`04421b7`), live-tested on the local stack on 23-Oct-2026 (28 of 28) |
-| P5-2 daily split and settlement | Built, in review (patch `0003-P5-2`) |
+| P5-2 daily split and settlement | Built, pushed (`e0a6ddd`), fix patch `0004`; live run in progress |
 | P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Planned |
 | P5-4 the partner side (this lender takes shares originated by others) | Planned |
 | P5-5 reports and disclosures | Planned |
@@ -83,6 +83,12 @@ P5-01 (tranche and floating-rate loans not co-lent) and P5-02 (P5-1 choices to c
 - `co_lending_split_test.sql`: 19 checks on V40 (the position, splits, settlements and the books).
 - Service scenario P52: 38 checks (servicing fee from acceptance, an instalment split, a fee shared without GST and its receipt reversed, a settlement through a checker with its statement, one at a time, pre-closure repaying the partner's principal in full, the final split, the books). All SQL suites and the earlier scenarios pass.
 - Console: 11 co-lending tests (353 in all).
+
+### Found in the live run (23-Oct-2026)
+The first end of day on demo-nbfc since Phase 4 failed at *Term deposit maturity notices*: on a tenant that takes no deposits the step
+read the deposit rule set, which refuses ("not recorded as registered by RBI to accept public deposits"). The co-lending split itself
+ran clean (2 loans; 8,000 of a 10,000 part-prepayment to the partner). Fix (patch 0004): the step has nothing to do on a tenant without
+deposits, as the inoperative and unclaimed steps already did. A service scenario now runs the whole day-end on a lending-only NBFC.
 
 ### Open items
 P5-03 in `open-items.md`.

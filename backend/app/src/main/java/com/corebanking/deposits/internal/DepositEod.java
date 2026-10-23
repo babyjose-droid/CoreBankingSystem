@@ -470,6 +470,8 @@ class DepositEod implements EodStepProvider {
             @Override public String name() { return "Term deposit maturity notices"; }
 
             @Override List<String> accounts(EodEngine.Context ctx) {
+                // a tenant that takes no deposits (a lending-only NBFC) has no rule set to read: nothing to notify
+                if (jdbc.queryForObject("SELECT deposits.rule_kind()", String.class) == null) return List.of();
                 days = DepositClosing.noticeDays(jdbc, new DepositRuleSets(jdbc).current());
                 return jdbc.queryForList("""
                         SELECT a.id::text FROM deposits.account a JOIN deposits.term_deposit t ON t.account_id = a.id
