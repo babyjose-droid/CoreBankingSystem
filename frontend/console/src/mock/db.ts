@@ -2,7 +2,7 @@ import type { MockDeclarationRequest, MockFunding, MockHoldRequest, MockInstalme
 import type { MockChequeRequest, MockNof, MockReactivation } from './depositOperations';
 import type { MockPledgeRequest, MockSiRequest } from './depositStanding';
 import type { DepositsDb, MockOpening } from './deposits';
-import type { DepositProduct } from '../api/types';
+import type { DepositProduct, CoLendingArrangementInput, CoLendingDecision } from '../api/types';
 import type {
   CustomField,
   DeferredReceipt,
@@ -111,6 +111,9 @@ export type ApprovalPayload =
   | { kind: 'LOAN_DISBURSEMENT'; loanId: string; mode: string; beneficiaryName: string | null; beneficiaryAccount: string | null; ifsc: string | null; amount?: number | null; maturityDate?: string | null }
   | { kind: 'LOAN_SANCTION_CHANGE'; loanId: string; newAmount: number; reason: string; figures: Record<string, unknown> }
   | { kind: 'LOAN_RESET_PREFERENCE'; loanId: string; option: 'KEEP_EMI_CHANGE_TENURE' | 'KEEP_TENURE_CHANGE_EMI' | null; reason: string }
+  | { kind: 'CO_LENDING_ARRANGEMENT'; arrangement: CoLendingArrangementInput }
+  | { kind: 'CO_LENDING_STATUS'; code: string; status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED'; reason: string }
+  | { kind: 'CO_LENDING_DECISION'; code: string; decisions: CoLendingDecision[] }
   | { kind: 'LOAN_PARTY_RELEASE'; loanId: string; customerId: string; reason: string; stressed: boolean }
   | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
@@ -324,6 +327,43 @@ export interface AuditRecord extends Required<Omit<AuditEvent, 'entityId' | 'det
   hash: string;
 }
 
+/** A co-lending arrangement as stored (P5-1); terms are percentages as numbers. */
+export interface StoredArrangement {
+  code: string;
+  name: string;
+  partnerName: string;
+  partnerKind: 'BANK' | 'AIFI' | 'NBFC';
+  partnerReference: string | null;
+  agreementReference: string;
+  originatorShare: number;
+  originatorRate: number;
+  partnerRate: number;
+  servicingFee: number;
+  feeSharing: 'ORIGINATOR' | 'BY_SHARE';
+  penalSharing: 'ORIGINATOR' | 'BY_SHARE';
+  dlgPercent: number;
+  productCodes: string[];
+  contact: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED';
+  effectiveFrom: string;
+  version: number;
+  createdBy: string;
+  updatedBy: string | null;
+}
+/** A loan sanctioned under an arrangement, with the terms frozen at sanction. */
+export interface StoredCoLent {
+  loanId: string;
+  terms: StoredArrangement;
+  status: 'SANCTIONED' | 'OFFERED' | 'ACCEPTED' | 'DECLINED' | 'LAPSED' | 'WITHDRAWN';
+  offeredOn: string | null;
+  deadline: string | null;
+  decidedOn: string | null;
+  decisionReason: string | null;
+  partnerLoanRef: string | null;
+  /** Paise. */
+  partnerPrincipal: number | null;
+}
+
 export interface MockDb {
   tenant: string;
   tenantName: string;
@@ -350,6 +390,8 @@ export interface MockDb {
   loanProducts: LoanProduct[];
   loans: StoredLoan[];
   loanSeq: number;
+  /** Co-lending (Phase 5) as the originating lender. */
+  coLending: { arrangements: StoredArrangement[]; loans: StoredCoLent[] };
   staff: StoredStaff[];
   branchSets: BranchSet[];
   systemProperties: StoredProperty[];

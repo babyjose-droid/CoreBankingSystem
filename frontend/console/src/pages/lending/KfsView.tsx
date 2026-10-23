@@ -60,6 +60,25 @@ export function KfsView({ kfs, title = 'Key Fact Statement' }: { kfs: LoanKfs; t
           </dd>
         </dl>
       </Card>
+      {kfs.coLending && (
+        <Card title="Co-lending" flush>
+          <p className="muted" style={{ margin: 12 }} data-testid="kfs-co-lending">
+            {kfs.coLending.note} Blended rate {pct(kfs.coLending.blendedRate)} p.a. Single point of contact: {kfs.coLending.singlePointOfContact}.
+          </p>
+          <Table
+            caption="Lenders"
+            captionHidden
+            columns={[
+              { key: 'name', header: 'Lender', render: (l) => l.name },
+              { key: 'role', header: 'Role', render: (l) => l.role },
+              { key: 'share', header: 'Share of the loan', numeric: true, render: (l) => pct(l.sharePercent) },
+              { key: 'rate', header: 'Rate on its share', numeric: true, render: (l) => pct(l.ratePercent) },
+            ]}
+            rows={kfs.coLending.lenders ?? []}
+            rowKey={(l) => l.role ?? l.name ?? ''}
+          />
+        </Card>
+      )}
       <Card title="Fees and GST" flush>
         <Table
           caption="Fees and GST"

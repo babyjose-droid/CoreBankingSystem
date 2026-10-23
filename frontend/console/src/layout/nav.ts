@@ -25,6 +25,7 @@ export const NAV: NavGroup[] = [
       { to: '/loan-products', label: 'Products', perm: P.productView },
       { to: '/deferred-receipts', label: 'Deferred receipts', perm: P.loanView },
       { to: '/rate-resets', label: 'Rate resets', perm: P.loanView },
+      { to: '/co-lending', label: 'Co-lending', perm: P.loanView },
     ],
   },
   {

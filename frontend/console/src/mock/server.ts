@@ -28,6 +28,7 @@ import { registerDocumentRoutes } from './documents';
 import { assertWithinLimit } from './limits';
 import { applyLendingApproval, lendingDayEnd, registerLendingRoutes } from './lending';
 import { applyLendingMoreApproval, registerLendingMoreRoutes } from './lendingMore';
+import { applyCoLendingApproval, registerCoLendingRoutes } from './coLending';
 import { applyIntegrationApproval, registerIntegrationRoutes, rejectIntegrationApproval } from './integrations';
 import { applyPlatformMoreApproval, assertCustom, bookDeferredReceipts, maskCustom, registerPlatformMoreRoutes } from './platformMore';
 import { applyPlatformApproval, branchScope, readCsvUpload, registerPlatformRoutes, rowErrors } from './platform';
@@ -306,7 +307,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
         db.eodSchedule = { ...p.schedule };
         break;
       default:
-        if (!applyLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at) && !applyIntegrationApproval(db, p, a, checker, at) && !applyDepositApproval(db, p, a, checker, at)) {
+        if (!applyLendingApproval(db, p, a, checker, at) && !applyCoLendingApproval(db, p, a, checker, at) && !applyAmendmentApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyLendingMoreApproval(db, p, a, checker, at, s.approvedBy ?? []) && !applyPlatformApproval(db, p, a, checker, at) && !applyExtrasApproval(db, p, a, checker, at) && !applyPlatformMoreApproval(db, p, a, checker, at) && !applyIntegrationApproval(db, p, a, checker, at) && !applyDepositApproval(db, p, a, checker, at)) {
           throw new HttpProblem(500, 'Internal error', `No handler for approval kind ${p.kind}`);
         }
     }
@@ -894,6 +895,7 @@ export function createMockServer(options: MockServerOptions = {}): MockServer {
   registerLendingRoutes(db, { on, require, propose, nowIso, nextBusinessDate: () => nextBusinessDate(db.businessDate) });
   registerPlatformRoutes(db, { on, require, propose });
   registerLendingMoreRoutes(db, { on, require, propose, nowIso });
+  registerCoLendingRoutes(db, { on, require, propose });
   registerAmendmentRoutes(db, { on, require, propose, nowIso });
   registerCustomerExtraRoutes(db, { on, require, propose, nowIso });
   registerDocumentRoutes(db, { on, require, nowIso });

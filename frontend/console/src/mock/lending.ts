@@ -19,6 +19,7 @@ import { assertWithinLimit } from './limits';
 import { assertCustom, deferReceipt, maskCustom } from './platformMore';
 import * as C from './lendingCalc';
 import { bad, conflict, notFound, type FieldProblem } from './problems';
+import { attachCoLent, coLendingApplication, coLentView, kfsSection } from './coLending';
 
 export const LOAN_SERIES_PREFIX = '1001';
 /** Straight-through processing (LOS integration clients): disbursement without maker-checker. */
@@ -888,6 +889,7 @@ export function loanView(db: MockDb, loan: StoredLoan): Loan {
     restructuredOn: st.restructuredOn,
     restructureCount: st.restructureCount,
     upgradeNotBefore: st.restructuredOn ? st.upgradeNotBefore : null,
+    coLending: coLentView(db, loan),
   };
 }
 
@@ -1532,7 +1534,9 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
   // preview and booking
   on('POST', '/api/v1/loans/preview', ({ user, body }) => {
     requireAny(user, P.loanCreate, P.loanView);
-    return ok(previewLoan(db, body as LoanApplication));
+    const co = coLendingApplication(db, body as LoanApplication);
+    const kfs = previewLoan(db, co.app);
+    return ok(co.arrangement ? { ...kfs, coLending: kfsSection(db, co.arrangement) } : kfs);
   });
   on('GET', '/api/v1/loans', ({ user, url }) => {
     require(user, P.loanView);
@@ -1558,11 +1562,16 @@ export function registerLendingRoutes(db: MockDb, r: LendingRouter) {
       const existing = db.loans.find((l) => l.externalRef === ref);
       if (existing) return ok(view(existing));
     }
-    const resolved = resolve(db, a);
+    const co = coLendingApplication(db, a);
+    const resolved = resolve(db, co.app);
     if (resolved.customer.kycStatus !== 'VERIFIED') throw bad('Customer KYC is not verified', [{ field: 'customerId', message: 'KYC must be verified before a loan is sanctioned' }]);
     const custom = assertCustom(db, 'LOAN_ACCOUNT', a.custom);
     const loan = bookLoan(db, resolved, ref, db.businessDate, user.username);
     loan.custom = custom;
+    if (co.arrangement) {
+      loan.kfs = { ...loan.kfs, coLending: kfsSection(db, co.arrangement) };
+      attachCoLent(db, loan, co.arrangement);
+    }
     for (const p of loan.parties) p.addedAt = nowIso();
     appendAudit(db, nowIso(), user.username, 'LOAN_CREATED', 'LOAN', loan.id, { loanNo: loan.loanNo, amount: C.fromPaise(loan.amount) });
     return { status: 201, body: view(loan) };

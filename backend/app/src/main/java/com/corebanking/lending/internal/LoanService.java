@@ -62,7 +62,15 @@ public class LoanService {
     public record Application(String productCode, UUID customerId, String branch, BigDecimal amount, Integer tenorMonths,
                               BigDecimal rate, LocalDate disbursalDate, LocalDate firstDueDate, Integer moratoriumMonths,
                               BigDecimal balloon, BigDecimal securedPortion, String externalRef, List<Party> parties,
-                              BigDecimal instalment, BigDecimal maturityAmount, List<ProductService.ScheduleRow> scheduleRows) {}
+                              BigDecimal instalment, BigDecimal maturityAmount, List<ProductService.ScheduleRow> scheduleRows,
+                              String coLendingArrangement) {
+
+        /** The same application at another rate (a co-lent loan takes the arrangement's blended rate). */
+        Application withRate(BigDecimal r) {
+            return new Application(productCode, customerId, branch, amount, tenorMonths, r, disbursalDate, firstDueDate, moratoriumMonths, balloon,
+                    securedPortion, externalRef, parties, instalment, maturityAmount, scheduleRows, coLendingArrangement);
+        }
+    }
 
     private final JdbcTemplate jdbc;
     private final ProductService products;
@@ -76,10 +84,12 @@ public class LoanService {
     private final BranchScope scope;
     private final AmountLimitService limits;
     private final LoanEventPublisher events;
+    private final CoLendingService coLending;
 
     public LoanService(JdbcTemplate jdbc, ProductService products, LoanStore store, PostingService posting,
                        NumberSeriesService numbers, BusinessDays days, ApprovalService approvals, AuditLog audit, Json json,
-                       BranchScope scope, AmountLimitService limits, LoanEventPublisher events) {
+                       BranchScope scope, AmountLimitService limits, LoanEventPublisher events, CoLendingService coLending) {
+        this.coLending = coLending;
         this.scope = scope;
         this.limits = limits;
         this.events = events;
@@ -276,7 +286,7 @@ public class LoanService {
         Application a = new Application(p.code(), null, null, amount,
                 q.tenorMonths() == null && rows == null ? p.minTenorMonths() : q.tenorMonths(),
                 q.rate() == null && !derived && !priced ? p.minRate() : q.rate(), disbursal, q.firstDueDate(), q.moratoriumMonths(),
-                q.balloon(), null, null, null, q.instalment(), q.maturityAmount(), rows);
+                q.balloon(), null, null, null, q.instalment(), q.maturityAmount(), rows, null);
         Priced pr = price(p, a, disbursal);
         LoanAccount.Params params = products.params(p, "PREVIEW", "PREVIEW", "00", "00", pr.plan().accrualRatePercent(), BigDecimal.ZERO)
                 .withFloating(floating(p, pr.spread()));
@@ -289,9 +299,38 @@ public class LoanService {
 
     /** Preview and KFS figures from the same engine that will post (US-044, US-048, US-049). */
     public Map<String, Object> preview(Application a) {
-        Resolved r = resolve(a, "PREVIEW");
-        checkParties(a);
-        return kfs(r);
+        CoLendingService.Quote co = coLent(a);
+        Application priced = co == null ? a : a.withRate(co.terms().blendedRate());
+        Resolved r = resolve(priced, "PREVIEW");
+        checkParties(priced);
+        Map<String, Object> k = kfs(r);
+        if (co != null) k.put("coLending", CoLendingService.kfsSection(co, originatorName()));
+        return k;
+    }
+
+    /**
+     * A loan under a co-lending arrangement (P5-1): the arrangement's terms, which fix the rate at the blended rate;
+     * null when the application names none.
+     */
+    private CoLendingService.Quote coLent(Application a) {
+        if (a.coLendingArrangement() == null || a.coLendingArrangement().isBlank()) return null;
+        if (a.productCode() == null) throw ApiException.invalid("productCode is required");
+        CoLendingService.Quote q = coLending.quote(a.coLendingArrangement().trim(), a.productCode());
+        if (a.rate() != null && a.rate().compareTo(q.terms().blendedRate()) != 0) {
+            throw ApiException.invalid("a co-lent loan carries the arrangement's blended rate of " + plain(q.terms().blendedRate())
+                    + "%: leave the rate out or give that rate");
+        }
+        ProductService.Product p = products.get(jdbc, a.productCode()).withDefaults();
+        if (p.benchmarkCode() != null) throw ApiException.invalid("product " + p.code() + " has a floating rate: a co-lent loan carries the fixed blended rate");
+        if (Boolean.TRUE.equals(p.multipleDisbursements())) {
+            throw ApiException.invalid("product " + p.code() + " is disbursed in tranches: it is not co-lent (open item P5-01)");
+        }
+        return q;
+    }
+
+    private String originatorName() {
+        List<String> n = jdbc.queryForList("SELECT legal_name FROM platform.legal_entity WHERE id = 1", String.class);
+        return n.isEmpty() ? "The originating lender" : n.get(0);
     }
 
     /**
@@ -398,11 +437,14 @@ public class LoanService {
             List<UUID> existing = jdbc.queryForList("SELECT id FROM lending.loan_account WHERE external_ref = ?", UUID.class, a.externalRef());
             if (!existing.isEmpty()) return get(existing.get(0));           // idempotent create from the LOS
         }
+        CoLendingService.Quote co = coLent(a);
+        if (co != null) a = a.withRate(co.terms().blendedRate());
         String loanNo = numbers.next(NumberSeries.Family.LOAN);
         Resolved r = resolve(a, loanNo);
         checkParties(a);
         List<Instalment> schedule = r.plan().schedule();
         Map<String, Object> k = kfs(r);
+        if (co != null) k.put("coLending", CoLendingService.kfsSection(co, originatorName()));
         ProductService.Product pd = r.product().withDefaults();
         UUID id = UUID.randomUUID();
         // The insert also checks the borrower's exposure limit and records the borrower as a party (V17 triggers).
@@ -426,6 +468,7 @@ public class LoanService {
                 pd.resetFrequencyMonths(), pd.benchmarkCode() == null ? null
                         : java.sql.Date.valueOf(r.terms().disbursalDate().plusMonths(pd.resetFrequencyMonths())));
         jdbc.update("INSERT INTO lending.loan_kfs (loan_id, kfs) VALUES (?, ?::jsonb)", id, json.write(k));
+        if (co != null) coLending.attach(id, co);
         jdbc.update("UPDATE lending.loan_account SET booked_terms = ?::jsonb WHERE id = ?", json.write(r.terms()), id);
         if (a.parties() != null) {
             for (Party p : a.parties()) {
@@ -544,6 +587,7 @@ public class LoanService {
         store.replaceSchedule(jdbc, loanId, book.schedule());
         UUID txn = store.recordTxn(jdbc, loanId, "DISBURSEMENT", bd, bd, first, book.result().lots(), null, book.result().summary(), null, user);
         recordTranche(loanId, txn, book.account(), user);
+        coLending.offer(loanId);                   // a co-lent loan: the partner is offered its share for 15 days (P5-1)
         // in the same transaction as the postings (ADR-008): the payout instruction, webhooks and messages follow from it
         events.disbursed(jdbc, loanId, txn, bd, first, book.netDisbursal(), 1);
         audit.record(user, "LOAN_DISBURSE", "LOAN", b.params().loanNo(), Map.of("net", plain(book.netDisbursal()), "tranche", 1));
@@ -786,6 +830,7 @@ public class LoanService {
         LocalDate bd = days.requireOpen();
         LoanStore.Loaded l = store.lock(jdbc, loanId);
         if (l.account() == null) throw ApiException.conflict("loan is " + l.status() + ": there is no disbursement to reverse");
+        coLending.beforeDisbursementReversal(loanId);
         Integer others = jdbc.queryForObject("""
                 SELECT count(*) FROM lending.loan_txn
                  WHERE loan_id = ? AND reversed_by IS NULL AND txn_type NOT IN ('DISBURSEMENT','EOD','REVERSAL','RATE_RESET','RATE_STEP')
@@ -1824,7 +1869,9 @@ public class LoanService {
                  WHERE l.id = ?
                 """, id);
         if (rows.isEmpty()) throw ApiException.notFound("loan " + id);
-        return rows.get(0);
+        Map<String, Object> loan = new LinkedHashMap<>(rows.get(0));
+        loan.put("coLending", coLending.loanView(id));
+        return loan;
     }
 
     /** Borrower, co-applicants and guarantors of the loan (US-034); released parties last, with the date and reason (V26). */

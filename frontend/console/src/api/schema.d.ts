@@ -1104,6 +1104,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/co-lending/arrangements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Co-lending arrangements in which this lender originates (RBI Co-Lending Arrangements Directions, 2025)
+         * @description Permission: loan:view.
+         */
+        get: operations["listCoLendingArrangements"];
+        put?: never;
+        /**
+         * Propose a new arrangement or a change to one (maker-checker); a change applies to loans sanctioned after it
+         * @description Permission: product:propose. Each lender keeps at least 10% of every loan, the default loss guarantee is at
+         *     most 5%, the servicing fee is below the partner's rate. Products disbursed in tranches or at a floating rate
+         *     are not co-lent yet. The partner of an arrangement never changes.
+         */
+        post: operations["proposeCoLendingArrangement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An arrangement with its loans by status and the partner's principal booked
+         * @description Permission: loan:view.
+         */
+        get: operations["getCoLendingArrangement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suspend, reactivate or close an arrangement (maker-checker); it closes only with no loan sanctioned or offered
+         * @description Permission: product:propose.
+         */
+        post: operations["proposeCoLendingArrangementStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/offers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Loans disbursed under the arrangement and awaiting the partner (open 15 calendar days from disbursement)
+         * @description Permission: loan:view.
+         */
+        get: operations["listCoLendingOffers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/offers.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The open offers as the file sent to the partner (no personal data beyond the customer number)
+         * @description Permission: loan:view.
+         */
+        get: operations["downloadCoLendingOffers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the partner's decisions on offered loans (maker-checker)
+         * @description Permission: loan:disburse. On approval, each acceptance made by the 15th day books the partner's share of the
+         *     principal then outstanding (Dr escrow, Cr partner's share); an offer past its 15th day, or no longer offered,
+         *     is skipped and stays with the originator.
+         */
+        post: operations["proposeCoLendingDecisions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/simulate-partner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulator: the partner accepts every open offer (proposed as decisions, maker-checker)
+         * @description Permission: loan:disburse. For testing without a partner.
+         */
+        post: operations["simulateCoLendingPartner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans": {
         parameters: {
             query?: never;
@@ -5793,6 +5941,8 @@ export interface components {
                 /** @enum {string} */
                 role: "CO_APPLICANT" | "GUARANTOR";
             }[];
+            /** @description Code of an ACTIVE co-lending arrangement covering the product. The loan is priced at its blended rate (give no rate, or exactly that rate) and is offered to the partner when disbursed. */
+            coLendingArrangement?: string | null;
         };
         ScheduleRow: {
             instalmentNo?: number;
@@ -5859,6 +6009,158 @@ export interface components {
             coolingOffDays?: number;
             placeOfSupply?: string | null;
             schedule?: components["schemas"]["ScheduleRow"][];
+            /** @description Lenders, shares and rates of a co-lent loan */
+            coLending?: components["schemas"]["KfsCoLending"] | null;
+        };
+        CoLendingArrangementInput: {
+            code: string;
+            name: string;
+            partnerName: string;
+            /** @enum {string} */
+            partnerKind: "BANK" | "AIFI" | "NBFC";
+            partnerReference?: string | null;
+            agreementReference: string;
+            originatorShare: number | string;
+            originatorRate: number | string;
+            partnerRate: number | string;
+            servicingFee?: number | string | null;
+            /** @enum {string|null} */
+            feeSharing?: "ORIGINATOR" | "BY_SHARE" | null;
+            /** @enum {string|null} */
+            penalSharing?: "ORIGINATOR" | "BY_SHARE" | null;
+            dlgPercent?: number | string | null;
+            productCodes: string[];
+            /** @description Single point of contact for the borrower, shown in the KFS */
+            contact: string;
+        };
+        CoLendingArrangement: {
+            code?: string;
+            name?: string;
+            /** @enum {string} */
+            role?: "ORIGINATOR";
+            partnerName?: string;
+            /** @enum {string} */
+            partnerKind?: "BANK" | "AIFI" | "NBFC";
+            partnerReference?: string | null;
+            agreementReference?: string;
+            /** @description Percent of every loan the originator keeps, 10 to 90 */
+            originatorShare?: string;
+            partnerShare?: string;
+            originatorRate?: string;
+            partnerRate?: string;
+            /** @description Share-weighted average of the two rates: the rate the borrower pays */
+            blendedRate?: string;
+            /** @description Percent a year on the partner's share kept by the originator for servicing */
+            servicingFee?: string;
+            /** @enum {string} */
+            feeSharing?: "ORIGINATOR" | "BY_SHARE";
+            /** @enum {string} */
+            penalSharing?: "ORIGINATOR" | "BY_SHARE";
+            /** @description Default loss guarantee by the originator, at most 5% of the outstanding */
+            dlgPercent?: string;
+            productCodes?: string[];
+            contact?: string;
+            /** @enum {string} */
+            status?: "ACTIVE" | "SUSPENDED" | "CLOSED";
+            /** Format: date */
+            effectiveFrom?: string;
+            version?: number;
+            createdBy?: string;
+            updatedBy?: string | null;
+            /** @description Co-lent loans by status (sanctioned, offered, accepted, declined, lapsed, withdrawn) */
+            loans?: {
+                [key: string]: number;
+            };
+            /** @description Partner's principal booked at acceptance, all loans */
+            partnerPrincipalBooked?: string;
+        };
+        CoLendingStatusInput: {
+            /** @enum {string} */
+            status: "ACTIVE" | "SUSPENDED" | "CLOSED";
+            reason: string;
+        };
+        CoLendingDecision: {
+            loanNo: string;
+            /** @enum {string} */
+            decision: "ACCEPT" | "DECLINE";
+            /** @description The partner's own reference for its share */
+            partnerLoanRef?: string | null;
+            /** @description Required to decline */
+            reason?: string | null;
+        };
+        CoLendingDecisionsInput: {
+            decisions: components["schemas"]["CoLendingDecision"][];
+        };
+        CoLendingOffer: {
+            /** Format: uuid */
+            loanId?: string;
+            loanNo?: string;
+            branchCode?: string;
+            customerNo?: string;
+            /** Format: date */
+            disbursedOn?: string;
+            /**
+             * Format: date
+             * @description Last day the partner can accept (disbursement + 15 calendar days)
+             */
+            deadline?: string;
+            amount?: string;
+            principalOutstanding?: string;
+            partnerShare?: string;
+            partnerPrincipal?: string;
+            partnerRate?: string;
+            blendedRate?: string;
+            tenorMonths?: number;
+            emi?: string | null;
+            assetClass?: string;
+            dpd?: number;
+        };
+        /** @description How a loan is shared under a co-lending arrangement; terms frozen at sanction */
+        CoLentLoan: {
+            arrangementCode?: string;
+            arrangementVersion?: number;
+            partnerName?: string;
+            /** @description Percent of every loan the originator keeps, 10 to 90 */
+            originatorShare?: string;
+            partnerShare?: string;
+            originatorRate?: string;
+            partnerRate?: string;
+            /** @description Share-weighted average of the two rates: the rate the borrower pays */
+            blendedRate?: string;
+            /** @description Percent a year on the partner's share kept by the originator for servicing */
+            servicingFee?: string;
+            /** @enum {string} */
+            feeSharing?: "ORIGINATOR" | "BY_SHARE";
+            /** @enum {string} */
+            penalSharing?: "ORIGINATOR" | "BY_SHARE";
+            /** @description Default loss guarantee by the originator, at most 5% of the outstanding */
+            dlgPercent?: string;
+            /** @enum {string} */
+            status?: "SANCTIONED" | "OFFERED" | "ACCEPTED" | "DECLINED" | "LAPSED" | "WITHDRAWN";
+            /** Format: date */
+            offeredOn?: string | null;
+            /** Format: date */
+            deadline?: string | null;
+            /** Format: date */
+            decidedOn?: string | null;
+            decisionReason?: string | null;
+            partnerLoanRef?: string | null;
+            partnerPrincipalAtTransfer?: string | null;
+            /** @description Accepted loans: the originator's share of the principal outstanding */
+            originatorPrincipal?: string;
+            partnerPrincipal?: string;
+        };
+        KfsCoLending: {
+            arrangementCode?: string;
+            lenders?: {
+                name?: string;
+                role?: string;
+                sharePercent?: string;
+                ratePercent?: string;
+            }[];
+            blendedRate?: string;
+            singlePointOfContact?: string;
+            note?: string;
         };
         Benchmark: {
             /** @example REPO */
@@ -6040,6 +6342,7 @@ export interface components {
              * @description A floating loan switched to a fixed rate
              */
             rateFixedSince?: string | null;
+            coLending?: components["schemas"]["CoLentLoan"] | null;
         };
         RateResetDue: {
             /** Format: uuid */
@@ -8235,6 +8538,7 @@ export interface components {
     parameters: {
         Id: string;
         IdempotencyKey: string;
+        Code: string;
         DocId: string;
     };
     requestBodies: never;
@@ -9990,6 +10294,174 @@ export interface operations {
                     "application/json": components["schemas"]["LoanKfs"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCoLendingArrangements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingArrangement"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingArrangement: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingArrangementInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCoLendingArrangement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingArrangement"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingArrangementStatus: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingStatusInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listCoLendingOffers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingOffer"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    downloadCoLendingOffers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingDecisions: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingDecisionsInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    simulateCoLendingPartner: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["Accepted"];
             default: components["responses"]["Problem"];
         };
     };

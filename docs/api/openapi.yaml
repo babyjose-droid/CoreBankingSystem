@@ -1356,6 +1356,121 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LoanKfs' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements:
+    get:
+      tags: [Lending]
+      operationId: listCoLendingArrangements
+      summary: Co-lending arrangements in which this lender originates (RBI Co-Lending Arrangements Directions, 2025)
+      description: 'Permission: loan:view.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/CoLendingArrangement' } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingArrangement
+      summary: Propose a new arrangement or a change to one (maker-checker); a change applies to loans sanctioned after it
+      description: |
+        Permission: product:propose. Each lender keeps at least 10% of every loan, the default loss guarantee is at
+        most 5%, the servicing fee is below the partner's rate. Products disbursed in tranches or at a floating rate
+        are not co-lent yet. The partner of an arrangement never changes.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingArrangementInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}:
+    get:
+      tags: [Lending]
+      operationId: getCoLendingArrangement
+      summary: An arrangement with its loans by status and the partner's principal booked
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoLendingArrangement' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/status:
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingArrangementStatus
+      summary: Suspend, reactivate or close an arrangement (maker-checker); it closes only with no loan sanctioned or offered
+      description: 'Permission: product:propose.'
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingStatusInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/offers:
+    get:
+      tags: [Lending]
+      operationId: listCoLendingOffers
+      summary: Loans disbursed under the arrangement and awaiting the partner (open 15 calendar days from disbursement)
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/CoLendingOffer' } }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/offers.csv:
+    get:
+      tags: [Lending]
+      operationId: downloadCoLendingOffers
+      summary: The open offers as the file sent to the partner (no personal data beyond the customer number)
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: 'The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            text/csv:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/decisions:
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingDecisions
+      summary: Record the partner's decisions on offered loans (maker-checker)
+      description: |
+        Permission: loan:disburse. On approval, each acceptance made by the 15th day books the partner's share of the
+        principal then outstanding (Dr escrow, Cr partner's share); an offer past its 15th day, or no longer offered,
+        is skipped and stays with the originator.
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingDecisionsInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/simulate-partner:
+    post:
+      tags: [Lending]
+      operationId: simulateCoLendingPartner
+      summary: 'Simulator: the partner accepts every open offer (proposed as decisions, maker-checker)'
+      description: 'Permission: loan:disburse. For testing without a partner.'
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans:
     get:
       tags: [Lending]
@@ -5134,6 +5249,11 @@ components:
       name: Idempotency-Key
       in: header
       schema: { type: string, maxLength: 100 }
+    Code:
+      name: code
+      in: path
+      required: true
+      schema: { type: string }
     DocId:
       name: docId
       in: path
@@ -6042,6 +6162,9 @@ components:
             properties:
               customerId: { type: string, format: uuid }
               role: { type: string, enum: [CO_APPLICANT, GUARANTOR] }
+        coLendingArrangement:
+          type: [string, 'null']
+          description: 'Code of an ACTIVE co-lending arrangement covering the product. The loan is priced at its blended rate (give no rate, or exactly that rate) and is offered to the partner when disbursed.'
     ScheduleRow:
       type: object
       properties:
@@ -6105,6 +6228,133 @@ components:
         coolingOffDays: { type: integer }
         placeOfSupply: { type: [string, 'null'] }
         schedule: { type: array, items: { $ref: '#/components/schemas/ScheduleRow' } }
+        coLending: { oneOf: [ { $ref: '#/components/schemas/KfsCoLending' }, { type: 'null' } ], description: 'Lenders, shares and rates of a co-lent loan' }
+    CoLendingArrangementInput:
+      type: object
+      required: [code, name, partnerName, partnerKind, agreementReference, originatorShare, originatorRate, partnerRate, productCodes, contact]
+      properties:
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,19}$' }
+        name: { type: string }
+        partnerName: { type: string }
+        partnerKind: { type: string, enum: [BANK, AIFI, NBFC] }
+        partnerReference: { type: [string, 'null'] }
+        agreementReference: { type: string }
+        originatorShare: { type: [number, string], minimum: 10, maximum: 90 }
+        originatorRate: { type: [number, string] }
+        partnerRate: { type: [number, string] }
+        servicingFee: { type: [number, string, 'null'] }
+        feeSharing: { type: [string, 'null'], enum: [ORIGINATOR, BY_SHARE, null] }
+        penalSharing: { type: [string, 'null'], enum: [ORIGINATOR, BY_SHARE, null] }
+        dlgPercent: { type: [number, string, 'null'], maximum: 5 }
+        productCodes: { type: array, minItems: 1, items: { type: string } }
+        contact: { type: string, description: 'Single point of contact for the borrower, shown in the KFS' }
+    CoLendingArrangement:
+      type: object
+      properties:
+        code: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [ORIGINATOR] }
+        partnerName: { type: string }
+        partnerKind: { type: string, enum: [BANK, AIFI, NBFC] }
+        partnerReference: { type: [string, 'null'] }
+        agreementReference: { type: string }
+        originatorShare: { type: string, description: 'Percent of every loan the originator keeps, 10 to 90' }
+        partnerShare: { type: string }
+        originatorRate: { type: string }
+        partnerRate: { type: string }
+        blendedRate: { type: string, description: 'Share-weighted average of the two rates: the rate the borrower pays' }
+        servicingFee: { type: string, description: 'Percent a year on the partner''s share kept by the originator for servicing' }
+        feeSharing: { type: string, enum: [ORIGINATOR, BY_SHARE] }
+        penalSharing: { type: string, enum: [ORIGINATOR, BY_SHARE] }
+        dlgPercent: { type: string, description: 'Default loss guarantee by the originator, at most 5% of the outstanding' }
+        productCodes: { type: array, items: { type: string } }
+        contact: { type: string }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, CLOSED] }
+        effectiveFrom: { type: string, format: date }
+        version: { type: integer }
+        createdBy: { type: string }
+        updatedBy: { type: [string, 'null'] }
+        loans: { type: object, additionalProperties: { type: integer }, description: 'Co-lent loans by status (sanctioned, offered, accepted, declined, lapsed, withdrawn)' }
+        partnerPrincipalBooked: { type: string, description: 'Partner''s principal booked at acceptance, all loans' }
+    CoLendingStatusInput:
+      type: object
+      required: [status, reason]
+      properties:
+        status: { type: string, enum: [ACTIVE, SUSPENDED, CLOSED] }
+        reason: { type: string }
+    CoLendingDecision:
+      type: object
+      required: [loanNo, decision]
+      properties:
+        loanNo: { type: string }
+        decision: { type: string, enum: [ACCEPT, DECLINE] }
+        partnerLoanRef: { type: [string, 'null'], description: 'The partner''s own reference for its share' }
+        reason: { type: [string, 'null'], description: Required to decline }
+    CoLendingDecisionsInput:
+      type: object
+      required: [decisions]
+      properties:
+        decisions: { type: array, minItems: 1, items: { $ref: '#/components/schemas/CoLendingDecision' } }
+    CoLendingOffer:
+      type: object
+      properties:
+        loanId: { type: string, format: uuid }
+        loanNo: { type: string }
+        branchCode: { type: string }
+        customerNo: { type: string }
+        disbursedOn: { type: string, format: date }
+        deadline: { type: string, format: date, description: 'Last day the partner can accept (disbursement + 15 calendar days)' }
+        amount: { type: string }
+        principalOutstanding: { type: string }
+        partnerShare: { type: string }
+        partnerPrincipal: { type: string }
+        partnerRate: { type: string }
+        blendedRate: { type: string }
+        tenorMonths: { type: integer }
+        emi: { type: [string, 'null'] }
+        assetClass: { type: string }
+        dpd: { type: integer }
+    CoLentLoan:
+      type: object
+      description: How a loan is shared under a co-lending arrangement; terms frozen at sanction
+      properties:
+        arrangementCode: { type: string }
+        arrangementVersion: { type: integer }
+        partnerName: { type: string }
+        originatorShare: { type: string, description: 'Percent of every loan the originator keeps, 10 to 90' }
+        partnerShare: { type: string }
+        originatorRate: { type: string }
+        partnerRate: { type: string }
+        blendedRate: { type: string, description: 'Share-weighted average of the two rates: the rate the borrower pays' }
+        servicingFee: { type: string, description: 'Percent a year on the partner''s share kept by the originator for servicing' }
+        feeSharing: { type: string, enum: [ORIGINATOR, BY_SHARE] }
+        penalSharing: { type: string, enum: [ORIGINATOR, BY_SHARE] }
+        dlgPercent: { type: string, description: 'Default loss guarantee by the originator, at most 5% of the outstanding' }
+        status: { type: string, enum: [SANCTIONED, OFFERED, ACCEPTED, DECLINED, LAPSED, WITHDRAWN] }
+        offeredOn: { type: [string, 'null'], format: date }
+        deadline: { type: [string, 'null'], format: date }
+        decidedOn: { type: [string, 'null'], format: date }
+        decisionReason: { type: [string, 'null'] }
+        partnerLoanRef: { type: [string, 'null'] }
+        partnerPrincipalAtTransfer: { type: [string, 'null'] }
+        originatorPrincipal: { type: string, description: 'Accepted loans: the originator''s share of the principal outstanding' }
+        partnerPrincipal: { type: string }
+    KfsCoLending:
+      type: object
+      properties:
+        arrangementCode: { type: string }
+        lenders:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              role: { type: string }
+              sharePercent: { type: string }
+              ratePercent: { type: string }
+        blendedRate: { type: string }
+        singlePointOfContact: { type: string }
+        note: { type: string }
     Benchmark:
       type: object
       required: [code, name, source, external, rates]
@@ -6242,6 +6492,7 @@ components:
             resetDefault: { type: [string, 'null'], enum: [KEEP_EMI_CHANGE_TENURE, KEEP_TENURE_CHANGE_EMI, null], description: "The product's default, frozen at booking" }
             rateOutsideBand: { type: boolean, description: 'The last reset set a rate outside the product band (applied, D-14)' }
             rateFixedSince: { type: [string, 'null'], format: date, description: 'A floating loan switched to a fixed rate' }
+            coLending: { oneOf: [ { $ref: '#/components/schemas/CoLentLoan' }, { type: 'null' } ] }
     RateResetDue:
       type: object
       properties:

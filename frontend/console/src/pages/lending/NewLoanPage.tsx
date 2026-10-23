@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useCustomers, useMe } from '../../api/hooks';
 import { useCreateLoan, useLoanProducts, usePreviewLoan } from '../../api/lendingHooks';
+import { useCoLendingArrangements } from '../../api/coLendingHooks';
+import { P, hasPermission } from '../../auth/permissions';
 import type { CustomerSummary, LoanApplication, LoanPartyInput, LoanProduct } from '../../api/types';
 import { formatINR } from '../../lib/money';
 import { Banner, Button, Card, EmptyState, ErrorBanner, Input, Masked, PageHeader, Select, Spinner, StatusBadge, Table, useToast } from '../../ui';
@@ -22,6 +24,8 @@ interface Form {
   instalment: string;
   maturityAmount: string;
   plan: Array<{ dueDate: string; principal: string }>;
+  /** Code of a co-lending arrangement; the loan is then priced at its blended rate. */
+  coLending: string;
 }
 
 /** The rate may be left out: interest table, benchmark + spread, or it follows from an instalment / maturity amount. */
@@ -44,7 +48,7 @@ function problems(f: Form, product: LoanProduct | undefined, customer: CustomerS
       e.amount = `Between ${formatINR(String(product.minAmount))} and ${formatINR(String(product.maxAmount))}`;
     }
     if (product.repaymentMethod !== 'STRUCTURED' && !Number.isNaN(tenor) && (tenor < product.minTenorMonths || tenor > product.maxTenorMonths)) e.tenorMonths = `${product.minTenorMonths} to ${product.maxTenorMonths} months`;
-    if (f.rate.trim() || !rateFromElsewhere(product, f)) {
+    if (!f.coLending && (f.rate.trim() || !rateFromElsewhere(product, f))) {
       const r = Number(f.rate);
       if (!/^\d+(\.\d+)?$/.test(f.rate.trim())) e.rate = 'Enter the rate';
       else if (f.instalment.trim() || f.maturityAmount.trim()) e.rate = 'Give the rate or the instalment / maturity amount, not both';
@@ -79,7 +83,7 @@ export function NewLoanPage() {
   const [q, setQ] = useState('');
   const customers = useCustomers(q, 0, 10);
   const [customer, setCustomer] = useState<CustomerSummary | null>(null);
-  const [f, setF] = useState<Form>({ productCode: '', amount: '', tenorMonths: '', rate: '', disbursalDate: me.businessDate, firstDueDate: '', moratoriumMonths: '', balloon: '', externalRef: '', instalment: '', maturityAmount: '', plan: [] });
+  const [f, setF] = useState<Form>({ productCode: '', amount: '', tenorMonths: '', rate: '', disbursalDate: me.businessDate, firstDueDate: '', moratoriumMonths: '', balloon: '', externalRef: '', instalment: '', maturityAmount: '', plan: [], coLending: '' });
   const [touched, setTouched] = useState(false);
   const [parties, setParties] = useState<Array<{ customer: CustomerSummary; role: LoanPartyInput['role'] }>>([]);
   const customDefs = useCustomDefs('LOAN_ACCOUNT');
@@ -89,6 +93,9 @@ export function NewLoanPage() {
   const create = useCreateLoan();
   const active = (products.data ?? []).filter((p) => (p.status ?? 'ACTIVE') === 'ACTIVE');
   const product = active.find((p) => p.code === f.productCode);
+  const coList = useCoLendingArrangements(hasPermission(me.permissions, P.loanView));
+  const coArrangements = (coList.data ?? []).filter((a) => a.status === 'ACTIVE' && !!product && (a.productCodes ?? []).includes(product.code));
+  const coChosen = coArrangements.find((a) => a.code === f.coLending);
   const errs = problems(f, product, customer);
   const valid = Object.values(errs).every((x) => !x) && Object.keys(customErrors).length === 0;
 
@@ -99,9 +106,10 @@ export function NewLoanPage() {
       customerId: customer.id,
       amount: moneyInput(f.amount) ?? f.amount,
       tenorMonths: product.repaymentMethod === 'STRUCTURED' ? f.plan.length : Number(f.tenorMonths),
-      ...(f.rate.trim() ? { rate: f.rate.trim() } : {}),
-      ...(f.instalment.trim() ? { instalment: moneyInput(f.instalment) ?? f.instalment } : {}),
-      ...(f.maturityAmount.trim() ? { maturityAmount: moneyInput(f.maturityAmount) ?? f.maturityAmount } : {}),
+      ...(f.coLending ? { coLendingArrangement: f.coLending } : {}),
+      ...(!f.coLending && f.rate.trim() ? { rate: f.rate.trim() } : {}),
+      ...(!f.coLending && f.instalment.trim() ? { instalment: moneyInput(f.instalment) ?? f.instalment } : {}),
+      ...(!f.coLending && f.maturityAmount.trim() ? { maturityAmount: moneyInput(f.maturityAmount) ?? f.maturityAmount } : {}),
       ...(product.repaymentMethod === 'STRUCTURED' ? { scheduleRows: f.plan.map((r) => ({ dueDate: r.dueDate, principal: moneyInput(r.principal || '0') ?? r.principal })) } : {}),
       disbursalDate: f.disbursalDate || undefined,
       firstDueDate: f.firstDueDate || undefined,
@@ -190,7 +198,7 @@ export function NewLoanPage() {
             required
             value={f.productCode}
             placeholder="Select…"
-            onChange={(e) => set({ productCode: e.target.value, rate: '', moratoriumMonths: '', balloon: '', instalment: '', maturityAmount: '', plan: [] })}
+            onChange={(e) => set({ productCode: e.target.value, rate: '', moratoriumMonths: '', balloon: '', instalment: '', maturityAmount: '', plan: [], coLending: '' })}
             options={active.map((p) => ({ value: p.code, label: `${p.code} — ${p.name}` }))}
             error={err('productCode')}
           />
@@ -214,7 +222,16 @@ export function NewLoanPage() {
               error={err('tenorMonths')}
             />
           )}
-          {product && !product.interestTableCode && (
+          {product && coArrangements.length > 0 && (
+            <Select
+              label="Co-lending"
+              value={f.coLending}
+              onChange={(e) => set({ coLending: e.target.value, rate: '', instalment: '', maturityAmount: '' })}
+              options={[{ value: '', label: 'None: this lender alone' }, ...coArrangements.map((a) => ({ value: a.code!, label: `${a.code} with ${a.partnerName} (${a.originatorShare}:${a.partnerShare})` }))]}
+              hint={coChosen ? `At the blended rate of ${coChosen.blendedRate}%; offered to the partner when disbursed` : 'Lend jointly under an arrangement'}
+            />
+          )}
+          {product && !product.interestTableCode && !f.coLending && (
             <Input
               label={product.interestBasis === 'FLAT' ? 'Flat rate % p.a.' : 'Rate % p.a.'}
               required={!rateFromElsewhere(product, f)}
@@ -231,10 +248,10 @@ export function NewLoanPage() {
               <span className="muted">From interest table <span className="mono">{product.interestTableCode}</span></span>
             </div>
           )}
-          {product?.repaymentMethod === 'EQUATED' && (
+          {product?.repaymentMethod === 'EQUATED' && !f.coLending && (
             <Input label="Agreed instalment" numeric value={f.instalment} onChange={(e) => set({ instalment: e.target.value })} hint="Instead of the rate: the rate then follows from it" error={err('instalment')} />
           )}
-          {product?.repaymentMethod === 'BULLET_TOTAL_INTEREST' && (
+          {product?.repaymentMethod === 'BULLET_TOTAL_INTEREST' && !f.coLending && (
             <Input label="Maturity amount" numeric value={f.maturityAmount} onChange={(e) => set({ maturityAmount: e.target.value })} hint="Instead of the rate: amount repayable at maturity" error={err('maturityAmount')} />
           )}
           <Input label="Disbursal date" type="date" min={me.businessDate} value={f.disbursalDate} onChange={(e) => set({ disbursalDate: e.target.value })} />

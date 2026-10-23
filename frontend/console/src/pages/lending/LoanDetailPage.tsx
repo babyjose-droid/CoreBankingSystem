@@ -15,6 +15,7 @@ import { LoanDocumentsTab, LoanPartiesTab } from './LoanDocuments';
 import { LoanActionDialog, type LoanAction } from './loanActions';
 import { amendmentKindLabel } from './restructuring';
 import { FloatingRateCard } from './rateResets';
+import { CoLendingCard } from './coLending';
 import { LoanPledgesCard } from '../deposits/StandingInstructions';
 import { useDepositModules } from '../deposits/common';
 
@@ -127,6 +128,7 @@ export function LoanDetailPage() {
       )}
       <LoanSummaryStats loan={loan} coolingOffEnd={inCoolingOff ? coolingOffEnd : null} />
       <FloatingRateCard loan={loan} />
+      <CoLendingCard loan={loan} />
       {deposits.td && loan.id && <LoanPledgesCard loanId={loan.id} />}
       {customDefs.length > 0 && Object.keys(loan.custom ?? {}).length > 0 && (
         <Card title="Additional details">

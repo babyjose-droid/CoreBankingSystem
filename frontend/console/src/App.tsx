@@ -50,6 +50,7 @@ import { TerritoryPage } from './pages/masters/TerritoryPage';
 import { CustomFieldsPage } from './pages/masters/CustomFieldsPage';
 import { DeferredReceiptsPage } from './pages/platform/DeferredReceiptsPage';
 import { RateResetsPage } from './pages/lending/rateResets';
+import { CoLendingDetailPage, CoLendingPage } from './pages/lending/coLending';
 import { JobsPage } from './pages/platform/JobsPage';
 import { SessionsPage } from './pages/platform/SessionsPage';
 import { SupportAccessPage } from './pages/platform/SupportAccessPage';
@@ -184,6 +185,8 @@ export function AppRoutes() {
         <Route path="masters/custom-fields" element={guard(P.customFieldView, <CustomFieldsPage />)} />
         <Route path="deferred-receipts" element={guard(P.loanView, <DeferredReceiptsPage />)} />
         <Route path="rate-resets" element={guard(P.loanView, <RateResetsPage />)} />
+        <Route path="co-lending" element={guard(P.loanView, <CoLendingPage />)} />
+        <Route path="co-lending/:code" element={guard(P.loanView, <CoLendingDetailPage />)} />
         <Route path="jobs" element={guard(P.jobView, <JobsPage />)} />
         <Route path="support-access" element={guard(P.supportAccessApprove, <SupportAccessPage />)} />
         <Route path="sessions" element={<SessionsPage />} />

@@ -7,6 +7,7 @@ import { appendAudit, uuid, type ApprovalPayload, type MockDb, type StoredCustom
 import { postVoucher } from './ledger';
 import { seedCustomerExtras } from './customerExtras';
 import { seedLending } from './lending';
+import { seedCoLending } from './coLending';
 import { seedPlatform } from './platform';
 import { seedIntegrations } from './integrations';
 import { seedPlatformMore } from './platformMore';
@@ -248,6 +249,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
     loanProducts: [],
     loans: [],
     loanSeq: 0,
+    coLending: { arrangements: [], loans: [] },
     staff: [],
     branchSets: [],
     systemProperties: [],
@@ -292,6 +294,7 @@ export function createSeedDb(now: number = Date.now()): MockDb {
 
   seedPlatform(db, seedAt);
   seedLending(db);
+  seedCoLending(db);
   seedCustomerExtras(db, seedAt);
   seedPlatformMore(db, seedAt, now);
   seedIntegrations(db, seedAt, now);

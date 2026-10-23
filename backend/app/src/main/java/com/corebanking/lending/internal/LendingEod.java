@@ -52,7 +52,26 @@ class LendingEod implements EodStepProvider {
     public List<EodEngine.Step> steps(JdbcTemplate jdbc, String tenant) {
         DataSource ds = jdbc.getDataSource();
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
-        return List.of(loanDayEnd(jdbc, tx), borrowerNpa(jdbc, tx), feeInvoices(jdbc));
+        return List.of(loanDayEnd(jdbc, tx), borrowerNpa(jdbc, tx), feeInvoices(jdbc), coLendingLapse(jdbc));
+    }
+
+    /**
+     * Co-lending (P5-1): an offer to the partner not accepted by the day-end of its 15th calendar day after
+     * disbursement lapses, and the loan stays wholly with the originator (Directions paras 22, 24).
+     */
+    private EodEngine.ItemStep coLendingLapse(JdbcTemplate jdbc) {
+        return new EodEngine.ItemStep() {
+            @Override public String name() { return "Co-lending offers lapsed"; }
+
+            @Override public List<String> items(EodEngine.Context ctx) {
+                return jdbc.queryForList("SELECT loan_id::text FROM lending.co_lent_loan WHERE status = 'OFFERED' AND deadline <= ? ORDER BY deadline",
+                        String.class, ctx.businessDate());
+            }
+
+            @Override public void process(EodEngine.Context ctx, String loanId) {
+                CoLendingService.lapse(jdbc, UUID.fromString(loanId));
+            }
+        };
     }
 
     /**
