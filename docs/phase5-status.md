@@ -4,7 +4,7 @@ Updated 23-Oct-2026. Phase 5 starts with co-lending; business accounting, securi
 
 | Increment | State |
 |-----------|-------|
-| P5-1 co-lending arrangements and allocation | Built, in review (patch `0001-P5-1`) |
+| P5-1 co-lending arrangements and allocation | Built, pushed (`04421b7`), live-tested on the local stack on 23-Oct-2026 (28 of 28) |
 | P5-2 daily split and settlement | Planned |
 | P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Planned |
 | P5-4 the partner side (this lender takes shares originated by others) | Planned |
@@ -51,6 +51,9 @@ In force from 1-Jan-2026, for commercial banks (not small finance banks, local a
 - `co_lending_test.sql`: 35 checks on V39 (heads, the arrangement's limits and immutability, the loan's terms and rate, the offer and its 15 days, the contra head check).
 - Service scenario on a deposit-taking NBFC: 33 checks (arrangement through a checker, KFS and rate, offer and file, acceptance and its accounting, reversal refused, a decline, acceptance on the 15th day, the lapse at day-end, a late approval, suspend and close, the invariants). The earlier lending scenarios and all SQL suites pass unchanged.
 - Console: 8 tests (mock API and pages).
+
+### Live test (23-Oct-2026, demo-nbfc, `p5-1-smoke.py`)
+28 of 28: a CLAUDE-TEST borrower created and its KYC verified (the tenant had been reset); a 9% share and a 6% guarantee refused; arrangement CLTEST on PL01 (20% at 30%, 80% at 12%, blended 15.6%) through a checker; a loan at another rate refused; the KFS names both lenders; two loans booked at 15.6%, disbursed and offered (decide by 15-Jul); the offer file; a decline without a reason refused, one declined; the simulated partner accepted the other, 80,000 booked to 1105; the trial balance balances.
 
 ### Open items
 P5-01 (tranche and floating-rate loans not co-lent) and P5-02 (P5-1 choices to confirm) in `open-items.md`.
