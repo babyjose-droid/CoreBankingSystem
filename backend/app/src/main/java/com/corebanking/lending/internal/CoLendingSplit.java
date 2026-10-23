@@ -110,7 +110,7 @@ final class CoLendingSplit {
     static BigDecimal split(JdbcTemplate jdbc, LoanStore store, UUID loanId, LocalDate businessDate, LocalDate through, String user) {
         Map<String, Object> c = jdbc.queryForMap("""
                 SELECT c.*, p.as_of, p.base_interest, p.base_penal, p.principal AS g_principal, p.interest AS g_interest, p.penal AS g_penal,
-                       p.servicing_accrued, p.servicing AS g_servicing
+                       p.servicing_accrued, p.servicing AS g_servicing, p.provision_partner
                   FROM lending.co_lent_loan c JOIN lending.co_lent_position p ON p.loan_id = c.loan_id WHERE c.loan_id = ? FOR UPDATE OF p
                 """, loanId);
         LoanStore.Loaded l = store.read(jdbc, loanId);
@@ -156,12 +156,18 @@ final class CoLendingSplit {
                     """, UUID.randomUUID(), loanId, businessDate, d.principal(), d.interest(), d.feesTotal(), d.penal(), d.servicing(), lot.id());
             net = d.net();
         }
+        // P5-3: each lender provisions its own exposure: the partner's share of the loan's provision is written back
+        BigDecimal provisionBefore = (BigDecimal) c.get("provision_partner");
+        BigDecimal provisionNow = CoLending.partnerProvision(t, a.provisionHeld());
+        TransactionLot prov = CoLending.provisionLot(a.params().branch(), gl.provisionExpense(), gl.provisionContra(), l.loanNo(), provisionBefore, provisionNow,
+                businessDate);
+        if (prov != null) PostingService.postDuringEod(jdbc, prov, user);
         boolean closed = a.status() == LoanAccount.Status.CLOSED || a.status() == LoanAccount.Status.CANCELLED;
         jdbc.update("""
                 UPDATE lending.co_lent_position SET as_of = ?, principal = ?, interest = ?, fees = ?::jsonb, penal = ?, servicing_accrued = ?, servicing = ?,
-                       final = ? WHERE loan_id = ?
+                       provision_partner = ?, final = ? WHERE loan_id = ?
                 """, last.isBefore(asOf) ? asOf : last, after.principal(), after.interest(), jsonObject(new HashMap<>(after.fees())), after.penal(),
-                after.servicingAccrued(), after.servicing(), closed && partnerNow.signum() == 0, loanId);
+                after.servicingAccrued(), after.servicing(), provisionNow, closed && partnerNow.signum() == 0, loanId);
         return net;
     }
 }

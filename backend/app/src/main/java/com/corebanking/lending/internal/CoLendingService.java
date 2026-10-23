@@ -175,6 +175,7 @@ public class CoLendingService {
         Map<String, Object> p = r.payload();
         String code = (String) p.get("code");
         jdbc.queryForObject("SELECT ledger.load_co_lending_heads()", Integer.class);
+        jdbc.queryForObject("SELECT ledger.load_co_lending_dlg_heads()", Integer.class);
         LocalDate today = days.requireOpen();
         switch (r.action()) {
             case "CREATE" -> jdbc.update("""
@@ -385,6 +386,18 @@ public class CoLendingService {
                 m.put("partnerPenal", plain((BigDecimal) p.get("penal")));
                 m.put("servicingFeeTaken", plain((BigDecimal) p.get("servicing")));
                 m.put("unsettled", plain((BigDecimal) p.get("unsettled")));
+            }
+            List<Map<String, Object>> pc = jdbc.queryForList("""
+                    SELECT reported_on, asset_class, npa_since, outcome FROM lending.co_lending_partner_class
+                     WHERE loan_id = ? ORDER BY reported_on DESC, created_at DESC LIMIT 1
+                    """, loanId);
+            if (!pc.isEmpty()) {
+                Map<String, Object> x = new LinkedHashMap<>();
+                x.put("reportedOn", str(pc.get(0).get("reported_on")));
+                x.put("assetClass", pc.get(0).get("asset_class"));
+                x.put("npaSince", str(pc.get(0).get("npa_since")));
+                x.put("outcome", pc.get(0).get("outcome"));
+                m.put("partnerClass", x);
             }
         }
         return m;

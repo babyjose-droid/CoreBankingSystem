@@ -132,4 +132,32 @@ class CoLendingTest {
         assertThrows(IllegalArgumentException.class, () -> CoLending.settlementLot(Heads.starter(), List.of(new SettlementLine("HO", "L1", bd("-1"))), "x",
                 LocalDate.of(2026, 8, 1)));
     }
+    @Test
+    void eachLenderProvisionsItsOwnShare() {
+        assertEquals(bd("320.00"), CoLending.partnerProvision(T, bd("400")), "80% of a 400 provision is the partner's");
+        TransactionLot up = CoLending.provisionLot("HO", "5102", "1109", "L1", BigDecimal.ZERO, bd("320.00"), LocalDate.of(2026, 9, 1));
+        assertEquals(bd("320.00"), sum(up, "1109", "1109", PostingLine.Side.DR), "written back: Dr provision");
+        assertEquals(bd("320.00"), sum(up, "5102", "5102", PostingLine.Side.CR));
+        TransactionLot down = CoLending.provisionLot("HO", "5102", "1109", "L1", bd("320.00"), bd("20.00"), LocalDate.of(2026, 9, 2));
+        assertEquals(bd("300.00"), sum(down, "1109", "1109", PostingLine.Side.CR));
+        assertEquals(null, CoLending.provisionLot("HO", "5102", "1109", "L1", bd("20"), bd("20"), LocalDate.of(2026, 9, 2)));
+    }
+
+    @Test
+    void defaultLossGuarantee() {
+        assertEquals(bd("4000.00"), CoLending.dlgCap(T, bd("80000")), "5% of the partner's 80,000");
+        CoLending.DlgHeads h = CoLending.DlgHeads.starter();
+        TransactionLot cash = CoLending.dlgLodged(CoLending.DlgForm.CASH, "HO", h, "BANKX", bd("4000"), LocalDate.of(2026, 7, 1));
+        assertEquals(bd("4000"), sum(cash, "1304", "BANKX", PostingLine.Side.DR));
+        assertEquals(bd("4000"), sum(cash, "1202", "1202", PostingLine.Side.CR));
+        assertEquals(null, CoLending.dlgLodged(CoLending.DlgForm.BANK_GUARANTEE, "HO", h, "BANKX", bd("4000"), LocalDate.of(2026, 7, 1)), "a guarantee is off the books");
+        TransactionLot inv = CoLending.dlgInvoked(CoLending.DlgForm.CASH, "HO", h, "BANKX", "L1", bd("1500"), LocalDate.of(2026, 11, 1));
+        assertEquals(bd("1500"), sum(inv, "5109", "5109", PostingLine.Side.DR));
+        assertEquals(bd("1500"), sum(inv, "1304", "BANKX", PostingLine.Side.CR));
+        TransactionLot bg = CoLending.dlgInvoked(CoLending.DlgForm.BANK_GUARANTEE, "HO", h, "BANKX", "L1", bd("1500"), LocalDate.of(2026, 11, 1));
+        assertEquals(bd("1500"), sum(bg, "1202", "1202", PostingLine.Side.CR), "the bank pays under a guarantee");
+        assertEquals(bd("200"), sum(CoLending.dlgRecovered("HO", h, "L1", bd("200"), LocalDate.of(2026, 12, 1)), "4111", "4111", PostingLine.Side.CR));
+        assertEquals(bd("2500"), sum(CoLending.dlgReleased(CoLending.DlgForm.CASH, "HO", h, "BANKX", bd("2500"), LocalDate.of(2027, 1, 1)), "1304", "BANKX",
+                PostingLine.Side.CR));
+    }
 }

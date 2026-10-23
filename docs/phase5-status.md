@@ -6,7 +6,7 @@ Updated 23-Oct-2026. Phase 5 starts with co-lending; business accounting, securi
 |-----------|-------|
 | P5-1 co-lending arrangements and allocation | Built, pushed (`04421b7`), live-tested on the local stack on 23-Oct-2026 (28 of 28) |
 | P5-2 daily split and settlement | Built, pushed (`e0a6ddd`, fix `1156e2e`), live-tested on the local stack on 23-Oct-2026 (split 15 of 17, then after the fix 10 of 10) |
-| P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Planned |
+| P5-3 classification sync, default loss guarantee, bureau and provisioning on the own share | Built, in review (patch `0006-P5-3`) |
 | P5-4 the partner side (this lender takes shares originated by others) | Planned |
 | P5-5 reports and disclosures | Planned |
 
@@ -95,3 +95,49 @@ balances. The first attempt's exception stays on the run as a record (unresolved
 
 ### Open items
 P5-03 in `open-items.md`.
+
+## Increment P5-3: classification, guarantee, bureau and provisioning
+
+### The rules (read from the source)
+- Co-Lending Directions para 33: classification is at borrower level across both lenders, shared by the end of the next working day; para 31: each lender reports its own share to the credit bureaus; para 32: a default loss guarantee follows the Digital Lending Directions.
+- Default loss guarantee (Digital Lending Directions, 2025, which repealed and carried over the 2023 guidelines):
+  - its forms are cash, a fixed deposit with a scheduled commercial bank under lien, or a bank guarantee;
+  - all covers are at most 5% of the portfolio;
+  - it is invoked within 120 days overdue unless the borrower makes good;
+  - it lasts at least as long as the longest loan it covers;
+  - the lender still classifies and provisions each loan regardless of the cover;
+  - the amount invoked is not set off against the loan, and recoveries may be shared back under the contract.
+
+### What was built
+- **Provisioning on the own share:** the daily split writes back the partner's share of the provision the loan engine holds on the whole loan (Dr provision 1109 / Cr provision expense 5102, lot `CO_LENDING_PROVISION`); `co_lent_position.provision_partner`.
+- **Bureau:** the consumer file reports the originator's share of a co-lent loan's sanction, balance, overdue amount and EMI once the partner holds its share (tenant V41 replaces `reporting.bureau_consumer_rows`).
+- **Classification with the partner:**
+  - This lender's file for the partner: days past due, class, NPA date, principal and the partner's principal, without personal data.
+  - The partner's file comes back through a checker (`CO_LENDING_CLASSIFICATION`). An NPA at the partner holds the loan at that class here by an asset-class override for a year, so the day-end does not classify it back from its own days past due; the borrower's other loans follow at day-end (borrower-level NPA). An SMA or standard report is recorded.
+  - The loan shows the partner's latest classification and what was done with it.
+- **Default loss guarantee** (`CO_LENDING_DLG`, each step through a checker):
+  - Covers: cash (Dr DLG deposits 1304 / Cr bank 1202), or a fixed deposit under lien or a bank guarantee, which are off the books. All covers together are capped at the arrangement's percentage of the partner's share funded, and each must last to the last due date of the loans it covers.
+  - The partner's invocation for a loan in default: at most what the cover has left and the partner's principal on the loan. Dr DLG paid 5109 / Cr the deposit or the bank; flagged when after 120 days; not set off against the loan.
+  - Recoveries shared back, at most what was invoked (Dr bank / Cr 4111). Release of a cover, with cash not invoked coming back to the bank.
+  - The arrangement page lists the loans in default with the last day to invoke.
+- Tenant V41: `co_lending_partner_class`, `co_lending_dlg_cover`, `co_lending_dlg_invocation`, `co_lending_dlg_recovery` with their guards, the heads 1304, 5109 and 4111 (loaded with the first arrangement), and `co_lending_problems()` now also checks the DLG deposit head.
+- API: seven operations (the classification file, the partner's classification, the guarantee, a cover, its release, an invocation, a recovery). Console: *Default loss guarantee* and *Classification with the partner* on the arrangement page; the partner's classification on the loan's co-lending card. Mock and tests.
+
+### Not in P5-3
+Write-off is not built for any loan yet (the engine has the status but no operation), so the sharing of a written-off co-lent loan waits for it. Restructuring a loan the partner shares stays refused. Both are in open item P5-04.
+
+### Tests
+- `CoLendingTest`: provisioning on the own share, the guarantee's cap and postings (113 engine tests).
+- `co_lending_risk_test.sql`: 21 checks on V41.
+- Service scenario P53: 32 checks:
+  - the bureau and classification files;
+  - the cap, the term and the instrument number;
+  - a cash cover and a bank guarantee;
+  - a partner NPA held here, with the borrower's other loan following;
+  - provisioning on the own share (10,400 on the whole loans, the partner's 8,320 written back);
+  - an invocation on an overdue loan, not set off; a recovery; the release;
+  - the books.
+- All SQL suites and the earlier scenarios pass. Console: 14 co-lending tests (356 in all).
+
+### Open items
+P5-04 in `open-items.md`.

@@ -279,4 +279,91 @@ public final class CoLending {
         });
         return b.build();
     }
+    // ------------------------------------------------------------------------------- P5-3: provisioning, guarantee
+
+    /**
+     * Each lender provisions its own exposure (Directions para 33): the loan engine provisions the whole loan, so the
+     * partner's share of that provision is written back. Returns the partner's share of a provision held.
+     */
+    public static BigDecimal partnerProvision(Terms t, BigDecimal provisionHeld) {
+        return provisionHeld == null || provisionHeld.signum() <= 0 ? BigDecimal.ZERO : byShare(t, provisionHeld).partner();
+    }
+
+    /**
+     * The change in the partner's share of the provision: Dr provision (contra) / Cr provision expense when it rises
+     * (written back), the other way when it falls. Null when nothing changed.
+     */
+    public static TransactionLot provisionLot(String branch, String provisionExpenseGl, String provisionContraGl, String loanNo, BigDecimal before,
+                                              BigDecimal after, LocalDate businessDate) {
+        BigDecimal d = after.subtract(before);
+        if (d.signum() == 0) return null;
+        var b = TransactionLot.builder("CO_LENDING_PROVISION", businessDate).valueDate(businessDate).reference(loanNo);
+        move(b, branch, provisionContraGl, provisionContraGl, provisionExpenseGl, provisionExpenseGl, d,
+                "Co-lending: the partner's share of the provision, provided by the partner " + loanNo);
+        return b.build();
+    }
+
+    /** The forms a default loss guarantee may take (Digital Lending Directions). */
+    public enum DlgForm { CASH, FD_LIEN, BANK_GUARANTEE }
+
+    /** The guarantee is invoked within 120 days overdue at the latest (Digital Lending Directions). */
+    public static final int DLG_INVOKE_WITHIN_DAYS = 120;
+
+    /** Heads of the guarantee (settings {@code lending.co-lending.dlg-*}). */
+    public record DlgHeads(String deposit, String loss, String recovery, String bank) {
+        public static DlgHeads starter() {
+            return new DlgHeads("1304", "5109", "4111", "1202");
+        }
+    }
+
+    /** The most the originator may cover: the arrangement's percentage of the partner's share it funded (5% at most). */
+    public static BigDecimal dlgCap(Terms t, BigDecimal partnerFunded) {
+        return partnerFunded.multiply(t.dlgPercent()).divide(HUNDRED, 2, RoundingMode.DOWN);
+    }
+
+    /**
+     * A cover lodged with the partner. Cash moves from the bank to a deposit with the partner (Dr deposit / Cr bank);
+     * a fixed deposit under lien or a bank guarantee is not on the books until invoked. Null for those.
+     */
+    public static TransactionLot dlgLodged(DlgForm form, String branch, DlgHeads h, String reference, BigDecimal amount, LocalDate businessDate) {
+        if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("the cover is above zero");
+        if (form != DlgForm.CASH) return null;
+        return TransactionLot.builder("CO_LENDING_DLG", businessDate).valueDate(businessDate).reference(reference)
+                .debit(branch, h.deposit(), reference, amount, "Default loss guarantee lodged in cash " + reference)
+                .credit(branch, h.bank(), h.bank(), amount, "Default loss guarantee lodged in cash " + reference)
+                .build();
+    }
+
+    /**
+     * The partner invokes the guarantee for a loan in default: the originator bears the loss. Paid from the cash
+     * deposit, or by the bank (a guarantee paid, a fixed deposit under lien realised). The amount is not set off against
+     * the loan: the borrower still owes it (Digital Lending Directions).
+     */
+    public static TransactionLot dlgInvoked(DlgForm form, String branch, DlgHeads h, String reference, String loanNo, BigDecimal amount,
+                                            LocalDate businessDate) {
+        if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("the amount invoked is above zero");
+        String from = form == DlgForm.CASH ? h.deposit() : h.bank();
+        return TransactionLot.builder("CO_LENDING_DLG", businessDate).valueDate(businessDate).reference(loanNo)
+                .debit(branch, h.loss(), h.loss(), amount, "Default loss guarantee invoked on " + loanNo)
+                .credit(branch, from, form == DlgForm.CASH ? reference : from, amount, "Default loss guarantee invoked on " + loanNo)
+                .build();
+    }
+
+    /** A recovery the partner shares back on a loan whose guarantee was invoked: Dr bank / Cr recoveries. */
+    public static TransactionLot dlgRecovered(String branch, DlgHeads h, String loanNo, BigDecimal amount, LocalDate businessDate) {
+        if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("the recovery is above zero");
+        return TransactionLot.builder("CO_LENDING_DLG", businessDate).valueDate(businessDate).reference(loanNo)
+                .debit(branch, h.bank(), h.bank(), amount, "Recovery shared back under the default loss guarantee " + loanNo)
+                .credit(branch, h.recovery(), h.recovery(), amount, "Recovery shared back under the default loss guarantee " + loanNo)
+                .build();
+    }
+
+    /** A cash cover released: what was not invoked comes back to the bank. Null for the other forms. */
+    public static TransactionLot dlgReleased(DlgForm form, String branch, DlgHeads h, String reference, BigDecimal remaining, LocalDate businessDate) {
+        if (form != DlgForm.CASH || remaining.signum() <= 0) return null;
+        return TransactionLot.builder("CO_LENDING_DLG", businessDate).valueDate(businessDate).reference(reference)
+                .debit(branch, h.bank(), h.bank(), remaining, "Default loss guarantee released " + reference)
+                .credit(branch, h.deposit(), reference, remaining, "Default loss guarantee released " + reference)
+                .build();
+    }
 }

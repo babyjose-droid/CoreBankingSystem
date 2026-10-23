@@ -1341,6 +1341,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/co-lending/arrangements/{code}/classification.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This lender's classification of the loans whose share the partner holds, for the partner (Directions para 33)
+         * @description Permission: loan:view. One line per live loan: days past due, asset class, NPA date, principal and the partner's principal. No personal data.
+         */
+        get: operations["downloadCoLendingClassification"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/partner-classification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the partner's classification of borrowers whose loans it shares (maker-checker)
+         * @description Permission: loan:classify. Classification is at borrower level across both lenders (para 33). On approval, an NPA
+         *     at the partner holds the loan at that class here by an asset-class override for a year (so the day-end does not
+         *     classify it back from its own days past due); the borrower's other loans follow at day-end. An SMA or standard
+         *     report is recorded.
+         */
+        post: operations["proposeCoLendingPartnerClassification"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/dlg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The default loss guarantee of an arrangement (cap, covers, invocations and the loans in default)
+         * @description Permission: loan:view.
+         */
+        get: operations["getCoLendingDlg"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/dlg/covers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lodge a default loss guarantee cover with the partner (maker-checker)
+         * @description Permission: loan:disburse. Cash, a fixed deposit with a scheduled commercial bank under lien, or a bank guarantee
+         *     (Digital Lending Directions). All covers together are at most the arrangement's percentage (5% at most) of the
+         *     partner's share funded; a cover lasts at least as long as the longest loan it covers. Cash: Dr DLG deposits / Cr
+         *     bank; the other forms are not on the books until invoked.
+         */
+        post: operations["proposeCoLendingDlgCover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/dlg/covers/{id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release a cover (maker-checker); cash not invoked comes back to the bank
+         * @description Permission: loan:disburse.
+         */
+        post: operations["releaseCoLendingDlgCover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/arrangements/{code}/dlg/invocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the partner's invocation of the guarantee for a loan in default (maker-checker)
+         * @description Permission: loan:disburse. The partner invokes within 120 days overdue (a later invocation is recorded and flagged).
+         *     At most what the cover has left and the partner's principal outstanding on the loan. Dr DLG paid / Cr DLG
+         *     deposits (cash) or bank (a guarantee paid, a fixed deposit realised). Not set off against the loan.
+         */
+        post: operations["proposeCoLendingDlgInvocation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/co-lending/dlg/invocations/{id}/recoveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a recovery the partner shares back on a loan whose guarantee was invoked (maker-checker)
+         * @description Permission: loan:disburse. At most what was invoked and not yet recovered. Dr bank / Cr recoveries under DLG.
+         */
+        post: operations["proposeCoLendingDlgRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loans": {
         parameters: {
             query?: never;
@@ -6251,6 +6399,15 @@ export interface components {
             servicingFeeTaken?: string;
             /** @description Split and not yet paid to the partner */
             unsettled?: string;
+            /** @description The partner's latest classification of the loan and what was done with it */
+            partnerClass?: {
+                /** Format: date */
+                reportedOn?: string;
+                assetClass?: string;
+                /** Format: date */
+                npaSince?: string | null;
+                outcome?: string;
+            } | null;
         };
         CoLendingUnsettled: {
             arrangementCode?: string;
@@ -6315,6 +6472,103 @@ export interface components {
                 servicing?: string;
                 /** @description principal + interest + fees + penal - servicing */
                 net?: string;
+            }[];
+        };
+        CoLendingPartnerClassInput: {
+            rows: {
+                loanNo: string;
+                assetClass: components["schemas"]["AssetClass"];
+                /**
+                 * Format: date
+                 * @description Required for an NPA class
+                 */
+                npaSince?: string | null;
+                partnerDpd?: number | null;
+            }[];
+        };
+        CoLendingDlgCoverInput: {
+            /** @enum {string} */
+            form: "CASH" | "FD_LIEN" | "BANK_GUARANTEE";
+            amount: number | string;
+            /** @description The fixed deposit or guarantee number (required for those) */
+            instrumentRef?: string | null;
+            /**
+             * Format: date
+             * @description Defaults to the business date
+             */
+            issuedOn?: string | null;
+            /** Format: date */
+            validUntil: string;
+        };
+        CoLendingDlgInvocationInput: {
+            loanNo: string;
+            /** Format: uuid */
+            coverId: string;
+            amount: number | string;
+            reason: string;
+        };
+        CoLendingDlgRecoveryInput: {
+            amount: number | string;
+            reference?: string | null;
+        };
+        CoLendingDlg: {
+            arrangementCode?: string;
+            dlgPercent?: string;
+            /** @description The partner's share funded under the arrangement (loans accepted): the base of the cap */
+            partnerFunded?: string;
+            cap?: string;
+            /** @description Active covers */
+            covered?: string;
+            headroom?: string;
+            invoked?: string;
+            /** @description Active covers less what was invoked on them */
+            available?: string;
+            /** Format: date */
+            longestLoanDue?: string | null;
+            covers?: {
+                /** Format: uuid */
+                id?: string;
+                coverNo?: string;
+                /** @enum {string} */
+                form?: "CASH" | "FD_LIEN" | "BANK_GUARANTEE";
+                amount?: string;
+                invoked?: string;
+                available?: string;
+                instrumentRef?: string | null;
+                /** Format: date */
+                issuedOn?: string;
+                /** Format: date */
+                validUntil?: string;
+                /** @enum {string} */
+                status?: "ACTIVE" | "RELEASED";
+                /** Format: date */
+                releasedOn?: string | null;
+                /** @description Valid at least to the last due date of the loans it covers */
+                lastsLongEnough?: boolean;
+            }[];
+            invocations?: {
+                /** Format: uuid */
+                id?: string;
+                coverNo?: string;
+                loanNo?: string;
+                /** Format: date */
+                businessDate?: string;
+                amount?: string;
+                dpd?: number;
+                reason?: string;
+                recovered?: string;
+            }[];
+            /** @description Loans whose share the partner holds that are overdue */
+            inDefault?: {
+                loanNo?: string;
+                dpd?: number;
+                assetClass?: string;
+                partnerPrincipal?: string;
+                /**
+                 * Format: date
+                 * @description The day the loan is 120 days overdue: the latest the partner invokes
+                 */
+                invokeBy?: string;
             }[];
         };
         KfsCoLending: {
@@ -10738,6 +10992,157 @@ export interface operations {
                     "text/csv": string;
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    downloadCoLendingClassification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingPartnerClassification: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingPartnerClassInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getCoLendingDlg: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoLendingDlg"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingDlgCover: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingDlgCoverInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    releaseCoLendingDlgCover: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingDlgInvocation: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code: components["parameters"]["Code"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingDlgInvocationInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    proposeCoLendingDlgRecovery: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoLendingDlgRecoveryInput"];
+            };
+        };
+        responses: {
+            202: components["responses"]["Accepted"];
             default: components["responses"]["Problem"];
         };
     };

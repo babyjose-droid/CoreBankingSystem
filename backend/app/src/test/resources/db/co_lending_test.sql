@@ -235,7 +235,8 @@ END $$;
 SELECT pg_temp.check(ledger.load_co_lending_heads() = 3, 'H1 the co-lending heads are loaded into a loan book (2303 is already in the kit)');
 SELECT pg_temp.check((SELECT count(*) = 4 FROM ledger.gl_head WHERE code IN ('1105','1208','2303','4110') AND is_posting), 'H2 contra 1105, escrow 1208, payable 2303, fee 4110');
 SELECT pg_temp.check(ledger.load_co_lending_heads() = 0, 'H3 loading them again adds nothing');
-SELECT pg_temp.check((SELECT count(*) = 4 FROM platform.system_property WHERE key LIKE 'lending.co-lending.%'), 'H4 the settings name the heads');
+SELECT pg_temp.check((SELECT count(*) = 4 FROM platform.system_property WHERE key IN ('lending.co-lending.partner-share-gl', 'lending.co-lending.escrow-gl',
+                     'lending.co-lending.partner-payable-gl', 'lending.co-lending.servicing-fee-gl')), 'H4 the settings name the heads');
 
 -- ---- arrangements ----------------------------------------------------------------------------------------------------------
 CREATE FUNCTION pg_temp.arrangement(p_code text, p_share numeric, p_dlg numeric DEFAULT 5, p_fee numeric DEFAULT 0.5, p_products text[] DEFAULT ARRAY['PL01'])

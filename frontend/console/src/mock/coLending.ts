@@ -196,6 +196,8 @@ export function coLentView(db: MockDb, loan: StoredLoan): CoLentLoan | null {
       view.servicingFeeTaken = C.fromPaise(sp.servicing);
       view.unsettled = C.fromPaise(db.coLending.splits.filter((x) => x.loanId === loan.id && !x.settlementId).reduce((a, x) => a + net(x), 0));
     }
+    const pc = db.coLending.partnerClasses.filter((x) => x.loanId === loan.id).pop();
+    if (pc) view.partnerClass = { reportedOn: pc.reportedOn, assetClass: pc.assetClass, npaSince: pc.npaSince, outcome: pc.outcome };
   }
   return view;
 }
@@ -313,6 +315,50 @@ function settlementView(db: MockDb, id: string, withLines: boolean) {
   return {
     id: st.id, settlementNo: st.settlementNo, arrangementCode: st.arrangementCode, businessDate: st.businessDate, loans: byLoan.size, ...money(tot), createdBy: st.createdBy,
     ...(withLines ? { lines: [...byLoan.entries()].map(([loanId, r]) => { const loan = db.loans.find((l) => l.id === loanId)!; return { loanNo: loan.loanNo, branchCode: loan.branch, ...money(r) }; }) } : {}),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------ P5-3: guarantee, classification
+const FORMS = ['CASH', 'FD_LIEN', 'BANK_GUARANTEE'];
+const CLASSES = ['STANDARD', 'SMA0', 'SMA1', 'SMA2', 'SUBSTANDARD', 'DOUBTFUL1', 'DOUBTFUL2', 'DOUBTFUL3', 'LOSS'];
+const isNpa = (c: string) => CLASSES.indexOf(c) >= 4;
+
+function accepted(db: MockDb, code: string) {
+  return db.coLending.loans.filter((c) => c.terms.code === code && c.status === 'ACCEPTED').map((c) => ({ c, loan: db.loans.find((l) => l.id === c.loanId)! }));
+}
+
+function dlgView(db: MockDb, code: string) {
+  const a = findArrangement(db, code);
+  const funded = sum(accepted(db, code).map(({ c }) => c.partnerPrincipal ?? 0));
+  const cap = Math.floor((funded * a.dlgPercent) / 100);
+  const invoked = (id: string) => sum(db.coLending.invocations.filter((i) => i.coverId === id).map((i) => i.amount));
+  const covers = db.coLending.covers.filter((c) => c.arrangementCode === code);
+  const covered = sum(covers.filter((c) => c.status === 'ACTIVE').map((c) => c.amount));
+  const longest = accepted(db, code).filter(({ loan }) => !loan.state.closedOn).map(({ loan }) => loan.state.rows[loan.state.rows.length - 1]?.dueDate ?? '').sort().pop() || null;
+  const live = accepted(db, code).filter(({ loan }) => !loan.state.closedOn && loan.state.dpd > 0);
+  return {
+    arrangementCode: code,
+    dlgPercent: plain(a.dlgPercent),
+    partnerFunded: C.fromPaise(funded),
+    cap: C.fromPaise(cap),
+    covered: C.fromPaise(covered),
+    headroom: C.fromPaise(Math.max(0, cap - covered)),
+    invoked: C.fromPaise(sum(covers.map((c) => invoked(c.id)))),
+    available: C.fromPaise(sum(covers.filter((c) => c.status === 'ACTIVE').map((c) => c.amount - invoked(c.id)))),
+    longestLoanDue: longest,
+    covers: covers.map((c) => ({
+      id: c.id, coverNo: c.coverNo, form: c.form, amount: C.fromPaise(c.amount), invoked: C.fromPaise(invoked(c.id)),
+      available: C.fromPaise(c.status === 'ACTIVE' ? c.amount - invoked(c.id) : 0), instrumentRef: c.instrumentRef, issuedOn: c.issuedOn, validUntil: c.validUntil,
+      status: c.status, releasedOn: c.releasedOn, lastsLongEnough: !longest || c.validUntil >= longest,
+    })),
+    invocations: db.coLending.invocations.filter((i) => covers.some((c) => c.id === i.coverId)).map((i) => ({
+      id: i.id, coverNo: covers.find((c) => c.id === i.coverId)!.coverNo, loanNo: db.loans.find((l) => l.id === i.loanId)!.loanNo, businessDate: i.businessDate,
+      amount: C.fromPaise(i.amount), dpd: i.dpd, reason: i.reason, recovered: C.fromPaise(i.recovered),
+    })),
+    inDefault: live.map(({ c, loan }) => ({
+      loanNo: loan.loanNo, dpd: loan.state.dpd, assetClass: loan.state.assetClass, partnerPrincipal: C.fromPaise(partnerOf(c.terms, principalOutstanding(loan))),
+      invokeBy: addDays(db.businessDate, Math.max(0, 120 - loan.state.dpd)),
+    })),
   };
 }
 
@@ -478,6 +524,44 @@ export function applyCoLendingApproval(db: MockDb, p: ApprovalPayload, approval:
       appendAudit(db, at, checker, 'CO_LENDING_SETTLED', 'CO_LENDING_ARRANGEMENT', p.code, { settlementNo: no });
       return true;
     }
+    case 'CO_LENDING_DLG': {
+      const d = p.data;
+      if (p.action === 'COVER') {
+        const no = `DLG${String(db.coLending.covers.length + 1).padStart(6, '0')}`;
+        db.coLending.covers.push({ id: uuid(), coverNo: no, arrangementCode: p.code, form: d.form as 'CASH', amount: Number(d.amount), instrumentRef: (d.instrumentRef as string) ?? null,
+          issuedOn: db.businessDate, validUntil: String(d.validUntil), status: 'ACTIVE', releasedOn: null });
+        approval.appliedRef = `${no}: ${d.form} cover of ${C.fromPaise(Number(d.amount))} for ${p.code}`;
+      } else if (p.action === 'RELEASE') {
+        const c = db.coLending.covers.find((x) => x.id === d.coverId)!;
+        if (c.status !== 'ACTIVE') throw conflict('Released', `Cover ${c.coverNo} is released`);
+        Object.assign(c, { status: 'RELEASED', releasedOn: db.businessDate });
+        approval.appliedRef = `${c.coverNo} released`;
+      } else if (p.action === 'INVOKE') {
+        db.coLending.invocations.push({ id: uuid(), coverId: String(d.coverId), loanId: String(d.loanId), businessDate: db.businessDate, amount: Number(d.amount), dpd: Number(d.dpd),
+          reason: String(d.reason), recovered: 0 });
+        approval.appliedRef = `${C.fromPaise(Number(d.amount))} paid to the partner for loan ${d.loanNo}`;
+      } else {
+        const i = db.coLending.invocations.find((x) => x.id === d.invocationId)!;
+        i.recovered += Number(d.amount);
+        approval.appliedRef = `${C.fromPaise(Number(d.amount))} recovered under the guarantee`;
+      }
+      appendAudit(db, at, checker, `CO_LENDING_DLG_${p.action}`, 'CO_LENDING_ARRANGEMENT', p.code, {});
+      return true;
+    }
+    case 'CO_LENDING_CLASSIFICATION': {
+      let made = 0;
+      for (const r of p.rows) {
+        const loan = db.loans.find((l) => l.loanNo === r.loanNo)!;
+        const here = loan.state.assetClass as string;
+        const outcome = isNpa(r.assetClass) && CLASSES.indexOf(here) < CLASSES.indexOf(r.assetClass)
+          ? `made ${r.assetClass} here (was ${here}), held until ${addDays(db.businessDate, 365)}`
+          : isNpa(r.assetClass) ? `already ${here} here` : `recorded (${here} here, ${loan.state.dpd} days past due)`;
+        if (outcome.startsWith('made')) made++;
+        db.coLending.partnerClasses.push({ loanId: loan.id, reportedOn: db.businessDate, assetClass: r.assetClass, npaSince: r.npaSince, outcome });
+      }
+      approval.appliedRef = `${p.code}: ${made} made NPA, ${p.rows.length - made} recorded`;
+      return true;
+    }
     default:
       return false;
   }
@@ -605,6 +689,96 @@ export function registerCoLendingRoutes(db: MockDb, r: CoLendingRouter) {
     const body = line(head) + (st.lines ?? []).map((l) => line([st.settlementNo, st.arrangementCode, st.businessDate, l.loanNo, l.principal, l.interest, l.fees, l.penal, l.servicing, l.net])).join('')
       + line([st.settlementNo, st.arrangementCode, st.businessDate, 'TOTAL', st.principal, st.interest, st.fees, st.penal, st.servicing, st.net]);
     return { status: 200, body: null, raw: { contentType: 'text/csv; charset=UTF-8', data: body, fileName: `co-lending-settlement-${st.settlementNo}.csv` } };
+  });
+  on('GET', '/api/v1/co-lending/arrangements/{code}/dlg', ({ user, params }) => {
+    require(user, P.loanView);
+    return ok(dlgView(db, params.code));
+  });
+  on('POST', '/api/v1/co-lending/arrangements/{code}/dlg/covers', ({ user, params, body }) => {
+    require(user, P.loanDisburse);
+    assertOpen();
+    const v = dlgView(db, params.code);
+    const b = (body ?? {}) as { form?: string; amount?: string; instrumentRef?: string | null; validUntil?: string };
+    const problems: string[] = [];
+    if (!FORMS.includes(b.form ?? '')) problems.push('the form is CASH, FD_LIEN or BANK_GUARANTEE');
+    const amount = Math.round(Number(b.amount) * 100);
+    if (!(amount > 0)) problems.push('the amount is above zero');
+    else if (amount > Math.round(Number(v.headroom) * 100)) problems.push(`the covers would be above the cap of ${v.cap}`);
+    if (b.form && b.form !== 'CASH' && !b.instrumentRef?.trim()) problems.push('a fixed deposit or a guarantee is lodged with its number');
+    if (!b.validUntil || b.validUntil <= db.businessDate) problems.push('the cover is valid after today');
+    else if (v.longestLoanDue && b.validUntil < v.longestLoanDue) problems.push(`the cover lasts at least as long as the longest loan it covers (to ${v.longestLoanDue})`);
+    refuse('The cover cannot be lodged', problems);
+    return propose(user, 'CO_LENDING_DLG', 'COVER', { kind: 'CO_LENDING_DLG', code: params.code, action: 'COVER', data: { form: b.form!, amount, instrumentRef: b.instrumentRef?.trim() || null, validUntil: b.validUntil! } },
+      { arrangementCode: params.code, form: b.form, amount: C.fromPaise(amount), validUntil: b.validUntil }, null, params.code, C.fromPaise(amount));
+  });
+  on('POST', '/api/v1/co-lending/dlg/covers/{id}/release', ({ user, params, body }) => {
+    require(user, P.loanDisburse);
+    const c = db.coLending.covers.find((x) => x.id === params.id);
+    if (!c) throw notFound('Cover');
+    if (c.status !== 'ACTIVE') throw conflict('Released', `Cover ${c.coverNo} is released`);
+    const reason = (body as { reason?: string } | null)?.reason?.trim();
+    if (!reason) throw bad('A reason is required', [{ field: 'reason', message: 'Required' }]);
+    return propose(user, 'CO_LENDING_DLG', 'RELEASE', { kind: 'CO_LENDING_DLG', code: c.arrangementCode, action: 'RELEASE', data: { coverId: c.id } },
+      { coverNo: c.coverNo, reason }, null, c.arrangementCode);
+  });
+  on('POST', '/api/v1/co-lending/arrangements/{code}/dlg/invocations', ({ user, params, body }) => {
+    require(user, P.loanDisburse);
+    assertOpen();
+    const v = dlgView(db, params.code);
+    const b = (body ?? {}) as { loanNo?: string; coverId?: string; amount?: string; reason?: string };
+    const problems: string[] = [];
+    const loan = db.loans.find((l) => l.loanNo === b.loanNo);
+    const d = v.inDefault.find((x) => x.loanNo === b.loanNo);
+    if (!loan || !d) problems.push(`loan ${b.loanNo} is not a loan in default co-lent under ${params.code}`);
+    const cover = v.covers.find((c) => c.id === b.coverId && c.status === 'ACTIVE');
+    if (!cover) problems.push('name an active cover');
+    const amount = Math.round(Number(b.amount) * 100);
+    if (!(amount > 0)) problems.push('the amount is above zero');
+    else if (cover && amount > Math.round(Number(cover.available) * 100)) problems.push(`cover ${cover.coverNo} has ${cover.available} left`);
+    else if (d && amount > Math.round(Number(d.partnerPrincipal) * 100)) problems.push(`at most the partner's principal outstanding on the loan, ${d.partnerPrincipal}`);
+    if (!b.reason?.trim()) problems.push("the partner's reason is required");
+    refuse('The guarantee cannot be invoked', problems);
+    return propose(user, 'CO_LENDING_DLG', 'INVOKE', { kind: 'CO_LENDING_DLG', code: params.code, action: 'INVOKE',
+      data: { coverId: b.coverId!, loanId: loan!.id, loanNo: loan!.loanNo, amount, dpd: d!.dpd, reason: b.reason!.trim() } },
+      { loanNo: b.loanNo, amount: C.fromPaise(amount), dpd: d!.dpd }, null, params.code, C.fromPaise(amount));
+  });
+  on('POST', '/api/v1/co-lending/dlg/invocations/{id}/recoveries', ({ user, params, body }) => {
+    require(user, P.loanDisburse);
+    const i = db.coLending.invocations.find((x) => x.id === params.id);
+    if (!i) throw notFound('Invocation');
+    const amount = Math.round(Number((body as { amount?: string } | null)?.amount) * 100);
+    if (!(amount > 0) || amount > i.amount - i.recovered) throw bad(`At most what was invoked and not yet recovered, ${C.fromPaise(i.amount - i.recovered)}`, [{ field: 'amount', message: 'Too much' }]);
+    const code = db.coLending.covers.find((c) => c.id === i.coverId)!.arrangementCode;
+    return propose(user, 'CO_LENDING_DLG', 'RECOVER', { kind: 'CO_LENDING_DLG', code, action: 'RECOVER', data: { invocationId: i.id, amount } },
+      { amount: C.fromPaise(amount) }, null, code, C.fromPaise(amount));
+  });
+  on('GET', '/api/v1/co-lending/arrangements/{code}/classification.csv', ({ user, params }) => {
+    require(user, P.loanView);
+    findArrangement(db, params.code);
+    const line = (xs: unknown[]) => xs.map((x) => String(x ?? '')).join(',') + '\r\n';
+    const body = line(['as_of', 'loan_no', 'partner_loan_ref', 'customer_no', 'dpd', 'asset_class', 'npa_since', 'principal_outstanding', 'partner_principal'])
+      + accepted(db, params.code).filter(({ loan }) => !loan.state.closedOn).map(({ c, loan }) => line([db.businessDate, loan.loanNo, c.partnerLoanRef, customerOf(db, loan)?.customerNo,
+        loan.state.dpd, loan.state.assetClass, loan.state.npaSince, C.fromPaise(principalOutstanding(loan)), C.fromPaise(partnerOf(c.terms, principalOutstanding(loan)))])).join('');
+    return { status: 200, body: null, raw: { contentType: 'text/csv; charset=UTF-8', data: body, fileName: `co-lending-classification-${params.code}.csv` } };
+  });
+  on('POST', '/api/v1/co-lending/arrangements/{code}/partner-classification', ({ user, params, body }) => {
+    require(user, P.loanClassify);
+    findArrangement(db, params.code);
+    assertOpen();
+    const rows = ((body as { rows?: Array<{ loanNo?: string; assetClass?: string; npaSince?: string | null; partnerDpd?: number | null }> } | null)?.rows) ?? [];
+    if (!rows.length) throw bad('No classification given', [{ field: 'rows', message: 'Required' }]);
+    const problems: string[] = [];
+    const ok2 = accepted(db, params.code).map(({ loan }) => loan.loanNo);
+    for (const r of rows) {
+      const cls = (r.assetClass ?? '').toUpperCase();
+      if (!ok2.includes(r.loanNo ?? '')) problems.push(`loan ${r.loanNo}: the partner holds no share of it under ${params.code}`);
+      else if (!CLASSES.includes(cls)) problems.push(`loan ${r.loanNo}: the class is one of ${CLASSES.join(', ')}`);
+      else if (isNpa(cls) && (!r.npaSince || r.npaSince > db.businessDate)) problems.push(`loan ${r.loanNo}: an NPA has its date, not after today`);
+    }
+    refuse("The partner's classification cannot be recorded", problems);
+    const clean = rows.map((r) => ({ loanNo: r.loanNo!, assetClass: (r.assetClass ?? '').toUpperCase(), npaSince: r.npaSince ?? null, partnerDpd: r.partnerDpd ?? null }));
+    return propose(user, 'CO_LENDING_CLASSIFICATION', 'RECORD', { kind: 'CO_LENDING_CLASSIFICATION', code: params.code, rows: clean },
+      { arrangementCode: params.code, rows: clean }, null, params.code);
   });
   on('POST', '/api/v1/co-lending/arrangements/{code}/simulate-partner', ({ user, params }) => {
     require(user, P.loanDisburse);

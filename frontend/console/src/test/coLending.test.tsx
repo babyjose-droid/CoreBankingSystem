@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { parseDecisionsCsv } from '../api/coLendingHooks';
+import { parseDecisionsCsv, parsePartnerClassCsv } from '../api/coLendingHooks';
 import { addDays } from '../lib/dates';
 import { coLendingDayEnd } from '../mock/coLending';
 import { lendingDayEnd } from '../mock/lending';
@@ -234,6 +234,68 @@ describe('co-lending settlement page', () => {
     await waitFor(() => expect(btn).toBeEnabled());
     await user().click(btn);
     expect(await screen.findByText(/Settlement with the partner sent for approval/)).toBeInTheDocument();
+  });
+});
+
+describe('co-lending guarantee and classification (mock API)', () => {
+  it('lodges a cover within the cap, invokes it for a loan in default, recovers and releases', async () => {
+    const s = createMockServer();
+    const { loanNo } = await accepted(s);
+    const g = (await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/dlg')).body;
+    expect(g).toMatchObject({ partnerFunded: '80000.00', cap: '4000.00', headroom: '4000.00' });
+    const until = addDays(g.longestLoanDue, 1);
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/dlg/covers', { form: 'CASH', amount: '4000.01', validUntil: until })).body.detail).toContain('above the cap');
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/dlg/covers', { form: 'BANK_GUARANTEE', amount: '1000', validUntil: until })).body.detail).toContain('with its number');
+    const p = await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/dlg/covers', { form: 'CASH', amount: '3000', validUntil: until });
+    expect(p.status).toBe(202);
+    expect((await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${p.body.id}/approve`, {})).body.appliedRef).toMatch(/^DLG000001: CASH cover of 3000/);
+    const cover = (await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/dlg')).body.covers[0];
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/dlg/invocations', { loanNo, coverId: cover.id, amount: '100', reason: 'x' })).body.detail)
+      .toContain('not a loan in default');
+    dayEnd(s, 70);
+    const d = (await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/dlg')).body;
+    expect(d.inDefault[0]).toMatchObject({ loanNo });
+    const inv = await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/dlg/invocations', { loanNo, coverId: cover.id, amount: '1500', reason: 'CLAUDE-TEST claim' });
+    expect(inv.status).toBe(202);
+    await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${inv.body.id}/approve`, {});
+    const after = (await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/dlg')).body;
+    expect(after).toMatchObject({ invoked: '1500.00', available: '1500.00' });
+    const rec = await mockCall(s, 'maker', 'POST', `/api/v1/co-lending/dlg/invocations/${after.invocations[0].id}/recoveries`, { amount: '500' });
+    await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${rec.body.id}/approve`, {});
+    expect((await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/dlg')).body.invocations[0].recovered).toBe('500.00');
+    const rel = await mockCall(s, 'maker', 'POST', `/api/v1/co-lending/dlg/covers/${cover.id}/release`, { reason: 'CLAUDE-TEST run off' });
+    await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${rel.body.id}/approve`, {});
+    expect((await mockCall(s, 'maker', 'GET', '/api/v1/co-lending/arrangements/BANKX/dlg')).body.covers[0].status).toBe('RELEASED');
+  });
+
+  it('records the partner\'s classification through a checker and shows it on the loan', async () => {
+    const s = createMockServer();
+    const { id, loanNo } = await accepted(s);
+    expect((await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/partner-classification', { rows: [{ loanNo, assetClass: 'SUBSTANDARD' }] })).status).toBe(422);
+    const p = await mockCall(s, 'maker', 'POST', '/api/v1/co-lending/arrangements/BANKX/partner-classification', { rows: [{ loanNo, assetClass: 'SUBSTANDARD', npaSince: s.db.businessDate }] });
+    const ok = await mockCall(s, 'checker', 'POST', `/api/v1/approvals/${p.body.id}/approve`, {});
+    expect(ok.body.appliedRef).toBe('BANKX: 1 made NPA, 0 recorded');
+    expect((await mockCall(s, 'maker', 'GET', `/api/v1/loans/${id}`)).body.coLending.partnerClass).toMatchObject({ assetClass: 'SUBSTANDARD' });
+    const csv = await (await s.fetch(new Request('http://localhost/api/v1/co-lending/arrangements/BANKX/classification.csv', { headers: { Authorization: `Bearer ${mockToken('maker')}` } }))).text();
+    expect(csv.split('\r\n')[0]).toBe('as_of,loan_no,partner_loan_ref,customer_no,dpd,asset_class,npa_since,principal_outstanding,partner_principal');
+    expect(csv).toContain(loanNo);
+    expect(parsePartnerClassCsv('loan_no,asset_class,npa_since,partner_dpd\n1,substandard,2026-06-01,95\n2,SMA1,,x')).toEqual({
+      rows: [{ loanNo: '1', assetClass: 'SUBSTANDARD', npaSince: '2026-06-01', partnerDpd: 95 }],
+      problems: ['Row 3: days past due are a whole number'],
+    });
+  });
+
+  it('shows the guarantee on the arrangement page and lodges a cover', async () => {
+    const s = createMockServer();
+    await accepted(s);
+    renderApp({ user: 'maker', route: '/co-lending/BANKX', server: s });
+    expect(await screen.findByTestId('dlg-figures')).toHaveTextContent('4,000');
+    await user().click(await screen.findByRole('button', { name: 'Lodge cover…' }));
+    const dialog = await screen.findByRole('dialog');
+    await user().type(within(dialog).getByLabelText(/^Amount/), '2000');
+    await user().click(within(dialog).getByRole('button', { name: 'Submit for approval' }));
+    expect(await screen.findByText(/Guarantee cover sent for approval/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download our classification' })).toBeInTheDocument();
   });
 });
 

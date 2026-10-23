@@ -115,6 +115,8 @@ export type ApprovalPayload =
   | { kind: 'CO_LENDING_STATUS'; code: string; status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED'; reason: string }
   | { kind: 'CO_LENDING_DECISION'; code: string; decisions: CoLendingDecision[] }
   | { kind: 'CO_LENDING_SETTLEMENT'; code: string; splitIds: string[] }
+  | { kind: 'CO_LENDING_DLG'; code: string; action: 'COVER' | 'RELEASE' | 'INVOKE' | 'RECOVER'; data: Record<string, string | number | null> }
+  | { kind: 'CO_LENDING_CLASSIFICATION'; code: string; rows: Array<{ loanNo: string; assetClass: string; npaSince: string | null; partnerDpd: number | null }> }
   | { kind: 'LOAN_PARTY_RELEASE'; loanId: string; customerId: string; reason: string; stressed: boolean }
   | { kind: 'LOAN_NPA_OVERRIDE'; loanId: string; release: boolean; assetClass?: AssetClass; until?: string; reason: string }
   | { kind: 'LOAN_WAIVER'; loanId: string; chargeId: string; amount: string; reason: string }
@@ -396,6 +398,20 @@ export interface StoredCoLendingSplit {
   settlementId: string | null;
 }
 
+export interface StoredDlgCover {
+  id: string;
+  coverNo: string;
+  arrangementCode: string;
+  form: 'CASH' | 'FD_LIEN' | 'BANK_GUARANTEE';
+  /** Paise. */
+  amount: number;
+  instrumentRef: string | null;
+  issuedOn: string;
+  validUntil: string;
+  status: 'ACTIVE' | 'RELEASED';
+  releasedOn: string | null;
+}
+
 export interface StoredCoLendingSettlement {
   id: string;
   settlementNo: string;
@@ -432,7 +448,16 @@ export interface MockDb {
   loans: StoredLoan[];
   loanSeq: number;
   /** Co-lending (Phase 5) as the originating lender. */
-  coLending: { arrangements: StoredArrangement[]; loans: StoredCoLent[]; splits: StoredCoLendingSplit[]; settlements: StoredCoLendingSettlement[] };
+  coLending: {
+    arrangements: StoredArrangement[];
+    loans: StoredCoLent[];
+    splits: StoredCoLendingSplit[];
+    settlements: StoredCoLendingSettlement[];
+    /** P5-3 (paise). */
+    covers: StoredDlgCover[];
+    invocations: Array<{ id: string; coverId: string; loanId: string; businessDate: string; amount: number; dpd: number; reason: string; recovered: number }>;
+    partnerClasses: Array<{ loanId: string; reportedOn: string; assetClass: string; npaSince: string | null; outcome: string }>;
+  };
   staff: StoredStaff[];
   branchSets: BranchSet[];
   systemProperties: StoredProperty[];

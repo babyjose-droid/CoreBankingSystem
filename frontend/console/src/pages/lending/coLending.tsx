@@ -23,6 +23,7 @@ import { P, hasPermission } from '../../auth/permissions';
 import { Badge, Banner, Button, Card, Checkbox, CsvUpload, DateText, Dialog, EmptyState, ErrorBanner, Input, MoneyText, PageHeader, Select, Spinner, StatusBadge, Table, Textarea, useToast } from '../../ui';
 import { useProposalToast } from '../proposal';
 import { Stat, pct } from './common';
+import { ClassificationCard, DlgCard } from './coLendingRisk';
 
 /** What the RBI (Co-Lending Arrangements) Directions, 2025 require, in one line for the pages. */
 export const CO_LENDING_HELP =
@@ -392,6 +393,8 @@ export function CoLendingDetailPage() {
         </Card>
       )}
       <PartnerDueCard code={x.code!} canSettle={canDecide} />
+      <DlgCard code={x.code!} />
+      <ClassificationCard code={x.code!} />
       {editing && <ArrangementDialog current={x} onClose={() => setEditing(false)} />}
       {status && <StatusDialog a={x} to={status} onClose={() => setStatus(null)} />}
       {deciding && <DecisionDialog code={x.code!} offer={deciding} onClose={() => setDeciding(null)} />}
@@ -531,6 +534,11 @@ export function CoLendingCard({ loan }: { loan: Loan }) {
         {c.decisionReason ? ` (${c.decisionReason})` : ''}
         {c.partnerLoanRef ? ` · partner’s reference ${c.partnerLoanRef}` : ''}
       </p>
+      {c.partnerClass && (
+        <p className="muted" style={{ margin: '4px 0 0' }} data-testid="partner-class">
+          The partner classified it {c.partnerClass.assetClass} on <DateText value={c.partnerClass.reportedOn} />: {c.partnerClass.outcome}.
+        </p>
+      )}
     </Card>
   );
 }

@@ -1543,6 +1543,120 @@ paths:
             text/csv:
               schema: { type: string }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/classification.csv:
+    get:
+      tags: [Lending]
+      operationId: downloadCoLendingClassification
+      summary: This lender's classification of the loans whose share the partner holds, for the partner (Directions para 33)
+      description: 'Permission: loan:view. One line per live loan: days past due, asset class, NPA date, principal and the partner''s principal. No personal data.'
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: 'The file, as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`)'
+          content:
+            text/csv:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/partner-classification:
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingPartnerClassification
+      summary: Record the partner's classification of borrowers whose loans it shares (maker-checker)
+      description: |
+        Permission: loan:classify. Classification is at borrower level across both lenders (para 33). On approval, an NPA
+        at the partner holds the loan at that class here by an asset-class override for a year (so the day-end does not
+        classify it back from its own days past due); the borrower's other loans follow at day-end. An SMA or standard
+        report is recorded.
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingPartnerClassInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/dlg:
+    get:
+      tags: [Lending]
+      operationId: getCoLendingDlg
+      summary: 'The default loss guarantee of an arrangement (cap, covers, invocations and the loans in default)'
+      description: 'Permission: loan:view.'
+      parameters: [ { $ref: '#/components/parameters/Code' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoLendingDlg' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/dlg/covers:
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingDlgCover
+      summary: Lodge a default loss guarantee cover with the partner (maker-checker)
+      description: |
+        Permission: loan:disburse. Cash, a fixed deposit with a scheduled commercial bank under lien, or a bank guarantee
+        (Digital Lending Directions). All covers together are at most the arrangement's percentage (5% at most) of the
+        partner's share funded; a cover lasts at least as long as the longest loan it covers. Cash: Dr DLG deposits / Cr
+        bank; the other forms are not on the books until invoked.
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingDlgCoverInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/dlg/covers/{id}/release:
+    post:
+      tags: [Lending]
+      operationId: releaseCoLendingDlgCover
+      summary: Release a cover (maker-checker); cash not invoked comes back to the bank
+      description: 'Permission: loan:disburse.'
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/arrangements/{code}/dlg/invocations:
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingDlgInvocation
+      summary: Record the partner's invocation of the guarantee for a loan in default (maker-checker)
+      description: |
+        Permission: loan:disburse. The partner invokes within 120 days overdue (a later invocation is recorded and flagged).
+        At most what the cover has left and the partner's principal outstanding on the loan. Dr DLG paid / Cr DLG
+        deposits (cash) or bank (a guarantee paid, a fixed deposit realised). Not set off against the loan.
+      parameters: [ { $ref: '#/components/parameters/Code' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingDlgInvocationInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v1/co-lending/dlg/invocations/{id}/recoveries:
+    post:
+      tags: [Lending]
+      operationId: proposeCoLendingDlgRecovery
+      summary: Record a recovery the partner shares back on a loan whose guarantee was invoked (maker-checker)
+      description: 'Permission: loan:disburse. At most what was invoked and not yet recovered. Dr bank / Cr recoveries under DLG.'
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoLendingDlgRecoveryInput' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v1/loans:
     get:
       tags: [Lending]
@@ -6418,6 +6532,14 @@ components:
         partnerPenal: { type: string }
         servicingFeeTaken: { type: string }
         unsettled: { type: string, description: Split and not yet paid to the partner }
+        partnerClass:
+          type: [object, 'null']
+          description: The partner's latest classification of the loan and what was done with it
+          properties:
+            reportedOn: { type: string, format: date }
+            assetClass: { type: string }
+            npaSince: { type: [string, 'null'], format: date }
+            outcome: { type: string }
     CoLendingUnsettled:
       type: object
       properties:
@@ -6476,6 +6598,98 @@ components:
               penal: { type: string }
               servicing: { type: string, description: Servicing fee taken by the originator }
               net: { type: string, description: 'principal + interest + fees + penal - servicing' }
+    CoLendingPartnerClassInput:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          minItems: 1
+          maxItems: 5000
+          items:
+            type: object
+            required: [loanNo, assetClass]
+            properties:
+              loanNo: { type: string }
+              assetClass: { $ref: '#/components/schemas/AssetClass' }
+              npaSince: { type: [string, 'null'], format: date, description: Required for an NPA class }
+              partnerDpd: { type: [integer, 'null'], minimum: 0 }
+    CoLendingDlgCoverInput:
+      type: object
+      required: [form, amount, validUntil]
+      properties:
+        form: { type: string, enum: [CASH, FD_LIEN, BANK_GUARANTEE] }
+        amount: { type: [number, string] }
+        instrumentRef: { type: [string, 'null'], maxLength: 60, description: The fixed deposit or guarantee number (required for those) }
+        issuedOn: { type: [string, 'null'], format: date, description: Defaults to the business date }
+        validUntil: { type: string, format: date }
+    CoLendingDlgInvocationInput:
+      type: object
+      required: [loanNo, coverId, amount, reason]
+      properties:
+        loanNo: { type: string }
+        coverId: { type: string, format: uuid }
+        amount: { type: [number, string] }
+        reason: { type: string, maxLength: 500 }
+    CoLendingDlgRecoveryInput:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: [number, string] }
+        reference: { type: [string, 'null'], maxLength: 100 }
+    CoLendingDlg:
+      type: object
+      properties:
+        arrangementCode: { type: string }
+        dlgPercent: { type: string }
+        partnerFunded: { type: string, description: 'The partner''s share funded under the arrangement (loans accepted): the base of the cap' }
+        cap: { type: string }
+        covered: { type: string, description: Active covers }
+        headroom: { type: string }
+        invoked: { type: string }
+        available: { type: string, description: Active covers less what was invoked on them }
+        longestLoanDue: { type: [string, 'null'], format: date }
+        covers:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              coverNo: { type: string }
+              form: { type: string, enum: [CASH, FD_LIEN, BANK_GUARANTEE] }
+              amount: { type: string }
+              invoked: { type: string }
+              available: { type: string }
+              instrumentRef: { type: [string, 'null'] }
+              issuedOn: { type: string, format: date }
+              validUntil: { type: string, format: date }
+              status: { type: string, enum: [ACTIVE, RELEASED] }
+              releasedOn: { type: [string, 'null'], format: date }
+              lastsLongEnough: { type: boolean, description: Valid at least to the last due date of the loans it covers }
+        invocations:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              coverNo: { type: string }
+              loanNo: { type: string }
+              businessDate: { type: string, format: date }
+              amount: { type: string }
+              dpd: { type: integer }
+              reason: { type: string }
+              recovered: { type: string }
+        inDefault:
+          type: array
+          description: Loans whose share the partner holds that are overdue
+          items:
+            type: object
+            properties:
+              loanNo: { type: string }
+              dpd: { type: integer }
+              assetClass: { type: string }
+              partnerPrincipal: { type: string }
+              invokeBy: { type: string, format: date, description: 'The day the loan is 120 days overdue: the latest the partner invokes' }
     KfsCoLending:
       type: object
       properties:

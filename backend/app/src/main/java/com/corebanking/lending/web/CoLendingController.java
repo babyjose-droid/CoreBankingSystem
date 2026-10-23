@@ -1,5 +1,6 @@
 package com.corebanking.lending.web;
 
+import com.corebanking.lending.internal.CoLendingRisk;
 import com.corebanking.lending.internal.CoLendingService;
 import com.corebanking.platform.ApprovalView;
 import java.util.List;
@@ -34,10 +35,15 @@ class CoLendingController {
     /** openapi.yaml#/components/schemas/CoLendingDecisionsInput. */
     record DecisionsInput(List<CoLendingService.DecisionInput> decisions) {}
 
-    private final CoLendingService colending;
+    /** openapi.yaml#/components/schemas/CoLendingPartnerClassInput. */
+    record PartnerClassesInput(List<CoLendingRisk.PartnerClassInput> rows) {}
 
-    CoLendingController(CoLendingService colending) {
+    private final CoLendingService colending;
+    private final CoLendingRisk risk;
+
+    CoLendingController(CoLendingService colending, CoLendingRisk risk) {
         this.colending = colending;
+        this.risk = risk;
     }
 
     @GetMapping("/arrangements")
@@ -131,6 +137,64 @@ class CoLendingController {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("co-lending-settlement-" + id + ".csv").build().toString())
+                .header("X-Content-Type-Options", "nosniff")
+                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
+                .contentLength(body.length)
+                .body(body);
+    }
+    // ---- P5-3: classification at borrower level and the default loss guarantee
+
+    @GetMapping("/arrangements/{code}/classification.csv")
+    @PreAuthorize("hasAuthority('loan:view')")
+    ResponseEntity<byte[]> classificationFile(@PathVariable String code) {
+        return csv(risk.classificationFile(code), "co-lending-classification-" + code + ".csv");
+    }
+
+    @PostMapping("/arrangements/{code}/partner-classification")
+    @PreAuthorize("hasAuthority('loan:classify')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> partnerClasses(@PathVariable String code, @RequestBody PartnerClassesInput in, @RequestHeader(value = KEY, required = false) String key) {
+        return ApprovalView.of(risk.proposePartnerClasses(code, in == null ? null : in.rows(), key));
+    }
+
+    @GetMapping("/arrangements/{code}/dlg")
+    @PreAuthorize("hasAuthority('loan:view')")
+    Map<String, Object> dlg(@PathVariable String code) {
+        return risk.dlg(code);
+    }
+
+    @PostMapping("/arrangements/{code}/dlg/covers")
+    @PreAuthorize("hasAuthority('loan:disburse')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> cover(@PathVariable String code, @RequestBody CoLendingRisk.CoverInput in, @RequestHeader(value = KEY, required = false) String key) {
+        return ApprovalView.of(risk.proposeCover(code, in, key));
+    }
+
+    @PostMapping("/dlg/covers/{id}/release")
+    @PreAuthorize("hasAuthority('loan:disburse')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> release(@PathVariable UUID id, @RequestBody CoLendingRisk.ReasonInput in, @RequestHeader(value = KEY, required = false) String key) {
+        return ApprovalView.of(risk.proposeRelease(id, in, key));
+    }
+
+    @PostMapping("/arrangements/{code}/dlg/invocations")
+    @PreAuthorize("hasAuthority('loan:disburse')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> invoke(@PathVariable String code, @RequestBody CoLendingRisk.InvocationInput in, @RequestHeader(value = KEY, required = false) String key) {
+        return ApprovalView.of(risk.proposeInvocation(code, in, key));
+    }
+
+    @PostMapping("/dlg/invocations/{id}/recoveries")
+    @PreAuthorize("hasAuthority('loan:disburse')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    Map<String, Object> recover(@PathVariable UUID id, @RequestBody CoLendingRisk.RecoveryInput in, @RequestHeader(value = KEY, required = false) String key) {
+        return ApprovalView.of(risk.proposeRecovery(id, in, key));
+    }
+
+    private static ResponseEntity<byte[]> csv(byte[] body, String name) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(name).build().toString())
                 .header("X-Content-Type-Options", "nosniff")
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
                 .contentLength(body.length)
