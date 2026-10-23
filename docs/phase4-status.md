@@ -14,7 +14,7 @@ Updated 23-Oct-2026. Plan: the Phase 4 design and increment plan (eight incremen
 | P4-5 recurring deposits | Built, pushed (`cf57e9e`), live-tested on the local stack on 19-Oct-2026 (23 of 24; the one failure was the smoke script's own expectation) |
 | P4-5b standing instructions and loans against deposits | Built, pushed (`ce79409`), live-tested on the local stack (20 of 20; the pledge quote skipped, no demo loan) |
 | P4-6 cheques, inoperative and unclaimed, register and NOF cap | Built, pushed (`1574170`), live-tested on the local stack on 23-Oct-2026 (32 of 32) |
-| P4-7 documents and reports | Built on 23-Oct-2026; not yet pushed or live-tested. The last increment of Phase 4 |
+| P4-7 documents and reports | Built, pushed (`a6384ac`, fix `5547762`), live-tested on the local stack on 23-Oct-2026 (26 of 26 after the fix) |
 
 ## Decisions taken on 10-Oct-2026
 | # | Decision | Answer |
@@ -635,6 +635,9 @@ What a depositor is given (a statement, a deposit receipt, an interest certifica
 
 ### Not verified here
 - **Gradle and Spring**: the PDF download headers as Spring sends them; the reports run through the report service and stored; the live stack (`p4-7-smoke.py`).
+
+### Verified after the push (23-Oct-2026)
+Live smoke `p4-7-smoke.py`: 26 of 26 after the fix `5547762`. The first run failed 7 of 26: the three documents were in read-only transactions while each writes its audit record, which Postgres refuses (500). The build sandbox calls the services directly, so the annotation had no effect there. Verified live: the statement of 20010000000013 closing on the account's balance, a statement past the business date refused, the receipt of 30010000000037 (amount in words, DICGC line, signatory) and of the NBFC's 30010000000011 (not insured), the deposit's statement, the interest certificate, the four reports run and downloaded, no deposit report on the lending-only tenant, trial balances on both tenants.
 
 ### Phase 4 is complete
 Every increment of the plan (P4-0 to P4-7) is built. What remains is in the open items P4-01 to P4-24.
